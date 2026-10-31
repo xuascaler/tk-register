@@ -306,6 +306,36 @@ func (s *Store) SyncedAccountForUser(ctx context.Context, userID, id uint64) (Ac
 	return s.accountDTO(ctx, row)
 }
 
+// LookupSyncedAccountForUser resolves one Claude account by its exact stable
+// owner/vendor/account identity. An account from another owner, vendor or model
+// family is not a fallback match. The result reads the current lifetime's saved
+// observation; lookup never contacts the supplier or creates a submission.
+func (s *Store) LookupSyncedAccountForUser(ctx context.Context, userID uint64, vendorCode, account string) (AccountDTO, error) {
+	if userID == 0 {
+		return AccountDTO{}, ErrNotFound
+	}
+	account = strings.ToLower(strings.TrimSpace(account))
+	if account == "" || len(account) > 254 || strings.ContainsAny(account, " \t\r\n\x00") {
+		return AccountDTO{}, validationErrorf("enter a valid account name")
+	}
+	var vendor Vendor
+	if err := s.DB.WithContext(ctx).Where("code = ?", vendorCode).First(&vendor).Error; err != nil {
+		return AccountDTO{}, err
+	}
+	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
+		return AccountDTO{}, err
+	}
+	key := accountDigest(idString(userID), idString(vendor.ID), account)
+	var row SyncedAccount
+	if err := s.DB.WithContext(ctx).Where("account_key = ? AND user_id = ? AND vendor_id = ?", key, userID, vendor.ID).First(&row).Error; err != nil {
+		return AccountDTO{}, err
+	}
+	if !strings.HasPrefix(row.Plan, "claude/") {
+		return AccountDTO{}, ErrNotFound
+	}
+	return s.accountDTO(ctx, row)
+}
+
 // SyncedAccountForAdmin must only be called after the HTTP administrator check.
 func (s *Store) SyncedAccountForAdmin(ctx context.Context, id uint64) (AccountDTO, error) {
 	if id == 0 {

@@ -14,9 +14,63 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const ClaudeSubmitScope = "claude:submit"
+const (
+	ClaudeSubmitScope    = "claude:submit"
+	AccountsReadScope    = "accounts:read"
+	DefaultAPITokenScope = ClaudeSubmitScope + " " + AccountsReadScope
+)
 
 var ErrInvalidAPIToken = errors.New("invalid API token")
+var ErrAPITokenScope = errors.New("API token does not grant the required permission")
+
+// dataMigration is deliberately separate from administrator-editable settings.
+// ClaimID identifies the winning startup even with MySQL clientFoundRows enabled,
+// where an ignored/upserted insert can report an affected row on conflict.
+type dataMigration struct {
+	Key       string    `gorm:"primaryKey;size:128"`
+	ClaimID   string    `gorm:"size:32;not null"`
+	AppliedAt time.Time `gorm:"not null"`
+}
+
+const apiTokenReadScopeMigration = "api_token_accounts_read_v1"
+
+// Existing submission tokens gain own-account reads once without changing their
+// digest, revision, expiration or revocation. Later scope reductions are kept.
+func (s *Store) migrateAPITokenReadScope() error {
+	if err := s.DB.AutoMigrate(&dataMigration{}); err != nil {
+		return err
+	}
+	claim := make([]byte, 16)
+	if _, err := rand.Read(claim); err != nil {
+		return err
+	}
+	marker := dataMigration{Key: apiTokenReadScopeMigration, ClaimID: hex.EncodeToString(claim), AppliedAt: time.Now().UTC()}
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&marker).Error; err != nil {
+			return err
+		}
+		var stored dataMigration
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(clause.Eq{Column: "key", Value: marker.Key}).First(&stored).Error; err != nil {
+			return err
+		}
+		if stored.ClaimID != marker.ClaimID {
+			return nil
+		}
+		return tx.Model(&UserAPIToken{}).Where("scope = ?", ClaudeSubmitScope).UpdateColumn("scope", DefaultAPITokenScope).Error
+	})
+}
+
+func apiTokenHasScope(granted, required string) bool {
+	if required != ClaudeSubmitScope && required != AccountsReadScope {
+		return false
+	}
+	for _, scope := range strings.Fields(granted) {
+		if scope == required {
+			return true
+		}
+	}
+	return false
+}
 
 // UserAPIToken contains only a digest and display fragments. The plaintext is
 // returned once by generation/rotation and is never recoverable from storage.
@@ -122,13 +176,13 @@ func (s *Store) writeAPIToken(ctx context.Context, userID, tokenID, revision uin
 			return vendorError(409, "TOKEN_EXISTS", "An API token already exists. Use Regenerate to replace it.")
 		}
 		if missing {
-			row = UserAPIToken{UserID: userID, TokenHash: apiTokenHash(raw), Prefix: raw[:12], LastFour: raw[len(raw)-4:], Scope: ClaudeSubmitScope, Revision: 1, CreatedAt: now, UpdatedAt: now}
+			row = UserAPIToken{UserID: userID, TokenHash: apiTokenHash(raw), Prefix: raw[:12], LastFour: raw[len(raw)-4:], Scope: DefaultAPITokenScope, Revision: 1, CreatedAt: now, UpdatedAt: now}
 			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
 		} else {
 			changed := tx.Model(&UserAPIToken{}).Where("id = ? AND user_id = ? AND revision = ?", row.ID, userID, row.Revision).Updates(map[string]any{
-				"token_hash": apiTokenHash(raw), "prefix": raw[:12], "last_four": raw[len(raw)-4:], "scope": ClaudeSubmitScope,
+				"token_hash": apiTokenHash(raw), "prefix": raw[:12], "last_four": raw[len(raw)-4:], "scope": DefaultAPITokenScope,
 				"revision": row.Revision + 1, "use_count": 0, "created_at": now, "updated_at": now, "last_used_at": nil, "expires_at": nil, "revoked_at": nil,
 			})
 			if changed.Error != nil {
@@ -180,6 +234,12 @@ func (s *Store) RevokeAPIToken(ctx context.Context, userID, tokenID, revision ui
 }
 
 func (s *Store) AuthenticateAPIToken(ctx context.Context, raw string) (User, UserAPIToken, error) {
+	return s.AuthenticateAPITokenForScope(ctx, raw, ClaudeSubmitScope)
+}
+
+// AuthenticateAPITokenForScope never grants privileges from the user's role.
+// Valid credentials with insufficient scope are distinct from invalid tokens.
+func (s *Store) AuthenticateAPITokenForScope(ctx context.Context, raw, requiredScope string) (User, UserAPIToken, error) {
 	var user User
 	var token UserAPIToken
 	if len(raw) != 47 || !strings.HasPrefix(raw, "tkr_") {
@@ -189,7 +249,7 @@ func (s *Store) AuthenticateAPIToken(ctx context.Context, raw string) (User, Use
 		return user, token, ErrInvalidAPIToken
 	}
 	now := time.Now().UTC()
-	err := s.DB.WithContext(ctx).Where("token_hash = ? AND scope = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", apiTokenHash(raw), ClaudeSubmitScope, now).First(&token).Error
+	err := s.DB.WithContext(ctx).Where("token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", apiTokenHash(raw), now).First(&token).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return user, token, ErrInvalidAPIToken
 	}
@@ -206,8 +266,12 @@ func (s *Store) AuthenticateAPIToken(ctx context.Context, raw string) (User, Use
 	if err != nil {
 		return user, token, err
 	}
+	if !apiTokenHasScope(token.Scope, requiredScope) {
+		return user, token, ErrAPITokenScope
+	}
 	// A concurrent revoke/rotation must not authenticate a now stale digest.
-	updated := s.DB.WithContext(ctx).Model(&UserAPIToken{}).Where("id = ? AND token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", token.ID, token.TokenHash, now).UpdateColumns(map[string]any{"last_used_at": now, "use_count": gorm.Expr("use_count + ?", 1)})
+	// A concurrent permission change also invalidates this authorization attempt.
+	updated := s.DB.WithContext(ctx).Model(&UserAPIToken{}).Where("id = ? AND token_hash = ? AND revision = ? AND scope = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)", token.ID, token.TokenHash, token.Revision, token.Scope, now).UpdateColumns(map[string]any{"last_used_at": now, "use_count": gorm.Expr("use_count + ?", 1)})
 	if updated.Error != nil {
 		return user, token, updated.Error
 	}

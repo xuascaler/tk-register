@@ -374,3 +374,83 @@ func TestAdminSyncedAccountsUseOwnerSnapshotsAndSearchOwnerEmail(t *testing.T) {
 		t.Fatal("zero account ID accepted")
 	}
 }
+
+func TestLookupSyncedAccountUsesExactOwnerVendorIdentityAndSavedSnapshot(t *testing.T) {
+	s, owner, vendor, version := syncFixture(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Hour)
+	other := tokenUser(t, s, "lookup-other@example.com")
+	otherVendor := Vendor{Code: "another-vendor", Name: "Other vendor", BaseURL: "https://example.invalid", Enabled: true, Timezone: "UTC"}
+	if err := s.DB.Create(&otherVendor).Error; err != nil {
+		t.Fatal(err)
+	}
+	accepted := syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "same@example.com", "claude/cc-pro", "accepted", "701", at)
+	latest := syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "Same@Example.com", "claude/cc-pro", "failed", "", at.Add(time.Minute))
+	syncSubmission(t, s, other.ID, vendor.ID, version.ID, "same@example.com", "claude/cc-pro", "accepted", "702", at.Add(2*time.Minute))
+	syncSubmission(t, s, owner.ID, otherVendor.ID, version.ID, "same@example.com", "claude/cc-pro", "accepted", "703", at.Add(3*time.Minute))
+	syncSubmission(t, s, other.ID, vendor.ID, version.ID, "foreign-only@example.com", "claude/cc-pro", "accepted", "704", at.Add(4*time.Minute))
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "codex@example.com", "codex/pro", "accepted", "705", at.Add(5*time.Minute))
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "unconfirmed@example.com", "claude/cc-pro", "unknown", "", at.Add(6*time.Minute))
+	dto, err := s.LookupSyncedAccountForUser(ctx, owner.ID, vendor.Code, " SAME@example.com ")
+	if err != nil || dto.CurrentSubmissionID == nil || *dto.CurrentSubmissionID != idString(accepted.ID) || dto.LatestSubmissionID != idString(latest.ID) || dto.RemoteID == nil || *dto.RemoteID != "701" || dto.Snapshot != nil {
+		t.Fatal("lookup picked wrong grouped account or manufactured observation", dto, err)
+	}
+	id, _ := ParseBusinessID(dto.ID)
+	var row SyncedAccount
+	if err = s.DB.First(&row, id).Error; err != nil {
+		t.Fatal(err)
+	}
+	zero, zeroTokens, active, currency := float64(0), int64(0), "active", "CNY"
+	values := AccountSnapshotValues{CostTotal: &zero, InputTokensTotal: &zeroTokens, AccountStatus: &active, Currency: &currency}
+	collected := at.Add(7 * time.Minute)
+	if err = s.RecordAccountSnapshot(ctx, row.ID, row.IdentityKey, values, collected, "Asia/Shanghai"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordAccountFailure(ctx, row.ID, row.IdentityKey, "Supplier request timed out.", collected.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	dto, err = s.LookupSyncedAccountForUser(ctx, owner.ID, vendor.Code, "same@example.com")
+	if err != nil || dto.Snapshot == nil || dto.Snapshot.CostTotal == nil || *dto.Snapshot.CostTotal != 0 || dto.Snapshot.InputTokensTotal == nil || *dto.Snapshot.InputTokensTotal != 0 || dto.Snapshot.OutputTokensTotal != nil || dto.Snapshot.Usage5hPercent != nil || dto.LastSuccessAt == nil || !dto.LastSuccessAt.Equal(collected) || dto.LastError == "" || dto.SubmissionStatus != "failed" || *dto.Snapshot.AccountStatus != "active" {
+		t.Fatal("lookup discarded nullable, zero or last-success observation", dto, err)
+	}
+	for _, lookup := range []struct {
+		userID uint64
+		vendor string
+		remote string
+	}{{other.ID, vendor.Code, "702"}, {owner.ID, otherVendor.Code, "703"}} {
+		got, e := s.LookupSyncedAccountForUser(ctx, lookup.userID, lookup.vendor, "same@example.com")
+		if e != nil || got.RemoteID == nil || *got.RemoteID != lookup.remote || got.ID == dto.ID || got.Snapshot != nil {
+			t.Fatal("lookup crossed owner or vendor identity", got, e)
+		}
+	}
+	for _, name := range []string{"foreign-only@example.com", "same", "%", "codex@example.com", "not-found@example.com"} {
+		if _, e := s.LookupSyncedAccountForUser(ctx, owner.ID, vendor.Code, name); !errors.Is(e, ErrNotFound) {
+			t.Fatal("lookup fell back to fuzzy, foreign or unsupported match", name, e)
+		}
+	}
+	if _, e := s.LookupSyncedAccountForUser(ctx, 0, vendor.Code, "same@example.com"); !errors.Is(e, ErrNotFound) {
+		t.Fatal("anonymous owner allowed", e)
+	}
+	if _, e := s.LookupSyncedAccountForUser(ctx, owner.ID, "missing-vendor", "same@example.com"); !errors.Is(e, ErrNotFound) {
+		t.Fatal("unknown vendor fell back to another vendor", e)
+	}
+	for _, name := range []string{"", " ", "has space@example.com", "bad\x00@example.com", strings.Repeat("a", 255)} {
+		if _, e := s.LookupSyncedAccountForUser(ctx, owner.ID, vendor.Code, name); !IsValidationError(e) {
+			t.Fatal("invalid account lookup accepted", e)
+		}
+	}
+	unconfirmed, err := s.LookupSyncedAccountForUser(ctx, owner.ID, vendor.Code, "unconfirmed@example.com")
+	if err != nil || unconfirmed.Snapshot != nil || unconfirmed.LastSuccessAt != nil || unconfirmed.CurrentSubmissionID != nil || unconfirmed.SubmissionStatus != "unknown" {
+		t.Fatal("unconfirmed account acquired invented data", unconfirmed, err)
+	}
+	// A later accepted remote lifetime must not expose the previous trend.
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "same@example.com", "claude/cc-max-20x", "accepted", "706", collected.Add(2*time.Minute))
+	changed, err := s.LookupSyncedAccountForUser(ctx, owner.ID, vendor.Code, "same@example.com")
+	if err != nil || changed.ID != dto.ID || changed.Snapshot != nil || changed.LastSuccessAt != nil || changed.RemoteID == nil || *changed.RemoteID != "706" {
+		t.Fatal("lookup mixed current remote lifetime and historical observation", changed, err)
+	}
+	var snapshots int64
+	if err = s.DB.Model(&AccountSnapshot{}).Count(&snapshots).Error; err != nil || snapshots != 1 {
+		t.Fatal("lookup created or erased snapshots", snapshots, err)
+	}
+}

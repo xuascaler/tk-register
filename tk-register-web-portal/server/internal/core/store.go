@@ -158,6 +158,10 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, errors.New("could not migrate TK Register database")
 	}
+	if err = s.migrateAPITokenReadScope(); err != nil {
+		s.Close()
+		return nil, errors.New("could not migrate API token permissions")
+	}
 	if err = s.migrateAdmin(); err != nil {
 		s.Close()
 		return nil, err

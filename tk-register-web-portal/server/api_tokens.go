@@ -14,7 +14,7 @@ import (
 
 const claudeAccountsAPIPath = basePath + "/api/v1/vendors/tk-register-0/claude/accounts"
 
-// Token management is deliberately cookie-only. A submission token cannot
+// Token management is deliberately cookie-only. An API token cannot
 // mint another token, access account settings, or exercise administrator rights.
 func (a *app) apiTokenRoutes(w http.ResponseWriter, r *http.Request, route string) bool {
 	if route != "account/api-token" && route != "account/api-token/rotate" {
@@ -71,29 +71,42 @@ func bearerFailure(w http.ResponseWriter) {
 	fail(w, http.StatusUnauthorized, "INVALID_API_TOKEN", "A valid TK Register API token is required.")
 }
 
+func (a *app) authenticateBearer(w http.ResponseWriter, r *http.Request, scope string) (core.User, core.UserAPIToken, bool) {
+	authorization := r.Header.Values("Authorization")
+	if len(authorization) != 1 {
+		bearerFailure(w)
+		return core.User{}, core.UserAPIToken{}, false
+	}
+	parts := strings.Fields(authorization[0])
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		bearerFailure(w)
+		return core.User{}, core.UserAPIToken{}, false
+	}
+	user, token, err := a.store.AuthenticateAPITokenForScope(r.Context(), parts[1], scope)
+	if errors.Is(err, core.ErrInvalidAPIToken) {
+		bearerFailure(w)
+		return core.User{}, core.UserAPIToken{}, false
+	}
+	if errors.Is(err, core.ErrAPITokenScope) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="tk-register", error="insufficient_scope", scope="`+scope+`"`)
+		fail(w, http.StatusForbidden, "INSUFFICIENT_SCOPE", "This API token does not have the required permission.")
+		return core.User{}, core.UserAPIToken{}, false
+	}
+	if err != nil {
+		internal(w)
+		return core.User{}, core.UserAPIToken{}, false
+	}
+	return user, token, true
+}
+
 func (a *app) claudeAccountsAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		fail(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Use POST to submit an account.")
 		return
 	}
-	authorization := r.Header.Values("Authorization")
-	if len(authorization) != 1 {
-		bearerFailure(w)
-		return
-	}
-	parts := strings.Fields(authorization[0])
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		bearerFailure(w)
-		return
-	}
-	user, token, err := a.store.AuthenticateAPIToken(r.Context(), parts[1])
-	if errors.Is(err, core.ErrInvalidAPIToken) {
-		bearerFailure(w)
-		return
-	}
-	if err != nil {
-		internal(w)
+	user, token, valid := a.authenticateBearer(w, r, core.ClaudeSubmitScope)
+	if !valid {
 		return
 	}
 	if r.URL.RawQuery != "" {

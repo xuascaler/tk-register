@@ -37,7 +37,7 @@ The account detail page shows cumulative spending, input/output tokens, quota-wi
 
 **Management → Account pool → Accounts** reuses the same saved account list, usage details and trends across all users, adding the owner email in a **User** column and in account details. Administrators can search by account or owner email and explicitly sync an account. These routes require an active administrator session; ordinary members remain limited to their own accounts.
 
-**Submission history** remains a separate view of submission attempts and their existing status/billing queries. Account usage pages do not alter the account-submission workflow.
+**Submission history** lists saved submission attempts; opening or refreshing a history list reads those stored records. Individual submission details retain their explicit status and billing queries. These queries are separate from scheduled account-usage collection, and account usage pages do not alter the account-submission workflow.
 
 ## Values and history
 
@@ -49,9 +49,15 @@ The account detail page shows cumulative spending, input/output tokens, quota-wi
 - Trends plot saved cumulative observations. Missing observations, long gaps, currency changes and counter resets are not joined into a continuous line. They do not represent zero consumption or calculated interval usage.
 - A new accepted remote identity or plan starts a new displayed account lifetime. Earlier observations remain stored but are not connected to the new lifetime's trend.
 
+## Personal-token account lookup
+
+External clients can read an owned account's saved data using `GET /tk-register/api/v1/vendors/tk-register-0/claude/accounts/lookup?username=<owner-email>&account=<submitted-account>` with a personal Bearer token carrying `accounts:read`. The endpoint returns the latest saved snapshot and collection timestamps without starting a supplier query or collection run. It uses the same null, zero and last-known-data semantics described above.
+
+The username must match the token owner, including when that owner is an administrator. The limit is 60 lookup requests per minute per user. See the [Account Lookup API reference](account-lookup-api.md) for the complete contract and examples. This external endpoint is separate from the browser-session routes below.
+
 ## Browser API contract
 
-The following paths are relative to `/tk-register/api` and use the existing JSON envelope (`data` contains the payload). They require the current browser session. Writes additionally require the existing CSRF and origin checks; the user's submission API token does not authorize these routes.
+The following paths are relative to `/tk-register/api` and use the existing JSON envelope (`data` contains the payload). They require the current browser session. Writes additionally require the existing CSRF and origin checks; the user's personal API token does not authorize these browser-session routes.
 
 | Method and path | Result |
 | --- | --- |

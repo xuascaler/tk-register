@@ -170,12 +170,12 @@ export default function APIToken() {
     <div className='account-row'>
       <div className='account-label'>Personal access</div>
       <div className='account-value api-token-content' aria-busy={busy || loading}>
-        <p className='api-token-description'>Submit accounts from your own scripts. API submissions appear in your submission history.</p>
+        <p className='api-token-description'>Submit accounts and read saved status and usage for your own accounts. API submissions appear in your submission history.</p>
         {loading ? <Loading label='Loading token…' /> : data ? <>
           <div className={`api-token-card ${plaintext && active ? 'has-plaintext' : ''}`}>
             <div className='api-token-card-heading'>
               <span className='api-token-key'><KeyRound aria-hidden='true' /></span>
-              <div><h3>{active ? 'Your API token' : token?.revoked_at ? 'Token revoked' : expired ? 'Token expired' : 'No API token yet'}</h3><p>{active ? 'Account submission access' : 'Generate a token to submit accounts through the API.'}</p></div>
+              <div><h3>{active ? 'Your API token' : token?.revoked_at ? 'Token revoked' : expired ? 'Token expired' : 'No API token yet'}</h3><p>{active ? 'Submission and account lookup access' : 'Generate a token to submit accounts and read your saved account data.'}</p></div>
               {active && <span className='verified'><ShieldCheck aria-hidden='true' />Active</span>}
             </div>
             {active && token && <>

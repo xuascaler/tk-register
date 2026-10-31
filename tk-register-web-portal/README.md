@@ -81,7 +81,7 @@ Administrators edit a typed Key / Value / Description table grouped into Email d
 
 ## Account usage and scheduled collection
 
-**My account → Accounts** shows saved status, usage, cumulative spending and 7/30/90-day trends. **Config → Account sync** configures supplier website credentials and collection frequency (default eight hours, paused until configured). Each run signs in afresh; failed runs preserve the last successful data. See the [Account usage collection guide](docs/account-sync.md) for setup, data semantics and API behavior.
+**My account → Accounts** shows saved status, usage, cumulative spending and 7/30/90-day trends. **Config → Account sync** configures supplier website credentials and collection frequency (default two hours, paused until configured). Each run signs in afresh; failed runs preserve the last successful data. See the [Account usage collection guide](docs/account-sync.md) for setup, data semantics and API behavior.
 
 ## Vendor account submissions
 
@@ -136,11 +136,11 @@ All paths below are relative to `/tk-register/api` and require a TK session. Wri
 | `GET /admin/vendors/:id`                  | Administrator-only vendor configuration; token is write-only.                                              |
 | `PUT /admin/vendors/:id`                  | Administrator-only update of `{ enabled, timezone, access_token }`.                                        |
 
-## User API tokens and external submissions
+## User API tokens and external APIs
 
-**Account settings → API token** lets an authenticated user generate, regenerate, copy and revoke their own submission token. The full token is returned only when generated or regenerated and is held only in the current page's memory. Reloading shows a masked identifier; lost tokens must be regenerated. Regeneration invalidates the previous token, and revocation prevents new requests with it. Requests already accepted for execution may finish.
+**Account settings → API token** lets an authenticated user generate, regenerate, copy and revoke their personal token for account submission and saved account lookup. The full token is returned only when generated or regenerated and is held only in the current page's memory. Reloading shows a masked identifier; lost tokens must be regenerated. Regeneration invalidates the previous token, and revocation prevents new requests with it. Requests already accepted for execution may finish.
 
-Tokens use 32 random bytes with a `tkr_` prefix. Only their SHA-256 digest and display fragments are stored in `user_api_tokens`; `user_id → users.id` is unique. The table also records scope, revision, creation, last-use, expiry and revocation timestamps. The fixed scope is `claude:submit`. An administrator's token has the same submission-only permissions as a member's token. Tokens never authorize configuration, user administration, browser sessions or token management. Disabled, missing or unverified users cannot authenticate with a token.
+Tokens use 32 random bytes with a `tkr_` prefix. Only their SHA-256 digest and display fragments are stored in `user_api_tokens`; `user_id → users.id` is unique. The table also records scope, revision, creation, last-use, expiry and revocation timestamps. The default scopes are `claude:submit` and `accounts:read`. A one-time upgrade migration adds `accounts:read` to existing `claude:submit` tokens without changing their token value or revocation/expiry state; later restarts do not reapply the migration or overwrite subsequent scope changes. An administrator's personal token has the same owner-only submission and lookup permissions as a member's token. Tokens never authorize configuration, user administration, browser sessions or token management. Disabled, missing or unverified users cannot authenticate with a token.
 
 | Browser method and path | Behavior |
 | --- | --- |
@@ -151,7 +151,7 @@ Tokens use 32 random bytes with a `tkr_` prefix. Only their SHA-256 digest and d
 
 These management routes require the browser session; writes also require the existing CSRF and origin checks. Stale rotate/revoke requests return 409 rather than changing a newer token.
 
-The external endpoint is:
+The external submission endpoint is:
 
 ```text
 POST https://47.110.71.25:8443/tk-register/api/v1/vendors/tk-register-0/claude/accounts
@@ -165,7 +165,18 @@ The upstream request uses the administrator-configured vendor credential, never 
 
 Complete upstream responses retain their HTTP status, content type and body without a local envelope. If an upstream response echoes the shared vendor credential, that credential is redacted before forwarding. Locally rejected requests use the usual error envelope: 401 for invalid/revoked tokens, 400 for invalid parameters, 409 for an accepted/running duplicate and 429 for the shared per-user submission limit (10 attempts per minute across browser and API). The JSON request limit is 3 MiB. If no complete upstream response is received, connection errors return 502 and timeouts return 504; oversized responses above 256 KiB also return 502. A recorded uncertain attempt remains Unknown and can be manually retried with a new request. No automatic retry is performed.
 
-`X-Request-ID` identifies the request/execution. `X-Submission-ID` is included only after a local submission record exists. These are local tracking headers; an `id` in an unchanged vendor response remains the vendor's ID. Each new API POST is a new manual attempt, subject to accepted/running duplicate protection. Account status continues to update on page opening and manual refresh, without periodic polling.
+`X-Request-ID` identifies the request/execution. `X-Submission-ID` is included only after a local submission record exists. These are local tracking headers; an `id` in an unchanged vendor response remains the vendor's ID. Each new API POST is a new manual attempt, subject to accepted/running duplicate protection. The Accounts list and usage details read saved snapshots from scheduled collection (default every two hours); opening or refreshing the list does not query the supplier. An explicit Sync now action requests fresh account data. Submission detail status and billing queries remain separate from this collection flow.
+
+### Saved account lookup
+
+```text
+GET /tk-register/api/v1/vendors/tk-register-0/claude/accounts/lookup?username=<owner-email>&account=<submitted-account>
+Authorization: Bearer <your TK Register API token>
+```
+
+This endpoint requires `accounts:read` and both exact query identifiers, with no request body. It returns an owned account's saved status, cumulative usage, last successful collection time and sanitized latest collection error. It never triggers supplier login or synchronization. A personal administrator token cannot read another user's accounts. Missing or out-of-scope records return the same 404 response; the lookup limit is 60 requests per minute per user. The existing submission limit is unchanged.
+
+See the [Account Lookup API reference](docs/account-lookup-api.md) for cURL examples, response fields, null/zero/freshness behavior and error handling. The [Account usage collection guide](docs/account-sync.md) explains the default two-hour collection schedule and administrator configuration.
 
 ## Administrator users and account pool
 
