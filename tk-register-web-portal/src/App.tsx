@@ -1,5 +1,6 @@
 import {
   Check,
+  ChartNoAxesCombined,
   ClipboardList,
   ChevronDown,
   Layers,
@@ -28,6 +29,7 @@ import SubmissionHistory from './submissions/SubmissionHistory';
 import SubmissionDetails from './submissions/SubmissionDetail';
 import { Accounts, AdminHistory, PoolAccountDetails } from './admin/AccountPool';
 import APIToken from './account/APIToken';
+import { AccountUsageDetails, MemberAccounts } from './accounts/Accounts';
 
 function Account({ user, status }: { user: User; status: AuthStatus }) {
   return (
@@ -86,7 +88,7 @@ function Account({ user, status }: { user: User; status: AuthStatus }) {
 }
 
 type Route = {
-  page: 'submit' | 'history' | 'account' | 'config' | 'detail' | 'pool-accounts' | 'pool-account' | 'pool-history' | 'pool-submission';
+  page: 'submit' | 'accounts' | 'account-usage' | 'history' | 'account' | 'config' | 'detail' | 'pool-accounts' | 'pool-account' | 'pool-history' | 'pool-submission';
   id?: string;
   config?: string;
   backAccount?: string;
@@ -100,17 +102,19 @@ function readRoute(): Route {
       : { page: 'pool-history' };
     return segments[2] ? { page: 'pool-account', id: segments[2] } : { page: 'pool-accounts' };
   }
-  if (segments[0] === 'submissions') return segments[1] ? { page: 'detail', id: segments[1] } : { page: 'history' };
+  if (segments[0] === 'accounts') return segments[1] ? { page: 'account-usage', id: segments[1] } : { page: 'accounts' };
+  if (segments[0] === 'submissions') return segments[1] ? { page: 'detail', id: segments[1], backAccount: new URLSearchParams(query).get('account') || undefined } : { page: 'history' };
   if (segments[0] === 'account') return { page: 'account' };
   if (segments[0] === 'config') return {
-    page: 'config', config: ['email', 'access', 'verification', 'sessions', 'vendors', 'users'].includes(segments[1]) ? segments[1] : 'email',
+    page: 'config', config: ['email', 'access', 'verification', 'sessions', 'vendors', 'account_sync', 'users'].includes(segments[1]) ? segments[1] : 'email',
   };
   return { page: 'submit' };
 }
 function routeHash(route: Route) {
   if (route.page === 'pool-accounts' || route.page === 'pool-account') return `#/account-pool/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
   if (route.page === 'pool-history' || route.page === 'pool-submission') return `#/account-pool/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?account=${encodeURIComponent(route.backAccount)}` : ''}`;
-  if (route.page === 'history' || route.page === 'detail') return `#/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
+  if (route.page === 'accounts' || route.page === 'account-usage') return `#/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
+  if (route.page === 'history' || route.page === 'detail') return `#/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?account=${encodeURIComponent(route.backAccount)}` : ''}`;
   if (route.page === 'config') return `#/config${route.config && route.config !== 'email' ? `/${route.config}` : ''}`;
   return `#/${route.page}`;
 }
@@ -124,6 +128,8 @@ export default function App() {
   const [route, setRoute] = useState<Route>(readRoute);
   const page = route.page;
   const isPoolPage = page.startsWith('pool-');
+  const isAccountsPage = page === 'accounts' || page === 'account-usage' || (page === 'detail' && !!route.backAccount);
+  const isHistoryPage = page === 'history' || (page === 'detail' && !route.backAccount);
   const [poolOpen, setPoolOpen] = useState(isPoolPage);
   useEffect(() => { if (isPoolPage) setPoolOpen(true); }, [isPoolPage]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -374,10 +380,11 @@ export default function App() {
                 <Plus aria-hidden='true' />
                 Submit account
               </button>
+              <button className={`nav-item ${isAccountsPage ? 'current' : ''}`} aria-current={isAccountsPage ? 'page' : undefined} onClick={() => navigate({ page: 'accounts' })}><ChartNoAxesCombined aria-hidden='true' />Accounts</button>
               <button
-                className={`nav-item ${page === 'history' || page === 'detail' ? 'current' : ''}`}
+                className={`nav-item ${isHistoryPage ? 'current' : ''}`}
                 aria-current={
-                  page === 'history' || page === 'detail' ? 'page' : undefined
+                  isHistoryPage ? 'page' : undefined
                 }
                 onClick={() => navigate({ page: 'history' })}
               >
@@ -450,6 +457,10 @@ export default function App() {
                 currentUser={user}
                 onDirty={setDirty}
               />
+            ) : page === 'accounts' ? (
+              <MemberAccounts onOpen={id => navigate({ page: 'account-usage', id })} />
+            ) : page === 'account-usage' && route.id ? (
+              <AccountUsageDetails key={route.id} id={route.id} onBack={() => navigate({ page: 'accounts' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
             ) : page === 'account' ? (
               <Account user={user} status={status} />
             ) : page === 'history' ? (
@@ -461,7 +472,8 @@ export default function App() {
               <SubmissionDetails
                 key={route.id}
                 id={route.id}
-                onBack={() => navigate({ page: 'history' })}
+                backLabel={route.backAccount ? 'Account details' : 'Submission history'}
+                onBack={() => navigate(route.backAccount ? { page: 'account-usage', id: route.backAccount } : { page: 'history' })}
               />
             ) : (
               <SubmitAccount

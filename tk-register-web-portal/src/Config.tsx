@@ -12,6 +12,7 @@ import { ErrorNotice, Loading } from './ui';
 import VendorConfig from './submissions/VendorConfig';
 import Select from './submissions/Select';
 import Users from './admin/Users';
+import AccountSyncConfig from './accounts/AccountSyncConfig';
 import {
   readableDuration,
   settingChanged,
@@ -25,6 +26,7 @@ const groups = [
   ['verification', 'Verification'],
   ['sessions', 'Sessions'],
   ['vendors', 'Vendors'],
+  ['account_sync', 'Account sync'],
   ['users', 'Users'],
 ] as const;
 function initialDraft(settings: Setting[]) {
@@ -49,6 +51,7 @@ export default function Config({
   const [draft, setDraft] = useState<Record<string, SettingValue>>({});
   const [category, setCategory] = useState(initialCategory);
   const [vendorDirty, setVendorDirty] = useState(false);
+  const [syncDirty, setSyncDirty] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -73,10 +76,12 @@ export default function Config({
         !setting.read_only && settingChanged(setting, draft[setting.key]),
     ).length ?? 0;
   useEffect(() => {
-    onDirty(changes > 0 || vendorDirty);
+    onDirty(changes > 0 || vendorDirty || syncDirty);
     return () => onDirty(false);
-  }, [changes, vendorDirty, onDirty]);
+  }, [changes, vendorDirty, syncDirty, onDirty]);
   function selectCategory(value: string) {
+    if (value === category) return;
+    if (category === 'account_sync' && syncDirty && !window.confirm('Discard your unsaved account sync changes?')) return;
     if (
       category === 'vendors' &&
       vendorDirty &&
@@ -282,7 +287,7 @@ export default function Config({
                 onClick={() => selectCategory(key)}
               >
                 {title}
-                {key !== 'vendors' && key !== 'users' && (
+                {key !== 'vendors' && key !== 'users' && key !== 'account_sync' && (
                   <span className='tab-count' aria-hidden='true'>
                     {settings.filter((s) => s.category === key).length}
                   </span>
@@ -305,6 +310,8 @@ export default function Config({
           </div>
           {category === 'users' ? (
             <div id='config-panel' role='tabpanel' aria-labelledby='tab-users'><Users currentUser={currentUser} /></div>
+          ) : category === 'account_sync' ? (
+            <div id='config-panel' role='tabpanel' aria-labelledby='tab-account_sync'><AccountSyncConfig onDirty={setSyncDirty} /></div>
           ) : category === 'vendors' ? (
             <div
               id='config-panel'

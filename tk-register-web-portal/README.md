@@ -79,6 +79,10 @@ When upgrading from the earlier untagged `tk-register:` key layout, existing ver
 
 Administrators edit a typed Key / Value / Description table grouped into Email delivery, Access, Verification, and Sessions. Numeric `*_seconds` values use seconds with human-readable hints. Unknown keys and invalid values are rejected. Changes across categories save in one database transaction. Blank SMTP password means keep the existing secret; the current value is never sent to the browser.
 
+## Account usage and scheduled collection
+
+**My account → Accounts** shows saved status, usage, cumulative spending and 7/30/90-day trends. **Config → Account sync** configures supplier website credentials and collection frequency (default eight hours, paused until configured). Each run signs in afresh; failed runs preserve the last successful data. See the [Account usage collection guide](docs/account-sync.md) for setup, data semantics and API behavior.
+
 ## Vendor account submissions
 
 The workspace includes **Submit account**, **Submission history**, and **Account settings**. A history entry opens its account overview, billing, original submitted parameters, and execution history. The Back action returns to history; bookmarked detail routes restore after sign-in. Layouts support desktop, tablet, and mobile widths.

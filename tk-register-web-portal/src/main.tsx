@@ -4,6 +4,7 @@ import App from './App';
 import './styles.css';
 import './workspace.css';
 import './admin.css';
+import './accounts/accounts.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

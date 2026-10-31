@@ -122,6 +122,10 @@ func run() error {
 		return fmt.Errorf("TK Register could not listen on port %d", port)
 	}
 	srv := &http.Server{Handler: app.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 20 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	workerDone := make(chan struct{})
+	go func() { defer close(workerDone); app.runAccountSync(workerCtx) }()
+	defer func() { stopWorker(); <-workerDone }()
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(listener) }()
 	signals := make(chan os.Signal, 1)
@@ -135,6 +139,7 @@ func run() error {
 			return e
 		}
 	}
+	stopWorker()
 	shutdown, stop := context.WithTimeout(context.Background(), 20*time.Second)
 	defer stop()
 	return srv.Shutdown(shutdown)

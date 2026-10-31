@@ -34,6 +34,7 @@ type app struct {
 	secret, adminEmail, origin, assets string
 	secure                             bool
 	vendorTransport                    http.RoundTripper
+	accountCollector                   accountCollector
 }
 type envelope struct {
 	Success    bool   `json:"success"`
@@ -125,6 +126,9 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	route := strings.TrimPrefix(r.URL.Path, basePath+"/api/")
+	if a.accountSyncRoutes(w, r, route) {
+		return
+	}
 	if a.apiTokenRoutes(w, r, route) {
 		return
 	}

@@ -86,7 +86,7 @@ func TestSettingsSecretsAndAtomicValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(descriptors) != 25 {
+	if len(descriptors) != len(specs) {
 		t.Fatalf("got %d settings", len(descriptors))
 	}
 	for _, d := range descriptors {
