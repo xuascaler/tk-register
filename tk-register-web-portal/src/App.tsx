@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Check,
   ChartNoAxesCombined,
   ClipboardList,
@@ -30,6 +31,7 @@ import SubmissionDetails from './submissions/SubmissionDetail';
 import { AdminHistory, PoolAccountDetails } from './admin/AccountPool';
 import APIToken from './account/APIToken';
 import { AccountUsageDetails, MemberAccounts } from './accounts/Accounts';
+import APIDocumentation, { type DocTopic, type DocSection } from './docs/APIDocumentation';
 
 function Account({ user, status }: { user: User; status: AuthStatus }) {
   return (
@@ -88,15 +90,24 @@ function Account({ user, status }: { user: User; status: AuthStatus }) {
 }
 
 type Route = {
-  page: 'submit' | 'accounts' | 'account-usage' | 'history' | 'account' | 'config' | 'detail' | 'pool-accounts' | 'pool-account' | 'pool-account-usage' | 'pool-history' | 'pool-submission';
+  page: 'submit' | 'accounts' | 'account-usage' | 'history' | 'account' | 'docs' | 'config' | 'detail' | 'pool-accounts' | 'pool-account' | 'pool-account-usage' | 'pool-history' | 'pool-submission';
   id?: string;
   config?: string;
   backAccount?: string;
   backAccountUsage?: boolean;
+  docTopic?: DocTopic;
+  docSection?: DocSection;
 };
 function readRoute(): Route {
   const [path, query] = window.location.hash.replace(/^#\/?/, '').split('?');
   const segments = path.split('/');
+  if (segments[0] === 'docs') {
+    const docTopic = (['getting-started', 'submit-account', 'account-lookup'] as const).find(topic => topic === segments[1]);
+    const docSection = docTopic && docTopic !== 'getting-started'
+      ? (['parameters', 'example', 'response', 'errors'] as const).find(section => section === segments[2])
+      : undefined;
+    return { page: 'docs', docTopic, docSection };
+  }
   if (segments[0] === 'account-pool') {
     const back = new URLSearchParams(query);
     if (segments[1] === 'submissions') return segments[2]
@@ -113,6 +124,7 @@ function readRoute(): Route {
   return { page: 'submit' };
 }
 function routeHash(route: Route) {
+  if (route.page === 'docs') return `#/docs${route.docTopic ? `/${route.docTopic}` : ''}${route.docTopic && route.docTopic !== 'getting-started' && route.docSection && route.docSection !== 'parameters' ? `/${route.docSection}` : ''}`;
   if (route.page === 'pool-account-usage') return `#/account-pool/accounts/${encodeURIComponent(route.id || '')}/usage`;
   if (route.page === 'pool-accounts' || route.page === 'pool-account') return `#/account-pool/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
   if (route.page === 'pool-history' || route.page === 'pool-submission') return `#/account-pool/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?${route.backAccountUsage ? 'synced_account' : 'account'}=${encodeURIComponent(route.backAccount)}` : ''}`;
@@ -200,15 +212,18 @@ export default function App() {
       return;
     }
     if (confirmed || canLeave()) {
+      const changingDocSection = route.page === 'docs' && next.page === 'docs' && route.docTopic === next.docTopic;
       setRoute(next);
       window.history.pushState(null, '', routeHash(next));
       setDirty(false);
       setError('');
       setMenuOpen(false);
-      window.scrollTo({ top: 0 });
-      requestAnimationFrame(() =>
-        document.getElementById('main-content')?.focus(),
-      );
+      if (!changingDocSection) {
+        window.scrollTo({ top: 0 });
+        requestAnimationFrame(() =>
+          document.getElementById('main-content')?.focus(),
+        );
+      }
     }
   }
   useEffect(() => {
@@ -395,6 +410,14 @@ export default function App() {
                 Submission history
               </button>
               <button
+                className={`nav-item ${page === 'docs' ? 'current' : ''}`}
+                aria-current={page === 'docs' ? 'page' : undefined}
+                onClick={() => navigate({ page: 'docs' })}
+              >
+                <BookOpen aria-hidden='true' />
+                API documentation
+              </button>
+              <button
                 className={`nav-item ${page === 'account' ? 'current' : ''}`}
                 aria-current={page === 'account' ? 'page' : undefined}
                 onClick={() => navigate({ page: 'account' })}
@@ -468,6 +491,16 @@ export default function App() {
               <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => navigate({ page: 'accounts' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
             ) : page === 'account' ? (
               <Account user={user} status={status} />
+            ) : page === 'docs' ? (
+              <APIDocumentation
+                topic={route.docTopic}
+                section={route.docSection}
+                onNavigate={(docTopic, docSection) => navigate({ page: 'docs', docTopic, docSection })}
+                onManageToken={() => {
+                  navigate({ page: 'account' });
+                  requestAnimationFrame(() => document.getElementById('api-token-title')?.scrollIntoView({ block: 'start' }));
+                }}
+              />
             ) : page === 'history' ? (
               <SubmissionHistory
                 onOpen={(id) => navigate({ page: 'detail', id })}

@@ -17,7 +17,6 @@ type Token = {
 type TokenResponse = { token: Token | null; plaintext_token?: string };
 type Action = 'generate' | 'rotate' | 'revoke';
 const tokenPath = '/account/api-token';
-const endpointPath = '/tk-register/api/v1/vendors/tk-register-0/claude/accounts';
 
 function dateLabel(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
@@ -69,7 +68,7 @@ export default function APIToken() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [copied, setCopied] = useState<'token' | 'endpoint' | null>(null);
+  const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState('');
   const [confirmation, setConfirmation] = useState<'rotate' | 'revoke' | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -99,19 +98,19 @@ export default function APIToken() {
   const token = data?.token;
   const expired = Boolean(token?.expires_at && new Date(token.expires_at).getTime() <= Date.now());
   const active = Boolean(token && !token.revoked_at && !expired);
-  const endpoint = `${window.location.origin}${endpointPath}`;
 
-  async function copy(value: string, target: 'token' | 'endpoint') {
+  async function copy(value: string) {
     setCopyError('');
     try {
       await navigator.clipboard.writeText(value);
       if (!mounted.current) return;
-      setCopied(target);
+      setCopied(true);
       clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopied(null), 2500);
+      copyTimer.current = setTimeout(() => setCopied(false), 2500);
     } catch {
       if (!mounted.current) return;
-      if (target === 'token') { tokenInput.current?.focus(); tokenInput.current?.select(); }
+      tokenInput.current?.focus();
+      tokenInput.current?.select();
       setCopyError('Clipboard access was unavailable. Select the text and copy it manually.');
     }
   }
@@ -123,7 +122,7 @@ export default function APIToken() {
     setError('');
     setNotice('');
     setCopyError('');
-    setCopied(null);
+    setCopied(false);
     clearTimeout(copyTimer.current);
     try {
       const result = await request<TokenResponse>(action === 'rotate' ? `${tokenPath}/rotate` : tokenPath, {
@@ -181,7 +180,7 @@ export default function APIToken() {
             {active && token && <>
               <div className='api-token-value-row'>
                 <input ref={tokenInput} className='api-token-value' aria-label={plaintext ? 'New API token' : 'Masked API token'} value={plaintext || `${token.prefix}••••••••••••${token.last_four}`} readOnly autoComplete='off' spellCheck={false} />
-                {plaintext && <button type='button' className='api-token-icon-button' onClick={() => void copy(plaintext, 'token')} aria-label={copied === 'token' ? 'Token copied' : 'Copy API token'} title={copied === 'token' ? 'Copied' : 'Copy token'}>{copied === 'token' ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}</button>}
+                {plaintext && <button type='button' className='api-token-icon-button' onClick={() => void copy(plaintext)} aria-label={copied ? 'Token copied' : 'Copy API token'} title={copied ? 'Copied' : 'Copy token'}>{copied ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}</button>}
               </div>
               <p className='account-help api-token-secret-help'>{plaintext ? 'Copy and save this token securely. Leaving this page hides it.' : 'For security, only the beginning and end are shown. Regenerate if you need a new token.'}</p>
               <dl className='api-token-metadata'><div><dt>Created</dt><dd>{dateLabel(token.created_at)}</dd></div><div><dt>Last used</dt><dd>{token.last_used_at ? dateLabel(token.last_used_at) : 'Not used yet'}</dd></div>{token.expires_at && <div><dt>Expires</dt><dd>{dateLabel(token.expires_at)}</dd></div>}</dl>
@@ -192,11 +191,6 @@ export default function APIToken() {
                 <button className='button secondary api-token-danger' disabled={busy} onClick={() => confirm('revoke')}><Trash2 aria-hidden='true' />Revoke token</button>
               </> : <button className='button secondary' disabled={busy} onClick={() => void mutate('generate')}>{busy ? <RefreshCw className='spin' aria-hidden='true' /> : <KeyRound aria-hidden='true' />}{busy ? 'Generating…' : 'Generate token'}</button>}
             </div>
-          </div>
-          <div className='api-token-endpoint'>
-            <span className='api-token-endpoint-label'>Submission endpoint</span>
-            <div className='api-token-endpoint-row'><span className='api-token-method'>POST</span><code>{endpoint}</code><button className='api-token-icon-button' type='button' aria-label={copied === 'endpoint' ? 'Endpoint copied' : 'Copy endpoint'} onClick={() => void copy(endpoint, 'endpoint')} title={copied === 'endpoint' ? 'Copied' : 'Copy endpoint'}>{copied === 'endpoint' ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}</button></div>
-            <p className='account-help'>Send JSON with <code>Authorization: Bearer &lt;your token&gt;</code> and <code>Content-Type: application/json</code>.</p>
           </div>
         </> : null}
         {notice && <p className='api-token-notice' role='status'><Check aria-hidden='true' />{notice}</p>}
