@@ -1,0 +1,133 @@
+.tk-select {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  width: 100%;
+}
+
+.tk-select > label {
+  color: #40546b;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tk-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--field);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 14px;
+  text-align: left;
+  box-shadow: 0 1px 2px #1b3b5c03;
+}
+
+.tk-select-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tk-select-trigger > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.tk-select-trigger:not(:disabled):hover {
+  border-color: #9db4ce;
+  background: #f8fafd;
+}
+
+.tk-select-trigger[aria-expanded="true"],
+.tk-select-trigger:focus-visible {
+  border-color: #7b9bc0;
+  outline: 3px solid #e3ecf8;
+  outline-offset: 0;
+}
+
+.tk-select-trigger[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.tk-select-trigger[aria-invalid="true"] {
+  border-color: #c9676e;
+}
+
+.tk-select-trigger:disabled {
+  opacity: 1;
+  background: #f7f9fc;
+  color: #69798c;
+}
+
+.tk-select-menu {
+  position: fixed;
+  z-index: 120;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: 4px;
+  border: 1px solid var(--field);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow:
+    0 8px 24px #163e6b1a,
+    0 2px 6px #163e6b0a;
+  font-size: 14px;
+  color: var(--ink);
+  scrollbar-width: thin;
+}
+
+.tk-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 11px 10px;
+  border-radius: 4px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.tk-select-option > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tk-select-option[aria-selected="true"] {
+  background: #edf3fb;
+  color: var(--navy);
+  font-weight: 500;
+}
+
+.tk-select-option[data-active="true"] {
+  background: #e5eef9;
+  color: var(--navy);
+}
+
+.tk-select-option > svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (max-width: 600px) {
+  .tk-select-trigger,
+  .tk-select-menu {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tk-select-trigger > svg {
+    transition: none;
+  }
+}

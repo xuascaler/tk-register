@@ -1,0 +1,12 @@
+# Track only reviewed application source and deployment definitions at the root.
+# The production directory also contains private settings, certificates, backups,
+# source archives, release staging, logs, and compiled artifacts.
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/Dockerfile
+!/nginx.conf
+!/start.sh
+!/tk-register-web-portal/
+/tk-register-web-portal/node_modules

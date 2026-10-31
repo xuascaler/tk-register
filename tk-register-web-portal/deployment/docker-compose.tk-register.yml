@@ -1,0 +1,16 @@
+# Overlay the existing GoAPI deployment; this does not add a service or public port.
+services:
+  user-web-portal:
+    image: ${TK_REGISTER_IMAGE:-goapi-user-web-portal:tk-register}
+    environment:
+      TK_REGISTER_ENABLED: "true"
+      TK_REGISTER_PORT: "3002"
+      TK_REGISTER_SQL_DRIVER: mysql
+      TK_REGISTER_SQL_DSN: ${TK_REGISTER_SQL_DSN:?Set the private tk_register database DSN}
+      TK_REGISTER_ENCRYPTION_KEY: ${TK_REGISTER_ENCRYPTION_KEY:?Set a stable 32-byte base64 encryption key}
+      TK_REGISTER_ADMIN_EMAIL: xu.guoqiang.ascaler@gmail.com
+      TK_REGISTER_PUBLIC_ORIGIN: https://goapi.cloud
+      TK_REGISTER_TRUSTED_PROXY_CIDRS: ${TK_REGISTER_TRUSTED_PROXY_CIDRS:-}
+      # REDIS_CONN_STRING and SQL_DSN are inherited from GoAPI. SQL_DSN is read
+      # only for the first SMTP configuration import; TK users use the DSN above.
+    stop_grace_period: 35s

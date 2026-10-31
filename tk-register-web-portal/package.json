@@ -1,0 +1,30 @@
+{
+  "name": "goapi-tk-register-web-portal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:e2e": "node tests/acceptance.mjs",
+    "test:integration": "node tests/integration.mjs",
+    "test:submissions": "node tests/submissions.integration.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "1.31.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.4",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}
