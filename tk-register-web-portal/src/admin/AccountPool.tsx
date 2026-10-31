@@ -25,36 +25,28 @@ function updateHistory(history: Page<AdminSubmission>, id: string, submission: S
 
 export function AdminHistory({ onOpen }: { onOpen: (id: string) => void }) {
   const filters = useListFilters();
-  const { page, query, status, attempt, forceNext } = filters;
+  const { page, query, status, attempt } = filters;
   const [list, setList] = useState<Page<AdminSubmission> | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
-  const [refreshes, setRefreshes] = useState<Record<string, StatusRefresh>>({});
   useEffect(() => {
     const abort = new AbortController();
-    const force = forceNext.current; forceNext.current = false;
-    setLoading(true); setError(''); setRefreshes({}); setSyncing(false);
+    setLoading(true); setError('');
     const params = new URLSearchParams({ page: String(page), search: query, status });
     request<Page<AdminSubmission>>(`/admin/submissions?${params}`, { signal: abort.signal })
-      .then(async data => {
-        if (abort.signal.aborted) return;
-        setList(data); setLoading(false); setSyncing(true);
-        await syncCurrentStatuses(data.items.map(item => item.current_submission), abort.signal, force,
-          (id, state) => setRefreshes(current => abort.signal.aborted ? current : { ...current, [id]: state }),
-          (id, submission) => setList(current => !current || abort.signal.aborted ? current : updateHistory(current, id, submission)),
-        );
+      .then(data => {
+        if (!abort.signal.aborted) setList(data);
       })
       .catch(cause => { if (!abort.signal.aborted) setError(errorMessage(cause)); })
-      .finally(() => { if (!abort.signal.aborted) { setLoading(false); setSyncing(false); } });
+      .finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [page, query, status, attempt, forceNext]);
+  }, [page, query, status, attempt]);
   return <div className='admin-page'>
     <div className='title-row'><div><p className='eyebrow admin-breadcrumb'>Account pool</p><h1>Submission history</h1><p className='subtitle'>Every submission across all accounts and users.</p></div><AdminBadge /></div>
-    <ListToolbar id='admin-history' search={filters.search} onSearch={filters.setSearch} status={status} onStatus={filters.changeStatus} busy={loading || syncing} onRefresh={filters.refresh} />
+    <ListToolbar id='admin-history' search={filters.search} onSearch={filters.setSearch} status={status} onStatus={filters.changeStatus} busy={loading} onRefresh={filters.refresh} />
     <ErrorNotice>{error}</ErrorNotice>
     {loading && !list ? <Loading label='Loading submission history…' /> : list ? <section className='panel admin-table-panel' aria-busy={loading}>
-      <SubmissionTable data={list} refreshes={refreshes} onOpen={onOpen} />
+      <SubmissionTable data={list} onOpen={onOpen} />
       <Pagination data={list} noun='submission' busy={loading} onPage={filters.setPage} />
     </section> : error ? <button className='button secondary' onClick={filters.refresh}>Try again</button> : null}
   </div>;
@@ -109,7 +101,7 @@ export function PoolAccountDetails({ id, onBack, onSubmission }: { id: string; o
       <div className='section-heading admin-history-heading'><div><h2>Submission history</h2><p className='muted small'>All submissions for this account and owner.</p></div>
         <button className='button secondary' disabled={loading || syncing} onClick={filters.refresh}><RefreshCw className={loading || syncing ? 'spin' : ''} aria-hidden='true' />Refresh</button>
       </div>
-      <section className='panel admin-table-panel' aria-busy={loading}><SubmissionTable data={detail.history} refreshes={refreshes} onOpen={onSubmission} showOwner={false} /><Pagination data={detail.history} noun='submission' busy={loading} onPage={filters.setPage} /></section>
+      <section className='panel admin-table-panel' aria-busy={loading}><SubmissionTable data={detail.history} onOpen={onSubmission} showOwner={false} /><Pagination data={detail.history} noun='submission' busy={loading} onPage={filters.setPage} /></section>
     </> : error ? <button className='button secondary' onClick={filters.refresh}>Try again</button> : null}
   </div>;
 }

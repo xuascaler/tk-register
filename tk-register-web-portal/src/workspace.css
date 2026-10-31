@@ -304,13 +304,13 @@
   border-bottom: 1px solid var(--border);
 }
 .history-table th:first-child {
-  width: 32%;
+  width: 44%;
 }
 .history-table .account-id-heading {
-  width: 12%;
+  width: 16%;
 }
-.history-table .account-status-heading {
-  width: 22%;
+.history-table th:nth-child(3) {
+  width: 16%;
 }
 .history-table th:last-child {
   width: 34px;
@@ -1012,7 +1012,6 @@
     border: 0;
   }
   .history-table .history-account,
-  .history-table .account-id-cell,
   .history-table .date-cell {
     grid-column: 1 / -1;
   }
@@ -1023,8 +1022,7 @@
     color: #8a99aa;
     margin-bottom: 6px;
   }
-  .history-table td.date-cell:before,
-  .history-table td.account-id-cell:before {
+  .history-table td.date-cell:before {
     display: inline;
     margin: 0 8px 0 0;
   }

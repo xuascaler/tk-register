@@ -6,18 +6,12 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { errorMessage, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
-import { AccountStatus, dateTime, Empty, StateBadge } from './shared';
+import { dateTime, Empty, StateBadge } from './shared';
 import Select from './Select';
-import {
-  canCheckStatus,
-  executionError,
-  syncVisibleStatuses,
-  type StatusRefresh,
-} from './status';
-import type { SubmissionDetail, SubmissionList } from './types';
+import type { SubmissionList } from './types';
 
 export default function SubmissionHistory({
   onOpen,
@@ -34,13 +28,7 @@ export default function SubmissionHistory({
   const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [syncing, setSyncing] = useState(false);
-  const [refreshes, setRefreshes] = useState<Record<string, StatusRefresh>>(
-    {},
-  );
-  const forceNextRefresh = useRef(false);
   function refreshHistory() {
-    forceNextRefresh.current = true;
     setAttempt((n) => n + 1);
   }
   useEffect(() => {
@@ -52,61 +40,16 @@ export default function SubmissionHistory({
   }, [search]);
   useEffect(() => {
     const abort = new AbortController();
-    const force = forceNextRefresh.current;
-    forceNextRefresh.current = false;
     setLoading(true);
     setError('');
-    setSyncing(false);
-    setRefreshes({});
     const params = new URLSearchParams({
       page: String(page),
       search: query,
       status,
     });
     request<SubmissionList>(`/submissions?${params}`, { signal: abort.signal })
-      .then(async (data) => {
-        if (abort.signal.aborted) return;
-        setList(data);
-        setLoading(false);
-        setSyncing(data.items.some(canCheckStatus));
-        await syncVisibleStatuses(data.items, {
-          signal: abort.signal,
-          force,
-          fetch: (id, force, signal) =>
-            request<SubmissionDetail>(
-              `/submissions/${encodeURIComponent(id)}/status`,
-              { method: 'POST', body: { force }, signal },
-            ),
-          onChecking: (id) =>
-            setRefreshes((current) =>
-              abort.signal.aborted
-                ? current
-                : { ...current, [id]: { checking: true } },
-            ),
-          onResult: (id, result) => {
-            setList((current) =>
-              !current || abort.signal.aborted
-                ? current
-                : {
-                    ...current,
-                    items: current.items.map((item) =>
-                      item.id === id ? result.submission : item,
-                    ),
-                  },
-            );
-            setRefreshes((current) =>
-              abort.signal.aborted
-                ? current
-                : { ...current, [id]: { error: executionError(result) } },
-            );
-          },
-          onError: (id, cause) =>
-            setRefreshes((current) =>
-              abort.signal.aborted
-                ? current
-                : { ...current, [id]: { error: errorMessage(cause) } },
-            ),
-        });
+      .then((data) => {
+        if (!abort.signal.aborted) setList(data);
       })
       .catch((cause) => {
         if (!abort.signal.aborted) setError(errorMessage(cause));
@@ -114,7 +57,6 @@ export default function SubmissionHistory({
       .finally(() => {
         if (!abort.signal.aborted) {
           setLoading(false);
-          setSyncing(false);
         }
       });
     return () => abort.abort();
@@ -125,7 +67,7 @@ export default function SubmissionHistory({
         <div>
           <h1>Submission history</h1>
           <p className='subtitle'>
-            Your submitted accounts and their latest platform status.
+            Your account submissions and their results.
           </p>
         </div>
         <button className='button secondary' onClick={onSubmit}>
@@ -170,11 +112,11 @@ export default function SubmissionHistory({
           className='button secondary icon-button'
           aria-label='Refresh submission history'
           title='Refresh'
-          disabled={loading || syncing}
+          disabled={loading}
           onClick={refreshHistory}
         >
           <RefreshCw
-            className={loading || syncing ? 'spin' : ''}
+            className={loading ? 'spin' : ''}
             aria-hidden='true'
           />
         </button>
@@ -202,7 +144,7 @@ export default function SubmissionHistory({
               >
                 {query || status
                   ? 'Try another search or submission state.'
-                  : 'Submit an account to see its status and billing information here.'}
+                  : 'Your account submissions will appear here.'}
               </Empty>
             ) : (
               <table className='history-table'>
@@ -211,7 +153,6 @@ export default function SubmissionHistory({
                     <th>Account / plan</th>
                     <th className='account-id-heading'>Account ID</th>
                     <th>Submission</th>
-                    <th className='account-status-heading'>Account status</th>
                     <th>Submitted</th>
                     <th>
                       <span className='sr-only'>Open</span>
@@ -258,12 +199,6 @@ export default function SubmissionHistory({
                       </td>
                       <td data-label='Submission'>
                         <StateBadge value={item.status} />
-                      </td>
-                      <td data-label='Account status'>
-                        <AccountStatus
-                          submission={item}
-                          refresh={refreshes[item.id]}
-                        />
                       </td>
                       <td data-label='Submitted' className='date-cell'>
                         <time dateTime={item.created_at}>

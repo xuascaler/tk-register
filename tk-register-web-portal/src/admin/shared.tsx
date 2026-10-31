@@ -67,14 +67,14 @@ export function CurrentAccountStatus({ current, latest, refresh }: { current: Su
   return <span className='state-badge state-unchecked'>Not available</span>;
 }
 
-export function SubmissionTable({ data, refreshes = {}, onOpen, showOwner = true }: {
-  data: Page<AdminSubmission>; refreshes?: Record<string, StatusRefresh>;
+export function SubmissionTable({ data, onOpen, showOwner = true }: {
+  data: Page<AdminSubmission>;
   onOpen: (id: string) => void; showOwner?: boolean;
 }) {
   if (!data.items.length) return <Empty title='No matching submissions'>Try another search or submission state.</Empty>;
-  return <div className='admin-table-wrap'><table className='admin-table admin-submission-table'>
+  return <div className='admin-table-wrap'><table className={`admin-table admin-submission-table ${showOwner ? '' : 'admin-submission-table-without-owner'}`}>
     <caption className='sr-only'>Submission history</caption>
-    <thead><tr><th scope='col'>Account / submission</th>{showOwner && <th scope='col'>Submitted by</th>}<th scope='col'>Submit status</th><th scope='col'>Account status</th><th scope='col'>Submitted</th></tr></thead>
+    <thead><tr><th scope='col'>Account / submission</th>{showOwner && <th scope='col'>Submitted by</th>}<th scope='col'>Submit status</th><th scope='col'>Submitted</th></tr></thead>
     <tbody>{data.items.map(item => <tr key={item.id} onClick={() => onOpen(item.id)}>
       <td className='admin-primary-cell' data-label='Account / submission'><button className='account-open' onClick={event => { event.stopPropagation(); onOpen(item.id); }}>{item.account}<ArrowRight aria-hidden='true' /></button>
         <span className='admin-cell-note'>{item.plan} · {item.vendor_name}</span>
@@ -82,7 +82,6 @@ export function SubmissionTable({ data, refreshes = {}, onOpen, showOwner = true
       </td>
       {showOwner && <td data-label='Submitted by'><span className='admin-email'>{item.user.email}</span></td>}
       <td data-label='Submit status'><StateBadge value={item.status} /></td>
-      <td data-label='Account status'><CurrentAccountStatus current={item.current_submission} latest={item} refresh={item.current_submission ? refreshes[item.current_submission.id] : undefined} /></td>
       <td data-label='Submitted'><time dateTime={item.created_at}>{dateTime(item.created_at)}</time></td>
     </tr>)}</tbody>
   </table></div>;
