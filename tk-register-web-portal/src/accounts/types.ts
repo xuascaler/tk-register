@@ -18,6 +18,8 @@ export type AccountSnapshot = {
 
 export type SyncedAccount = {
   id: string;
+  user_id?: string;
+  user_email?: string;
   account: string;
   plan: string;
   vendor_id: string;

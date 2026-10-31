@@ -23,63 +23,6 @@ function updateHistory(history: Page<AdminSubmission>, id: string, submission: S
   })) };
 }
 
-export function Accounts({ onOpen }: { onOpen: (id: string) => void }) {
-  const filters = useListFilters();
-  const { page, query, status, attempt, forceNext } = filters;
-  const [list, setList] = useState<Page<AdminAccount> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState('');
-  const [refreshes, setRefreshes] = useState<Record<string, StatusRefresh>>({});
-  useEffect(() => {
-    const abort = new AbortController();
-    const force = forceNext.current; forceNext.current = false;
-    setLoading(true); setError(''); setRefreshes({}); setSyncing(false);
-    const params = new URLSearchParams({ page: String(page), search: query, status });
-    request<Page<AdminAccount>>(`/admin/accounts?${params}`, { signal: abort.signal })
-      .then(async data => {
-        if (abort.signal.aborted) return;
-        setList(data); setLoading(false); setSyncing(true);
-        await syncCurrentStatuses(data.items.map(item => item.current_submission), abort.signal, force,
-          (id, state) => setRefreshes(current => abort.signal.aborted ? current : { ...current, [id]: state }),
-          (id, submission) => setList(current => !current || abort.signal.aborted ? current : {
-            ...current, items: current.items.map(account => updateAccount(account, id, submission)),
-          }),
-        );
-      })
-      .catch(cause => { if (!abort.signal.aborted) setError(errorMessage(cause)); })
-      .finally(() => { if (!abort.signal.aborted) { setLoading(false); setSyncing(false); } });
-    return () => abort.abort();
-  }, [page, query, status, attempt, forceNext]);
-  return <div className='admin-page'>
-    <div className='title-row'><div><p className='eyebrow admin-breadcrumb'>Account pool</p><h1>Accounts</h1><p className='subtitle'>All submitted accounts, grouped by owner and vendor.</p></div><AdminBadge /></div>
-    <ListToolbar id='accounts' search={filters.search} onSearch={filters.setSearch} status={status} onStatus={filters.changeStatus} busy={loading || syncing} onRefresh={filters.refresh} />
-    <ErrorNotice>{error}</ErrorNotice>
-    {loading && !list ? <Loading label='Loading accounts…' /> : list ? <section className='panel admin-table-panel' aria-busy={loading}>
-      {!list.items.length ? <Empty title={query || status ? 'No matching accounts' : 'No submitted accounts'}>{query || status ? 'Try another email or submission state.' : 'Accounts will appear here after users submit them.'}</Empty> :
-        <div className='admin-table-wrap'><table className='admin-table admin-accounts-table'>
-          <caption className='sr-only'>Accounts across all users</caption>
-          <thead><tr><th scope='col'>Account</th><th scope='col'>User</th><th scope='col'>Latest submit status</th><th scope='col'>Account status</th><th scope='col'>Last submitted</th></tr></thead>
-          <tbody>{list.items.map(account => {
-            const current = account.current_submission;
-            return <tr key={account.id} onClick={() => onOpen(account.id)}>
-              <td className='admin-primary-cell' data-label='Account'><button className='account-open' onClick={event => { event.stopPropagation(); onOpen(account.id); }}>{account.account}<ArrowRight aria-hidden='true' /></button>
-                <span className='admin-cell-note'>{account.plan} · {account.vendor_name}</span>
-                <span className='admin-cell-note'>{account.submission_count} {account.submission_count === 1 ? 'submission' : 'submissions'}{current?.remote_id ? ` · Remote ID ${current.remote_id}` : ''}</span>
-                {current?.platform_account_id && <span className='admin-cell-note'>Platform ID {current.platform_account_id}</span>}
-              </td>
-              <td data-label='User'><span className='admin-email'>{account.user.email}</span></td>
-              <td data-label='Latest submit status'><StateBadge value={account.latest_submission.status} /><span className='admin-cell-note'>Submission #{account.latest_submission.id}</span></td>
-              <td data-label='Account status'><CurrentAccountStatus current={current} latest={account.latest_submission} refresh={current ? refreshes[current.id] : undefined} /></td>
-              <td data-label='Last submitted'><time dateTime={account.latest_submission.created_at}>{dateTime(account.latest_submission.created_at)}</time></td>
-            </tr>;
-          })}</tbody>
-        </table></div>}
-      <Pagination data={list} noun='account' busy={loading} onPage={filters.setPage} />
-    </section> : error ? <button className='button secondary' onClick={filters.refresh}>Try again</button> : null}
-  </div>;
-}
-
 export function AdminHistory({ onOpen }: { onOpen: (id: string) => void }) {
   const filters = useListFilters();
   const { page, query, status, attempt, forceNext } = filters;

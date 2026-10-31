@@ -13,7 +13,7 @@ function draftFrom(config: SyncConfig): Draft {
 
 export default function AccountSyncConfig({ onDirty }: { onDirty: (value: boolean) => void }) {
   const [saved, setSaved] = useState<SyncConfig | null>(null);
-  const [draft, setDraft] = useState<Draft>({ enabled: false, interval_hours: '8', timezone: 'Asia/Shanghai', website_username: '', website_password: '' });
+  const [draft, setDraft] = useState<Draft>({ enabled: false, interval_hours: '2', timezone: 'Asia/Shanghai', website_username: '', website_password: '' });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<'save' | 'test' | ''>('');
   const [error, setError] = useState('');

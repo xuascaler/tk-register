@@ -82,36 +82,61 @@ func (a *app) syncConfig(ctx context.Context) (accountSyncConfig, error) {
 }
 
 func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route string) bool {
-	adminRoute := route == "admin/account-sync" || strings.HasPrefix(route, "admin/account-sync/")
-	if !adminRoute && route != "accounts" && !strings.HasPrefix(route, "accounts/") {
+	configRoute := route == "admin/account-sync" || strings.HasPrefix(route, "admin/account-sync/")
+	adminAccounts := route == "admin/synced-accounts" || strings.HasPrefix(route, "admin/synced-accounts/")
+	if !configRoute && !adminAccounts && route != "accounts" && !strings.HasPrefix(route, "accounts/") {
 		return false
 	}
 	user, _, valid := a.authenticated(w, r, r.Method != "GET")
 	if !valid {
 		return true
 	}
-	if adminRoute {
+	if configRoute || adminAccounts {
 		if user.Role != "admin" {
 			fail(w, 403, "FORBIDDEN", "Administrator access is required.")
 			return true
 		}
-		a.adminAccountSync(w, r, route, user.ID)
-		return true
+		if configRoute {
+			a.adminAccountSync(w, r, route, user.ID)
+			return true
+		}
 	}
-	if route == "accounts" && r.Method == "GET" {
+	base := "accounts"
+	lookupAccount := func(id uint64) (core.AccountDTO, error) {
+		return a.store.SyncedAccountForUser(r.Context(), user.ID, id)
+	}
+	if adminAccounts {
+		base = "admin/synced-accounts"
+		lookupAccount = func(id uint64) (core.AccountDTO, error) {
+			return a.store.SyncedAccountForAdmin(r.Context(), id)
+		}
+	}
+	if route == base && r.Method == "GET" {
 		page, valid := adminPage(w, r)
 		if !valid {
 			return true
 		}
-		result, err := a.store.ListSyncedAccounts(r.Context(), user.ID, page, r.URL.Query().Get("search"), r.URL.Query().Get("status"))
-		if err != nil {
+		var result core.AccountPage
+		var err error
+		if adminAccounts {
+			result, err = a.store.ListAdminSyncedAccounts(r.Context(), page, r.URL.Query().Get("search"), r.URL.Query().Get("status"))
+		} else {
+			result, err = a.store.ListSyncedAccounts(r.Context(), user.ID, page, r.URL.Query().Get("search"), r.URL.Query().Get("status"))
+		}
+		if core.IsValidationError(err) {
+			fail(w, 400, "INVALID_FILTER", err.Error())
+		} else if err != nil {
 			vendorFailure(w, err)
 		} else {
 			ok(w, result)
 		}
 		return true
 	}
-	parts := strings.Split(strings.TrimPrefix(route, "accounts/"), "/")
+	if route == base {
+		fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
+		return true
+	}
+	parts := strings.Split(strings.TrimPrefix(route, base+"/"), "/")
 	if len(parts) < 1 || len(parts) > 2 {
 		fail(w, 404, "NOT_FOUND", "This endpoint does not exist.")
 		return true
@@ -121,7 +146,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		vendorFailure(w, err)
 		return true
 	}
-	account, err := a.store.SyncedAccountForUser(r.Context(), user.ID, id)
+	account, err := lookupAccount(id)
 	if err != nil {
 		vendorFailure(w, err)
 		return true
@@ -164,7 +189,13 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
-		err = a.collectAccounts(ctx, user.ID, id, false)
+		collectionUserID := user.ID
+		if adminAccounts {
+			// The account ID has already passed administrator authorization. Keep
+			// the acting administrator's rate limit without filtering by its owner.
+			collectionUserID = 0
+		}
+		err = a.collectAccounts(ctx, collectionUserID, id, false)
 		if errors.Is(err, errSyncBusy) {
 			fail(w, 409, "SYNC_RUNNING", "A collection is already running. Please try again shortly.")
 			return true
@@ -181,7 +212,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 			internal(w)
 			return true
 		}
-		account, err = a.store.SyncedAccountForUser(r.Context(), user.ID, id)
+		account, err = lookupAccount(id)
 		if err != nil {
 			internal(w)
 		} else {

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { errorMessage, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import Select from '../submissions/Select';
+import { AdminBadge } from '../admin/shared';
 import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statusLabel, statusTone, trendSegments, type Metric } from './helpers';
 import type { AccountDetails, AccountPage, AccountSnapshot, SyncedAccount } from './types';
 
@@ -17,7 +18,8 @@ function UsageWindow({ value, label }: { value: number | null | undefined; label
   </div>;
 }
 
-export function MemberAccounts({ onOpen }: { onOpen: (id: string) => void }) {
+export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string) => void; admin?: boolean }) {
+  const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountPage | null>(null);
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
@@ -34,33 +36,34 @@ export function MemberAccounts({ onOpen }: { onOpen: (id: string) => void }) {
     const controller = new AbortController();
     setLoading(true); setError('');
     const params = new URLSearchParams({ page: String(page), search: query, status });
-    request<AccountPage>(`/accounts?${params}`, { signal: controller.signal })
+    request<AccountPage>(`${endpoint}?${params}`, { signal: controller.signal })
       .then(result => { if (!controller.signal.aborted) setData(result); })
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [page, query, status, attempt]);
+  }, [page, query, status, attempt, endpoint]);
   return <section className='usage-accounts'>
-    <div className='title-row'><div><h1>Accounts</h1><p className='subtitle'>Account status, usage, and cumulative spend.</p></div></div>
+    <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>
     <div className='usage-toolbar'>
-      <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>Search accounts</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder='Search by account email' maxLength={254} /></label>
+      <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>Search accounts</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder={admin ? 'Search account or user email' : 'Search by account email'} maxLength={254} /></label>
       <Select id='usage-account-status' label='Account status' hiddenLabel value={status} onChange={value => { setStatus(value); setPage(1); }} options={[{ value: '', label: 'All account statuses' }, { value: 'active', label: 'Active' }, { value: 'offline', label: 'Offline' }, { value: 'banned', label: 'Banned' }, { value: 'unknown', label: 'Unknown' }]} />
       <button className='button pale usage-icon-button' disabled={loading} aria-label='Refresh saved account data' title='Refresh saved account data' onClick={() => setAttempt(v => v + 1)}><RefreshCw className={loading ? 'usage-spinning' : ''} aria-hidden='true' /></button>
     </div>
     <ErrorNotice>{error}</ErrorNotice>
     {!data && loading ? <Loading label='Loading accounts…' /> : <div className='usage-list-shell' aria-busy={loading}>
-      <table className='usage-accounts-table'>
-        <caption className='sr-only'>Your accounts and their latest successfully collected data</caption>
-        <thead><tr><th scope='col'>Account / plan</th><th scope='col'>Status</th><th scope='col'>Usage windows</th><th scope='col' className='usage-total-cell'>Total spent</th><th scope='col'>Last updated</th></tr></thead>
+      <div className='usage-table-scroll'><table className={`usage-accounts-table ${admin ? 'usage-admin-table' : ''}`}>
+        <caption className='sr-only'>{admin ? 'Accounts across all users and their latest successfully collected data' : 'Your accounts and their latest successfully collected data'}</caption>
+        <thead><tr><th scope='col'>Account / plan</th>{admin && <th scope='col'>User</th>}<th scope='col'>Status</th><th scope='col'>Usage windows</th><th scope='col' className='usage-total-cell'>Total spent</th><th scope='col'>Last updated</th></tr></thead>
         <tbody>{data?.items.map(account => <tr key={account.id}>
           <td className='usage-account-cell'><button className='usage-email' onClick={() => onOpen(account.id)}>{account.account}<ArrowUpRight aria-hidden='true' /></button><span className='usage-secondary'>{account.plan}</span><span className='usage-small'>Account ID {account.platform_account_id || account.remote_id || '—'}</span></td>
+          {admin && <td data-label='User' className='usage-owner-cell'><span className='usage-owner-email'>{account.user_email || '—'}</span></td>}
           <td data-label='Status'><Status account={account} />{account.last_error && account.snapshot && <span className='usage-small'>Last known</span>}</td>
           <td data-label='Usage windows'><UsageWindow label='5 hours' value={account.snapshot?.usage_5h_percent} /><UsageWindow label='7 days' value={account.snapshot?.usage_7d_percent} /></td>
           <td data-label='Total spent' className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total, account.snapshot?.currency)}</strong>{account.last_error && account.snapshot && <span className='usage-small'>Last known total</span>}</td>
           <td data-label='Last updated'><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>{account.last_error ? <button className='usage-error-link' onClick={() => onOpen(account.id)}>Update failed</button> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</td>
         </tr>)}</tbody>
-      </table>
-      {!data?.items.length && <div className='usage-empty'><h2>{query || status ? 'No matching accounts' : 'No accounts yet'}</h2><p>{query || status ? 'Try another email or account status.' : 'Your submitted accounts will appear here with their latest available data.'}</p></div>}
+      </table></div>
+      {!data?.items.length && <div className='usage-empty'><h2>{query || status ? 'No matching accounts' : 'No accounts yet'}</h2><p>{query || status ? 'Try another email or account status.' : admin ? 'Submitted accounts from all users will appear here with their latest available data.' : 'Your submitted accounts will appear here with their latest available data.'}</p></div>}
       {data && data.total > 0 && <div className='usage-pagination'><span>{data.total.toLocaleString()} {data.total === 1 ? 'account' : 'accounts'} · Page {data.page} of {Math.max(1, Math.ceil(data.total / data.page_size))}</span><div><button className='button pale' disabled={loading || page <= 1} onClick={() => setPage(p => p - 1)}><ChevronLeft aria-hidden='true' />Previous</button><button className='button pale' disabled={loading || page * data.page_size >= data.total} onClick={() => setPage(p => p + 1)}>Next<ChevronRight aria-hidden='true' /></button></div></div>}
     </div>}
     <p className='usage-footnote'><Clock3 aria-hidden='true' />Figures show the last successful collection. Missing values are shown as “—”.</p>
@@ -106,7 +109,8 @@ function Trend({ snapshots, interval, timezone, metric }: { snapshots: AccountSn
   </div>;
 }
 
-export function AccountUsageDetails({ id, onBack, onSubmission }: { id: string; onBack: () => void; onSubmission: (id: string) => void }) {
+export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }: { id: string; onBack: () => void; onSubmission: (id: string) => void; admin?: boolean }) {
+  const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountDetails | null>(null);
   const [days, setDays] = useState('7');
   const [metric, setMetric] = useState<Metric>('cost_total');
@@ -119,18 +123,18 @@ export function AccountUsageDetails({ id, onBack, onSubmission }: { id: string; 
   useEffect(() => () => pending.current?.abort(), [id]);
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError('');
-    request<AccountDetails>(`/accounts/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal })
+    request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal })
       .then(result => { if (!controller.signal.aborted) setData(result); })
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [id, days, attempt]);
+  }, [id, days, attempt, endpoint]);
   async function sync() {
     if (syncing) return;
     const controller = new AbortController(); pending.current = controller;
     setSyncing(true); setError(''); setNotice('');
     try {
-      const result = await request<{ account: SyncedAccount }>(`/accounts/${encodeURIComponent(id)}/sync`, { method: 'POST', body: {}, signal: controller.signal });
+      const result = await request<{ account: SyncedAccount }>(`${endpoint}/${encodeURIComponent(id)}/sync`, { method: 'POST', body: {}, signal: controller.signal });
       if (!controller.signal.aborted) {
         if (result.account.last_error) setError(result.account.last_error);
         else setNotice('Account data updated.');
@@ -138,17 +142,17 @@ export function AccountUsageDetails({ id, onBack, onSubmission }: { id: string; 
     } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
     finally {
       if (!controller.signal.aborted) {
-        try { const result = await request<AccountDetails>(`/accounts/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal }); if (!controller.signal.aborted) setData(result); } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
+        try { const result = await request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal }); if (!controller.signal.aborted) setData(result); } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
         if (!controller.signal.aborted) setSyncing(false);
       }
     }
   }
   const account = data?.account, snapshot = account?.snapshot;
   return <section className='usage-detail'>
-    <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />Accounts</button>
+    <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />{admin ? 'Account pool / Accounts' : 'Accounts'}</button>
     {!account || !data ? <><ErrorNotice>{error}</ErrorNotice>{loading ? <Loading label='Loading account…' /> : <button className='button pale' onClick={() => setAttempt(v => v + 1)}>Try again</button>}</> : <>
       <div className='title-row usage-detail-title'><div><h1>{account.account}</h1><p className='subtitle'>{account.plan} <span aria-hidden='true'>·</span> {account.vendor_name}</p></div><div className='usage-detail-actions'><Status account={account} /><button className='button pale' disabled={syncing || loading || !account.current_submission_id} onClick={sync}><RefreshCw className={syncing ? 'usage-spinning' : ''} aria-hidden='true' />{syncing ? 'Updating…' : 'Sync now'}</button></div></div>
-      <div className='usage-meta'><span>Account ID <strong>{account.platform_account_id || account.remote_id || '—'}</strong></span><span>Last updated <strong>{formatTime(account.last_success_at, data.timezone)}</strong></span>{account.latest_submission_id && <button className='usage-text-button' onClick={() => onSubmission(account.current_submission_id || account.latest_submission_id)}>View submission<ArrowUpRight aria-hidden='true' /></button>}</div>
+      <div className='usage-meta'>{admin && <span className='usage-owner-meta'>User <strong>{account.user_email || '—'}</strong></span>}<span>Account ID <strong>{account.platform_account_id || account.remote_id || '—'}</strong></span><span>Last updated <strong>{formatTime(account.last_success_at, data.timezone)}</strong></span>{account.latest_submission_id && <button className='usage-text-button' onClick={() => onSubmission(account.current_submission_id || account.latest_submission_id)}>View submission<ArrowUpRight aria-hidden='true' /></button>}</div>
       <ErrorNotice>{error}</ErrorNotice>
       {notice && <p className='notice success' role='status'>{notice}</p>}
       {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><details><summary>View details</summary><p>{account.last_error}</p><span>Attempted {formatTime(account.last_attempt_at, data.timezone)}</span></details></div>}

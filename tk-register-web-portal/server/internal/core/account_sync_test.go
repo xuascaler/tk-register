@@ -211,7 +211,7 @@ func TestAccountSyncSettingsRequireCredentialsAndKeepSecretsPrivate(t *testing.T
 	s := testStore(t)
 	ctx := context.Background()
 	values, err := s.Settings(ctx)
-	if err != nil || values.Bool("account_sync_enabled") || values.Int("account_sync_interval_hours") != 8 {
+	if err != nil || values.Bool("account_sync_enabled") || values.Int("account_sync_interval_hours") != 2 {
 		t.Fatal("unsafe sync defaults", err)
 	}
 	if err = s.PatchSettings(ctx, map[string]string{"account_sync_enabled": "true"}, 1); !IsValidationError(err) {
@@ -309,5 +309,68 @@ func TestAccountCollectionTargetsOnlyEnabledSupportedVendor(t *testing.T) {
 	targets, err = s.CollectionTargets(ctx, user.ID, 0)
 	if err != nil || len(targets) != 0 {
 		t.Fatal("disabled vendor selected", targets, err)
+	}
+}
+
+func TestAdminSyncedAccountsUseOwnerSnapshotsAndSearchOwnerEmail(t *testing.T) {
+	s, owner, vendor, version := syncFixture(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Hour)
+	other := User{Email: "other-owner@example.com", PasswordHash: "private-password-hash", Role: "member", Status: "active", EmailVerifiedAt: at}
+	if err := s.CreateUser(ctx, &other); err != nil {
+		t.Fatal(err)
+	}
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "shared@example.com", "claude/cc-pro", "accepted", "601", at)
+	syncSubmission(t, s, other.ID, vendor.ID, version.ID, "shared@example.com", "claude/cc-pro", "accepted", "602", at.Add(time.Minute))
+	ownerPage, err := s.ListSyncedAccounts(ctx, owner.ID, 1, "", "")
+	if err != nil || len(ownerPage.Items) != 1 {
+		t.Fatal(ownerPage, err)
+	}
+	if ownerPage.Items[0].UserID != "" || ownerPage.Items[0].UserEmail != "" {
+		t.Fatal("owner view unexpectedly includes administrator fields")
+	}
+	id, _ := ParseBusinessID(ownerPage.Items[0].ID)
+	var raw SyncedAccount
+	if err = s.DB.First(&raw, id).Error; err != nil {
+		t.Fatal(err)
+	}
+	active, currency := "active", "CNY"
+	zero := float64(0)
+	if err = s.RecordAccountSnapshot(ctx, id, raw.IdentityKey, AccountSnapshotValues{AccountStatus: &active, CostTotal: &zero, Currency: &currency}, at.Add(2*time.Minute), "UTC"); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.ListAdminSyncedAccounts(ctx, 1, "", "")
+	if err != nil || page.Total != 2 || len(page.Items) != 2 || page.Items[0].UserEmail != other.Email {
+		t.Fatal("admin list lost owner grouping or ordering", page, err)
+	}
+	page, err = s.ListAdminSyncedAccounts(ctx, 1, "OTHER-OWNER@", "unknown")
+	if err != nil || page.Total != 1 || page.Items[0].UserID != idString(other.ID) {
+		t.Fatal("owner email search failed", page, err)
+	}
+	page, err = s.ListAdminSyncedAccounts(ctx, 1, "shared@", "active")
+	if err != nil || page.Total != 1 || page.Items[0].ID != idString(id) || page.Items[0].Snapshot == nil || page.Items[0].Snapshot.CostTotal == nil || *page.Items[0].Snapshot.CostTotal != 0 || page.Items[0].Snapshot.Usage5hPercent != nil {
+		t.Fatal("admin view did not use the same nullable observation", page, err)
+	}
+	detail, err := s.SyncedAccountForAdmin(ctx, id)
+	if err != nil || detail.UserEmail != owner.Email || detail.UserID != idString(owner.ID) || detail.Snapshot == nil || detail.Snapshot.ID != page.Items[0].Snapshot.ID {
+		t.Fatal("admin detail diverges from list", detail, err)
+	}
+	serialized, err := common.Marshal(detail)
+	if err != nil || strings.Contains(string(serialized), "password") || strings.Contains(string(serialized), "auth_version") {
+		t.Fatal("administrator DTO includes private user details")
+	}
+	page, err = s.ListAdminSyncedAccounts(ctx, 2, "", "")
+	if err != nil || page.Total != 2 || len(page.Items) != 0 {
+		t.Fatal("admin pagination is incorrect", page, err)
+	}
+	page, err = s.ListAdminSyncedAccounts(ctx, 1, "%", "")
+	if err != nil || page.Total != 0 {
+		t.Fatal("search wildcard escaped incorrectly", page, err)
+	}
+	if _, err = s.ListAdminSyncedAccounts(ctx, 1, "", "accepted"); !IsValidationError(err) {
+		t.Fatal("submission status was accepted as account status")
+	}
+	if _, err = s.SyncedAccountForAdmin(ctx, 0); !errors.Is(err, ErrNotFound) {
+		t.Fatal("zero account ID accepted")
 	}
 }

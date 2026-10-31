@@ -9,7 +9,7 @@ Open **Management → Config → Account sync** (`/tk-register/#/config/account_
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | `enabled` | `false` | Enables scheduled collection. Pausing does not remove saved history. |
-| `interval_hours` | `8` | Whole hours between automatic runs; accepted range is 1–168. |
+| `interval_hours` | `2` | Whole hours between automatic runs; accepted range is 1–168. |
 | `timezone` | `Asia/Shanghai` | Timezone for snapshot dates and usage history. Also supports `Asia/Singapore` and `UTC`. |
 | `data_source` | Supplier website | Fixed source for this integration. |
 | `website_username` | Empty | Supplier website login username, configured by an administrator. |
@@ -21,7 +21,7 @@ Credentials are stored in the TK Register configuration database. The password i
 
 ## Authentication lifecycle
 
-Each collection run starts a **fresh username/password login** to the supplier website. A credential obtained during an earlier run is not reused eight hours later. The temporary supplier login token remains in server memory only for that run.
+Each collection run starts a **fresh username/password login** to the supplier website. A credential obtained during an earlier run is not reused at the next interval. The temporary supplier login token remains in server memory only for that run.
 
 If the supplier reports an expired session during a run, the collector signs in again once and retries the failed read. A second expiry or a login failure ends that attempt with a sanitized error. Supplier passwords, session tokens and account authentication JSON are excluded from the collected account DTO and public error messages.
 
@@ -35,7 +35,9 @@ Opening the list or detail page reads stored database results. The list refresh 
 
 The account detail page shows cumulative spending, input/output tokens, quota-window usage and reset times. The trend supports **7, 30 or 90 days** and separate spending, input-token and output-token views. **View data** exposes the saved observations in a table. **View submission** opens the associated submission record, with a return action to the account detail.
 
-These pages are separate from **Submission history**, its existing status/billing queries and the administrator's **Account pool**. They do not alter the account-submission workflow.
+**Management → Account pool → Accounts** reuses the same saved account list, usage details and trends across all users, adding the owner email in a **User** column and in account details. Administrators can search by account or owner email and explicitly sync an account. These routes require an active administrator session; ordinary members remain limited to their own accounts.
+
+**Submission history** remains a separate view of submission attempts and their existing status/billing queries. Account usage pages do not alter the account-submission workflow.
 
 ## Values and history
 
@@ -56,6 +58,9 @@ The following paths are relative to `/tk-register/api` and use the existing JSON
 | `GET /accounts?page=1&search=&status=` | Owner-scoped saved account list: `items`, `total`, `page`, `page_size`. |
 | `GET /accounts/:id?days=7` | Owned account, current-lifetime snapshots, collection interval and timezone. `days` accepts 7, 30 or 90. |
 | `POST /accounts/:id/sync` | Explicit fresh collection using `{}`; returns the account with its latest saved result or `last_error`. |
+| `GET /admin/synced-accounts?page=1&search=&status=` | Administrator saved account list across users; same metrics plus `user_id` and `user_email`. |
+| `GET /admin/synced-accounts/:id?days=7` | Administrator view of a stable synced account and its snapshots. |
+| `POST /admin/synced-accounts/:id/sync` | Administrator-triggered fresh collection for that account, with the same configuration, concurrency and cooldown checks. |
 | `GET /admin/account-sync` | Administrator configuration without the saved password, plus collection status. |
 | `PUT /admin/account-sync` | Save `enabled`, `interval_hours`, `timezone`, `website_username` and optional `website_password`. |
 | `POST /admin/account-sync/test-login` | Test `website_username` and optional `website_password`; success returns `authenticated: true`. A blank password uses the saved password only for the same saved username. |

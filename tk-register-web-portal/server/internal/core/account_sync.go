@@ -90,6 +90,8 @@ type AccountSnapshotDTO struct {
 }
 type AccountDTO struct {
 	ID                  string              `json:"id"`
+	UserID              string              `json:"user_id,omitempty"`
+	UserEmail           string              `json:"user_email,omitempty"`
 	Account             string              `json:"account"`
 	Plan                string              `json:"plan"`
 	VendorID            string              `json:"vendor_id"`
@@ -234,19 +236,37 @@ func validAccountFilter(page int, search, status string) error {
 }
 
 func (s *Store) ListSyncedAccounts(ctx context.Context, userID uint64, page int, search, status string) (AccountPage, error) {
-	out := AccountPage{Items: []AccountDTO{}, Page: page, PageSize: 20}
 	if userID == 0 {
-		return out, ErrNotFound
+		return AccountPage{}, ErrNotFound
 	}
+	return s.listSyncedAccounts(ctx, userID, page, search, status, false)
+}
+
+// ListAdminSyncedAccounts is only exposed by administrator-authorized handlers.
+// It shares observations, filters, pagination and ordering with the owner view.
+func (s *Store) ListAdminSyncedAccounts(ctx context.Context, page int, search, status string) (AccountPage, error) {
+	return s.listSyncedAccounts(ctx, 0, page, search, status, true)
+}
+
+func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int, search, status string, includeOwner bool) (AccountPage, error) {
+	out := AccountPage{Items: []AccountDTO{}, Page: page, PageSize: 20}
 	if err := validAccountFilter(page, search, status); err != nil {
 		return out, err
 	}
 	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
 		return out, err
 	}
-	q := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("user_id = ?", userID)
+	q := s.DB.WithContext(ctx).Model(&SyncedAccount{})
+	if !includeOwner {
+		q = q.Where("user_id = ?", userID)
+	}
 	if strings.TrimSpace(search) != "" {
-		q = q.Where("LOWER(account) LIKE ? ESCAPE '!'", escapedSearch(search))
+		if includeOwner {
+			owners := s.DB.Model(&User{}).Select("id").Where("LOWER(email) LIKE ? ESCAPE '!'", escapedSearch(search))
+			q = q.Where("LOWER(account) LIKE ? ESCAPE '!' OR user_id IN (?)", escapedSearch(search), owners)
+		} else {
+			q = q.Where("LOWER(account) LIKE ? ESCAPE '!'", escapedSearch(search))
+		}
 	}
 	if status == "unknown" {
 		q = q.Where("snapshot_status IS NULL OR snapshot_status = ? OR snapshot_status = ?", "", "unknown")
@@ -262,6 +282,9 @@ func (s *Store) ListSyncedAccounts(ctx context.Context, userID uint64, page int,
 	}
 	for _, row := range rows {
 		dto, err := s.accountDTO(ctx, row)
+		if err == nil && includeOwner {
+			err = s.accountOwner(ctx, row.UserID, &dto)
+		}
 		if err != nil {
 			return out, err
 		}
@@ -283,8 +306,37 @@ func (s *Store) SyncedAccountForUser(ctx context.Context, userID, id uint64) (Ac
 	return s.accountDTO(ctx, row)
 }
 
+// SyncedAccountForAdmin must only be called after the HTTP administrator check.
+func (s *Store) SyncedAccountForAdmin(ctx context.Context, id uint64) (AccountDTO, error) {
+	if id == 0 {
+		return AccountDTO{}, ErrNotFound
+	}
+	if err := s.ensureSyncedAccounts(ctx, 0); err != nil {
+		return AccountDTO{}, err
+	}
+	var row SyncedAccount
+	if err := s.DB.WithContext(ctx).First(&row, id).Error; err != nil {
+		return AccountDTO{}, err
+	}
+	dto, err := s.accountDTO(ctx, row)
+	if err == nil {
+		err = s.accountOwner(ctx, row.UserID, &dto)
+	}
+	return dto, err
+}
+
+func (s *Store) accountOwner(ctx context.Context, userID uint64, dto *AccountDTO) error {
+	var user User
+	if err := s.DB.WithContext(ctx).Select("id", "email").First(&user, userID).Error; err != nil {
+		return err
+	}
+	dto.UserID, dto.UserEmail = idString(user.ID), user.Email
+	return nil
+}
+
 // AccountSnapshots is internal: HTTP handlers must first enforce ownership with
-// SyncedAccountForUser. Prior remote lifetimes are retained but never joined into
+// SyncedAccountForUser or administrator access with SyncedAccountForAdmin.
+// Prior remote lifetimes are retained but never joined into
 // the currently displayed trend.
 func (s *Store) AccountSnapshots(ctx context.Context, accountID uint64, days int) ([]AccountSnapshotDTO, error) {
 	out := []AccountSnapshotDTO{}

@@ -7,6 +7,7 @@
 .usage-search > svg { position: absolute; top: 13px; left: 13px; color: #8093ac; }
 .workspace .usage-icon-button { width: 44px; min-width: 44px; padding: 0; }
 .usage-list-shell { border: 1px solid var(--border); border-radius: 10px; }
+.usage-table-scroll { overflow-x: auto; border-radius: 10px 10px 0 0; }
 .usage-accounts-table { border-collapse: collapse; width: 100%; table-layout: fixed; text-align: left; }
 .usage-accounts-table th { background: #f7f9fc; color: #6b7e97; font-weight: 500; font-size: 12px; padding: 14px 18px; }
 .usage-accounts-table th:first-child { width: 31%; border-top-left-radius: 10px; }
@@ -15,6 +16,15 @@
 .usage-accounts-table th:nth-child(4) { width: 17%; }
 .usage-accounts-table th:last-child { border-top-right-radius: 10px; }
 .usage-accounts-table td { vertical-align: middle; padding: 22px 18px; border-top: 1px solid var(--border); }
+.usage-accounts-table.usage-admin-table { min-width: 940px; }
+.usage-accounts-table.usage-admin-table th:first-child { width: 24%; }
+.usage-accounts-table.usage-admin-table th:nth-child(2) { width: 18%; }
+.usage-accounts-table.usage-admin-table th:nth-child(3) { width: 11%; }
+.usage-accounts-table.usage-admin-table th:nth-child(4) { width: 17%; }
+.usage-accounts-table.usage-admin-table th:nth-child(5) { width: 16%; }
+.usage-accounts-table.usage-admin-table th:last-child { width: 14%; }
+.usage-owner-email { display: block; color: #526780; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.usage-owner-meta { flex-basis: 100%; overflow-wrap: anywhere; }
 .usage-accounts-table tr:hover td { background: #fbfcfe; }
 .usage-email { border: 0; padding: 0; background: transparent; color: var(--navy); font-size: 14px; font-weight: 600; text-align: left; overflow-wrap: anywhere; line-height: 1.6; }
 .usage-email svg { width: 14px; height: 14px; margin-left: 5px; vertical-align: -2px; opacity: .55; }
@@ -133,10 +143,14 @@
   .usage-accounts-table td { display: block; padding: 0; border: 0; min-width: 0; }
   .usage-accounts-table td[data-label]::before { display: block; content: attr(data-label); color: #8394aa; font-size: 11px; margin-bottom: 7px; }
   .usage-accounts-table td.usage-account-cell { grid-column: 1 / -1; }
-  .usage-accounts-table td:nth-child(2) { grid-column: 1; grid-row: 2; }
-  .usage-accounts-table td:nth-child(3) { grid-column: 1; grid-row: 3; }
-  .usage-accounts-table td:nth-child(4) { grid-column: 2; grid-row: 2; }
-  .usage-accounts-table td:nth-child(5) { grid-column: 2; grid-row: 3; }
+  .usage-accounts-table.usage-admin-table { min-width: 0; }
+  .usage-accounts-table td[data-label='Status'] { grid-column: 1; grid-row: 2; }
+  .usage-accounts-table td[data-label='Usage windows'] { grid-column: 1; grid-row: 3; }
+  .usage-accounts-table td[data-label='Total spent'] { grid-column: 2; grid-row: 2; }
+  .usage-accounts-table td[data-label='Last updated'] { grid-column: 2; grid-row: 3; }
+  .usage-admin-table td[data-label='User'] { grid-column: 1 / -1; grid-row: 2; }
+  .usage-admin-table td[data-label='Status'], .usage-admin-table td[data-label='Total spent'] { grid-row: 3; }
+  .usage-admin-table td[data-label='Usage windows'], .usage-admin-table td[data-label='Last updated'] { grid-row: 4; }
   .usage-accounts-table tr:hover td { background: none; }
   .usage-total-cell { text-align: left; }
   .usage-money { font-size: 16px; white-space: normal; }

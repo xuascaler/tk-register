@@ -27,7 +27,7 @@ import { ErrorNotice, Loading } from './ui';
 import SubmitAccount from './submissions/SubmitAccount';
 import SubmissionHistory from './submissions/SubmissionHistory';
 import SubmissionDetails from './submissions/SubmissionDetail';
-import { Accounts, AdminHistory, PoolAccountDetails } from './admin/AccountPool';
+import { AdminHistory, PoolAccountDetails } from './admin/AccountPool';
 import APIToken from './account/APIToken';
 import { AccountUsageDetails, MemberAccounts } from './accounts/Accounts';
 
@@ -88,19 +88,21 @@ function Account({ user, status }: { user: User; status: AuthStatus }) {
 }
 
 type Route = {
-  page: 'submit' | 'accounts' | 'account-usage' | 'history' | 'account' | 'config' | 'detail' | 'pool-accounts' | 'pool-account' | 'pool-history' | 'pool-submission';
+  page: 'submit' | 'accounts' | 'account-usage' | 'history' | 'account' | 'config' | 'detail' | 'pool-accounts' | 'pool-account' | 'pool-account-usage' | 'pool-history' | 'pool-submission';
   id?: string;
   config?: string;
   backAccount?: string;
+  backAccountUsage?: boolean;
 };
 function readRoute(): Route {
   const [path, query] = window.location.hash.replace(/^#\/?/, '').split('?');
   const segments = path.split('/');
   if (segments[0] === 'account-pool') {
+    const back = new URLSearchParams(query);
     if (segments[1] === 'submissions') return segments[2]
-      ? { page: 'pool-submission', id: segments[2], backAccount: new URLSearchParams(query).get('account') || undefined }
+      ? { page: 'pool-submission', id: segments[2], backAccount: back.get('synced_account') || back.get('account') || undefined, backAccountUsage: !!back.get('synced_account') }
       : { page: 'pool-history' };
-    return segments[2] ? { page: 'pool-account', id: segments[2] } : { page: 'pool-accounts' };
+    return segments[2] ? { page: segments[3] === 'usage' ? 'pool-account-usage' : 'pool-account', id: segments[2] } : { page: 'pool-accounts' };
   }
   if (segments[0] === 'accounts') return segments[1] ? { page: 'account-usage', id: segments[1] } : { page: 'accounts' };
   if (segments[0] === 'submissions') return segments[1] ? { page: 'detail', id: segments[1], backAccount: new URLSearchParams(query).get('account') || undefined } : { page: 'history' };
@@ -111,8 +113,9 @@ function readRoute(): Route {
   return { page: 'submit' };
 }
 function routeHash(route: Route) {
+  if (route.page === 'pool-account-usage') return `#/account-pool/accounts/${encodeURIComponent(route.id || '')}/usage`;
   if (route.page === 'pool-accounts' || route.page === 'pool-account') return `#/account-pool/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
-  if (route.page === 'pool-history' || route.page === 'pool-submission') return `#/account-pool/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?account=${encodeURIComponent(route.backAccount)}` : ''}`;
+  if (route.page === 'pool-history' || route.page === 'pool-submission') return `#/account-pool/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?${route.backAccountUsage ? 'synced_account' : 'account'}=${encodeURIComponent(route.backAccount)}` : ''}`;
   if (route.page === 'accounts' || route.page === 'account-usage') return `#/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
   if (route.page === 'history' || route.page === 'detail') return `#/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?account=${encodeURIComponent(route.backAccount)}` : ''}`;
   if (route.page === 'config') return `#/config${route.config && route.config !== 'email' ? `/${route.config}` : ''}`;
@@ -408,7 +411,7 @@ export default function App() {
                     <Layers aria-hidden='true' />Account pool<ChevronDown className={poolOpen ? 'is-expanded' : ''} aria-hidden='true' />
                   </button>
                   {poolOpen && <div className='admin-subnav' id='account-pool-nav'>
-                    <button className={`nav-item ${page === 'pool-accounts' || page === 'pool-account' || (page === 'pool-submission' && route.backAccount) ? 'current' : ''}`} aria-current={page === 'pool-accounts' || page === 'pool-account' || (page === 'pool-submission' && route.backAccount) ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts' })}>Accounts</button>
+                    <button className={`nav-item ${page === 'pool-accounts' || page === 'pool-account' || page === 'pool-account-usage' || (page === 'pool-submission' && route.backAccount) ? 'current' : ''}`} aria-current={page === 'pool-accounts' || page === 'pool-account' || page === 'pool-account-usage' || (page === 'pool-submission' && route.backAccount) ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts' })}>Accounts</button>
                     <button className={`nav-item ${page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'current' : ''}`} aria-current={page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'page' : undefined} onClick={() => navigate({ page: 'pool-history' })}>Submission history</button>
                   </div>}
                 </div>
@@ -443,13 +446,15 @@ export default function App() {
             {(page === 'config' || isPoolPage) && user.role !== 'admin' ? (
               <><h1>Admin access required</h1><p className='subtitle'>This page is available to administrators.</p><button className='button secondary' onClick={() => navigate({ page: 'history' })}>Your submission history</button></>
             ) : page === 'pool-accounts' ? (
-              <Accounts onOpen={id => navigate({ page: 'pool-account', id })} />
+              <MemberAccounts key='admin-accounts' admin onOpen={id => navigate({ page: 'pool-account-usage', id })} />
+            ) : page === 'pool-account-usage' && route.id ? (
+              <AccountUsageDetails key={`admin-${route.id}`} admin id={route.id} onBack={() => navigate({ page: 'pool-accounts' })} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id, backAccountUsage: true })} />
             ) : page === 'pool-account' && route.id ? (
               <PoolAccountDetails key={route.id} id={route.id} onBack={() => navigate({ page: 'pool-accounts' })} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id })} />
             ) : page === 'pool-history' ? (
               <AdminHistory onOpen={id => navigate({ page: 'pool-submission', id })} />
             ) : page === 'pool-submission' && route.id ? (
-              <SubmissionDetails key={`admin-${route.id}`} id={route.id} endpointPrefix='/admin/submissions' backLabel={route.backAccount ? 'Account details' : 'All submission history'} onBack={() => navigate(route.backAccount ? { page: 'pool-account', id: route.backAccount } : { page: 'pool-history' })} />
+              <SubmissionDetails key={`admin-${route.id}`} id={route.id} endpointPrefix='/admin/submissions' backLabel={route.backAccount ? 'Account details' : 'All submission history'} onBack={() => navigate(route.backAccount ? { page: route.backAccountUsage ? 'pool-account-usage' : 'pool-account', id: route.backAccount } : { page: 'pool-history' })} />
             ) : page === 'config' ? (
               <Config
                 key={route.config}
@@ -458,9 +463,9 @@ export default function App() {
                 onDirty={setDirty}
               />
             ) : page === 'accounts' ? (
-              <MemberAccounts onOpen={id => navigate({ page: 'account-usage', id })} />
+              <MemberAccounts key='member-accounts' onOpen={id => navigate({ page: 'account-usage', id })} />
             ) : page === 'account-usage' && route.id ? (
-              <AccountUsageDetails key={route.id} id={route.id} onBack={() => navigate({ page: 'accounts' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
+              <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => navigate({ page: 'accounts' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
             ) : page === 'account' ? (
               <Account user={user} status={status} />
             ) : page === 'history' ? (

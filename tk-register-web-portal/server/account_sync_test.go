@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func TestAccountsOwnershipCSRFAndReadOnlyViews(t *testing.T) {
 	}
 	w := request(t, a, "GET", "admin/account-sync", nil, ac, "")
 	requireStatus(t, w, 200)
-	if data(t, w)["interval_hours"] != float64(8) || data(t, w)["enabled"] != false {
+	if data(t, w)["interval_hours"] != float64(2) || data(t, w)["enabled"] != false {
 		t.Fatal("incorrect schedule defaults")
 	}
 	requireStatus(t, request(t, a, "PUT", "admin/account-sync", map[string]any{"enabled": true}, ac, acsrf), 400)
@@ -280,4 +281,73 @@ func TestAccountCollectionInvalidMetricDoesNotAbortOtherAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireStatus(t, request(t, a, "POST", "accounts/"+invalidID+"/sync", map[string]any{}, oc, csrf), 409)
+}
+
+func TestAdminSyncedAccountsAuthorizationAndOwnerParity(t *testing.T) {
+	a, _, _ := fixture(t)
+	admin, ac, acsrf := vendorSession(t, a, "admin@example.com", "admin")
+	owner, oc, ocsrf := vendorSession(t, a, "owner@example.com", "member")
+	otherOwner, other, _ := vendorSession(t, a, "other@example.com", "member")
+	vendor := configuredVendor(t, a, admin.ID)
+	now := time.Now().UTC()
+	seedAdminSubmission(t, a, owner.ID, vendor, "account@example.com", "accepted", now)
+	seedAdminSubmission(t, a, otherOwner.ID, vendor, "another@example.com", "accepted", now.Add(time.Second))
+	target := syncTarget(t, a, owner.ID)
+	adminPath := "admin/synced-accounts/" + fmt.Sprint(target.ID)
+	ownerPath := "accounts/" + fmt.Sprint(target.ID)
+	active, currency := "active", "CNY"
+	zero, usage := float64(0), float64(18)
+	fake := &mockAccountCollector{records: []supplier.Account{{ID: *target.RemoteID, Account: target.Account, Plan: target.Plan, Status: &active, Currency: &currency, CostTotal: &zero, Usage5HPercent: &usage}}}
+	a.accountCollector = fake
+	for _, path := range []string{"admin/synced-accounts", adminPath, adminPath + "?days=30"} {
+		requireStatus(t, request(t, a, "GET", path, nil, nil, ""), 401)
+		requireStatus(t, request(t, a, "GET", path, nil, oc, ""), 403)
+		requireStatus(t, request(t, a, "GET", path, nil, ac, ""), 200)
+	}
+	requireStatus(t, request(t, a, "POST", adminPath+"/sync", map[string]any{}, oc, ocsrf), 403)
+	requireStatus(t, request(t, a, "POST", adminPath+"/sync", map[string]any{}, ac, ""), 403)
+	requireStatus(t, request(t, a, "GET", ownerPath, nil, other, ""), 404)
+	requireStatus(t, request(t, a, "GET", adminPath+"?days=365", nil, ac, ""), 400)
+	requireStatus(t, request(t, a, "GET", "admin/synced-accounts?status=accepted", nil, ac, ""), 400)
+	if fake.collectCalls != 0 || fake.loginCalls != 0 {
+		t.Fatal("read-only or forbidden admin endpoint invoked the supplier")
+	}
+	configureSync(t, a, admin.ID, false)
+	w := request(t, a, "POST", adminPath+"/sync", map[string]any{}, ac, acsrf)
+	requireStatus(t, w, 200)
+	if fake.collectCalls != 1 {
+		t.Fatal("administrator did not collect the selected owner's account")
+	}
+	requireStatus(t, request(t, a, "POST", adminPath+"/sync", map[string]any{}, ac, acsrf), 429)
+	ownerResponse := request(t, a, "GET", ownerPath, nil, oc, "")
+	adminResponse := request(t, a, "GET", adminPath, nil, ac, "")
+	requireStatus(t, ownerResponse, 200)
+	requireStatus(t, adminResponse, 200)
+	ownerData, adminData := data(t, ownerResponse), data(t, adminResponse)
+	ownerAccount := ownerData["account"].(map[string]any)
+	adminAccount := adminData["account"].(map[string]any)
+	if adminAccount["user_email"] != owner.Email || adminAccount["user_id"] != fmt.Sprint(owner.ID) {
+		t.Fatal("wrong owner attribution", adminAccount)
+	}
+	delete(adminAccount, "user_email")
+	delete(adminAccount, "user_id")
+	if !reflect.DeepEqual(ownerData, adminData) {
+		t.Fatalf("admin view differs beyond owner fields: owner=%+v admin=%+v", ownerData, adminData)
+	}
+	if _, exposed := ownerAccount["user_email"]; exposed {
+		t.Fatal("owner response exposes administrator-only fields")
+	}
+	listResponse := request(t, a, "GET", "admin/synced-accounts?search=owner%40example.com&status=active", nil, ac, "")
+	requireStatus(t, listResponse, 200)
+	list := data(t, listResponse)
+	if list["total"] != float64(1) || list["items"].([]any)[0].(map[string]any)["id"] != fmt.Sprint(target.ID) {
+		t.Fatal("admin search or status filter returned wrong accounts", list)
+	}
+	otherTargets, err := a.store.CollectionTargets(context.Background(), otherOwner.ID, 0)
+	if err != nil || len(otherTargets) != 1 || otherTargets[0].LastAttemptAt != nil {
+		t.Fatal("manual collection modified an unrelated owner's account")
+	}
+	if fake.collectCalls != 1 {
+		t.Fatal("list or details unexpectedly contacted the supplier")
+	}
 }

@@ -69,7 +69,9 @@ authentication, vendor protocols, API token usage, and configuration details.
 
 The initial source import matches the deployed
 `tk-register:standalone-20261030-api-token` release, using the deployment's
-`source-current.tar.gz` snapshot. The later Accounts / Account sync interface is
-still a design preview and is not included as implemented functionality here.
+`source-current.tar.gz` snapshot. Later releases add saved account usage, trends, automatic supplier sign-in, and
+configurable collection (two hours by default). Administrator Accounts shares
+the same usage view across all users and adds owner attribution. See
+[account sync documentation](tk-register-web-portal/docs/account-sync.md).
 
 The parent project's GNU AGPL v3 license is preserved in `LICENSE`.
