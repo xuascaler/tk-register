@@ -35,6 +35,7 @@ type app struct {
 	secure                             bool
 	vendorTransport                    http.RoundTripper
 	accountCollector                   accountCollector
+	accountPageCollector               accountPageCollector
 	accountAuthEditor                  accountAuthEditor
 }
 type envelope struct {

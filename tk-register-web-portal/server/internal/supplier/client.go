@@ -100,10 +100,14 @@ func NewClient() *Client {
 // Each call owns a separate short-lived session. Login tokens are neither saved
 // on Client nor reused between periodic runs, including TestLogin calls.
 type session struct {
-	http      *http.Client
-	token     string
-	publicKey string
-	remaining int
+	http                *http.Client
+	token               string
+	publicKey           string
+	remaining           int
+	readReauthenticated bool
+	readAuthError       error
+	targetReadLimit     int
+	targetReads         int
 }
 
 func (c *Client) newSession() *session {

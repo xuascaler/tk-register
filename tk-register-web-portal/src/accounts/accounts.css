@@ -6,6 +6,13 @@
 .usage-search input { height: 44px; padding-left: 40px; }
 .usage-search > svg { position: absolute; top: 13px; left: 13px; color: #8093ac; }
 .workspace .usage-icon-button { width: 44px; min-width: 44px; padding: 0; }
+.usage-page-update { display: flex; align-items: flex-start; gap: 9px; padding: 11px 14px; margin: -5px 0 17px; border: 1px solid #e1eaf5; border-radius: 7px; background: #f5f8fd; color: #587397; font-size: 12px; line-height: 1.6; }
+.usage-page-update > svg { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; }
+.usage-page-update small { display: block; margin-top: 3px; font-size: inherit; }
+.usage-page-update.has-warning { border-color: #ece3d3; background: #fdfaf4; color: #896e42; }
+.usage-list-loading .usage-table-scroll { opacity: .6; }
+.usage-row-sync { display: block; color: #587da7; font-size: 12px; margin-top: 5px; }
+.usage-sync-skipped { margin-top: 5px; cursor: help; }
 .usage-list-shell { border: 1px solid var(--border); border-radius: 10px; }
 .usage-table-scroll { overflow-x: auto; border-radius: 10px 10px 0 0; }
 .usage-accounts-table { border-collapse: collapse; width: 100%; table-layout: fixed; text-align: left; }

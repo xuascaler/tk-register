@@ -111,6 +111,10 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 			return a.store.SyncedAccountForAdmin(r.Context(), id)
 		}
 	}
+	if route == base+"/sync" {
+		a.syncAccountPage(w, r, user, adminAccounts)
+		return true
+	}
 	if route == base && r.Method == "GET" {
 		page, valid := adminPage(w, r)
 		if !valid {

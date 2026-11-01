@@ -31,11 +31,15 @@ The supplier origin is fixed to `https://120.233.254.152:8000`. The previously a
 
 **My account → Accounts** (`/tk-register/#/accounts`) shows only the signed-in user's accounts. It groups retries under one stable local account identity based on owner, vendor and normalized account identifier. A row includes the account email, plan, account ID, status, available quota windows, cumulative amount spent and last successful collection time.
 
-Opening the list or detail page reads stored database results. The list refresh button reloads those stored results; it does not contact the supplier. **Sync now** on an account detail page explicitly requests a fresh collection. It is available for an account with an accepted submission, subject to server configuration, concurrency and cooldown checks. Manual collection remains available with saved credentials when automatic collection is paused.
+Opening an Accounts list, returning to it, changing page or filters, and selecting its refresh button request a fresh supplier collection for the accounts on that page. The initial list query provides the owner-scoped account identities and saved values; those values remain visible with an **Updating…** indicator while a separate batch request contacts the supplier. Results replace rows by local account ID. Responses from a previous page or canceled navigation cannot replace the current page.
+
+A page contains at most 20 accounts. The backend validates ownership before making supplier requests and uses one supplier login session with full-email searches and exact matching for those accounts. It does not start a separate login or full supplier inventory scan for every row. Each accepted, supported account produces an independent result; failures retain the last successful snapshot, and unaccepted or unsupported accounts are explicitly skipped. Successful results are also saved as new observations for trends. The status filter selects the page before synchronization; refreshed rows can change status, but that does not recursively fetch and synchronize replacement pages.
+
+Opening an account detail page still reads saved history. **Sync now** explicitly requests a fresh collection there. Manual and page collection remain available with saved credentials when scheduled collection is paused; the two-hour schedule continues independently. Server authorization, rate limits, bounded concurrency and supplier availability apply to all fresh collection requests.
 
 The account detail page shows cumulative spending, input/output tokens, quota-window usage and reset times. The trend supports **7, 30 or 90 days** and separate spending, input-token and output-token views. **View data** exposes the saved observations in a table. **View submission** opens the associated submission record, with a return action to the account detail.
 
-**Management → Account pool → Accounts** reuses the same saved account list, usage details and trends across all users, adding the owner email in a **User** column and in account details. Administrators can search by account or owner email and explicitly sync an account. These routes require an active administrator session; ordinary members remain limited to their own accounts.
+**Management → Account pool → Accounts** reuses the same automatically synchronized account list, usage details and trends across all users, adding the owner email in a **User** column and in account details. Administrators can search by account or owner email and explicitly sync an account. These routes require an active administrator session; ordinary members remain limited to their own accounts.
 
 **Submission history** lists saved submission attempts; opening or refreshing a history list reads those stored records. Individual submission details retain their explicit status and billing queries. These queries are separate from scheduled account-usage collection, and account usage pages do not alter the account-submission workflow.
 
@@ -76,11 +80,13 @@ The following paths are relative to `/tk-register/api` and use the existing JSON
 | Method and path | Result |
 | --- | --- |
 | `GET /accounts?page=1&search=&status=` | Owner-scoped saved account list: `items`, `total`, `page`, `page_size`. |
+| `POST /accounts/sync` | `{ "account_ids": ["1", "2"] }`, up to 20 owned local account IDs. Returns `accounts`, per-account `results` (`updated`, `failed`, `skipped`), and `updated_count`, `failed_count`, `skipped_count`. Partial failures do not discard successful observations. |
 | `GET /accounts/:id?days=7` | Owned account, current-lifetime snapshots, collection interval and timezone. `days` accepts 7, 30 or 90. |
 | `POST /accounts/:id/sync` | Explicit fresh collection using `{}`; returns the account with its latest saved result or `last_error`. |
 | `GET /accounts/:id/auth-json` | Fresh supplier eligibility and account identity, without credentials: `account`, `plan`, `editable`, `reason`, `supplier_record_id`, `updated_at`. |
 | `POST /accounts/:id/auth-json` | `{ "auth_json": object-or-JSON-string }`; updates credentials once and immediately refreshes the account. Returns `updated`, `refresh_status`, `refresh_message`, `account`, `updated_at`. A confirmed update can return `account: null` if local readback fails; the UI retains its existing data and reports the readback failure. |
 | `GET /admin/synced-accounts?page=1&search=&status=` | Administrator saved account list across users; same metrics plus `user_id` and `user_email`. |
+| `POST /admin/synced-accounts/sync` | Administrator version of current-page batch synchronization; same request and response, with owner information in returned accounts. |
 | `GET /admin/synced-accounts/:id?days=7` | Administrator view of a stable synced account and its snapshots. |
 | `POST /admin/synced-accounts/:id/sync` | Administrator-triggered fresh collection for that account, with the same configuration, concurrency and cooldown checks. |
 | `GET/POST /admin/synced-accounts/:id/auth-json` | Administrator version of the eligibility/update endpoints, with the same upstream and refresh behavior. |
@@ -88,7 +94,7 @@ The following paths are relative to `/tk-register/api` and use the existing JSON
 | `PUT /admin/account-sync` | Save `enabled`, `interval_hours`, `timezone`, `website_username` and optional `website_password`. |
 | `POST /admin/account-sync/test-login` | Test `website_username` and optional `website_password`; success returns `authenticated: true`. A blank password uses the saved password only for the same saved username. |
 
-A successful HTTP response to manual sync does not by itself mean the supplier collection succeeded: the returned account's `last_error` must also be checked. Missing configuration, concurrent execution, rate limits and service failures can instead produce an HTTP error. The UI reloads the saved detail after an explicit attempt so retained values and failure timestamps remain visible.
+Batch clients must inspect each result; HTTP 200 can contain both successful and failed rows. Batch requests never report retained database data as a fresh supplier success. A successful HTTP response to single-account manual sync does not by itself mean the supplier collection succeeded: the returned account's `last_error` must also be checked. Missing configuration, concurrent execution, rate limits and service failures can instead produce an HTTP error. The UI reloads the saved detail after an explicit attempt so retained values and failure timestamps remain visible.
 
 ## Verification
 

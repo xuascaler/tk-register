@@ -71,6 +71,12 @@ func normalizeAccount(value string) string { return strings.ToLower(strings.Trim
 // email comparison. Pagination is restricted to the filtered result set. A
 // missing/ignored filter never causes a fallback to the full account list.
 func (s *session) findAccount(ctx context.Context, username, password string, target Target) (editRecord, error) {
+	return s.findTargetAccount(ctx, username, password, target, true)
+}
+
+// Read-only collection needs identity and usage, not editable credentials or
+// form metadata. Both paths share the same exact-match search and ambiguity rules.
+func (s *session) findTargetAccount(ctx context.Context, username, password string, target Target, editing bool) (editRecord, error) {
 	var empty editRecord
 	email := strings.TrimSpace(target.Account)
 	if email == "" || len(email) > 512 || strings.ContainsAny(email, "\r\n\x00") {
@@ -79,32 +85,15 @@ func (s *session) findAccount(ctx context.Context, username, password string, ta
 	var matches []editRecord
 	seen := make(map[string]bool)
 	readCount := int64(0)
-	reauthenticated := false
 	for page := 1; page <= maxTargetSearchPages; page++ {
 		params := url.Values{
 			"status": {"all"}, "provider": {"claude"}, "account_type": {"2"},
 			"keyword": {email}, "page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)},
 		}
 		path := apiPrefix + "/accounts?" + params.Encode()
-		status, body, err := s.request(ctx, http.MethodGet, path, nil)
+		status, body, err := s.targetRead(ctx, username, password, path)
 		if err != nil {
 			return empty, err
-		}
-		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			if reauthenticated {
-				return empty, safeError(CodeSessionExpired)
-			}
-			reauthenticated = true
-			if err = s.login(ctx, username, password); err != nil {
-				return empty, err
-			}
-			status, body, err = s.request(ctx, http.MethodGet, path, nil)
-			if err != nil {
-				return empty, err
-			}
-			if status == http.StatusUnauthorized || status == http.StatusForbidden {
-				return empty, safeError(CodeSessionExpired)
-			}
 		}
 		if err = readStatus(status); err != nil {
 			return empty, err
@@ -120,11 +109,25 @@ func (s *session) findAccount(ctx context.Context, username, password string, ta
 		if err != nil || total == nil || *total > maxTargetSearchPages*pageSize || len(result.List) == 0 || strings.TrimSpace(string(result.List)) == "null" {
 			return empty, safeError(CodeContractMismatch)
 		}
-		var rows []editRecord
+		var rows []json.RawMessage
 		if common.Unmarshal(result.List, &rows) != nil || len(rows) > pageSize {
 			return empty, safeError(CodeContractMismatch)
 		}
-		for _, row := range rows {
+		for _, raw := range rows {
+			// Ignore editable-only fields during reads. Their type or contents
+			// must not prevent collecting status/usage for an active account.
+			var base struct {
+				rawAccount
+				Provider    string          `json:"provider"`
+				AccountType json.RawMessage `json:"account_type"`
+			}
+			if common.Unmarshal(raw, &base) != nil {
+				return empty, safeError(CodeContractMismatch)
+			}
+			row := editRecord{rawAccount: base.rawAccount, Provider: base.Provider, AccountType: base.AccountType}
+			if editing && common.Unmarshal(raw, &row) != nil {
+				return empty, safeError(CodeContractMismatch)
+			}
 			id := positiveID(row.ID)
 			if id == "" || seen[id] {
 				return empty, safeError(CodeContractMismatch)
@@ -151,8 +154,10 @@ func (s *session) findAccount(ctx context.Context, username, password string, ta
 				return empty, safeError(CodeContractMismatch)
 			}
 			row.info = EditInfo{RecordID: id, Account: strings.TrimSpace(account), Plan: plan}
-			if err := row.checkEligibility(); err != nil {
-				return empty, err
+			if editing {
+				if err := row.checkEligibility(); err != nil {
+					return empty, err
+				}
 			}
 			matches = append(matches, row)
 		}
@@ -222,7 +227,7 @@ func (c *Client) CollectAccount(ctx context.Context, username, password string, 
 	if err := s.login(ctx, username, password); err != nil {
 		return Account{}, err
 	}
-	row, err := s.findAccount(ctx, username, password, target)
+	row, err := s.findTargetAccount(ctx, username, password, target, false)
 	if err != nil {
 		return Account{}, err
 	}
