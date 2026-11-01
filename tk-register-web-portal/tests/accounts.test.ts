@@ -10,7 +10,7 @@ function sample(hour: number, value: number | null, currency: string | null = 'C
 test('missing values are distinct from genuine zero usage and unknown currency', () => {
   assert.equal(formatCost(null, 'USD'), '—');
   assert.equal(formatCost(123, null), '—');
-  assert.match(formatCost(0, 'USD'), /^USD\s0\.00$/);
+  assert.match(formatCost(0, 'USD'), /^0\.00 \$$/);
   assert.equal(formatTokens(null), '—');
   assert.equal(formatTokens(0), '0');
   assert.equal(formatPercent(null), '—');
@@ -28,14 +28,14 @@ test('spend trends use server USD values without converting or rounding again', 
   const row = { ...sample(0, 0), cost_total: 6800.24, cost_total_usd: 944.4777777777778 };
   const points = trendSegments([row], 'cost_total_usd', 2).flat();
   assert.equal(points[0].value, row.cost_total_usd);
-  assert.match(formatCost(points[0].value, 'USD'), /^USD\s944\.48$/);
+  assert.match(formatCost(points[0].value, 'USD'), /^944\.48 \$$/);
   assert.equal(row.cost_total, 6800.24);
 });
 test('a zero dollar observation remains in the trend while missing USD is a gap', () => {
   const missing = { ...sample(2, 100), cost_total_usd: null };
   const parts = trendSegments([sample(0, 0), missing, sample(4, 10)], 'cost_total_usd', 2);
   assert.deepEqual(parts.map(p => p.map(v => v.value)), [[0], [10]]);
-  assert.match(formatCost(parts[0][0].value, 'USD'), /^USD\s0\.00$/);
+  assert.match(formatCost(parts[0][0].value, 'USD'), /^0\.00 \$$/);
   assert.equal(formatCost(missing.cost_total_usd, 'USD'), '—');
 });
 test('trend timestamps are sorted without changing input snapshots', () => {

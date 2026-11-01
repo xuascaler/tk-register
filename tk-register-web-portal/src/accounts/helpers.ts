@@ -11,6 +11,7 @@ export function formatCost(value: number | null | undefined, currency: string | 
   if (!knownNumber(value) || !currency) return '—';
   const unit = currency.trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(unit)) return '—';
+  if (unit === 'USD') return `${new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)} $`;
   try {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: unit, currencyDisplay: 'code', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
   } catch {

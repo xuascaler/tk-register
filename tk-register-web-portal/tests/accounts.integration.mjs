@@ -47,8 +47,8 @@ try {
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
   assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Sync']);
   assert.equal(await page.locator('.usage-owner-email').first().textContent(), 'owner@example.com');
-  assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'alice@example.com' }).textContent(), /USD\s171\.47/);
-  assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /USD\s0\.00/);
+  assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'alice@example.com' }).textContent(), /171\.47 \$/);
+  assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /0\.00 \$/);
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'missing@example.com' }).textContent(), /No data collected/);
   assert.equal(requests.some(r => r.startsWith('POST')), false, 'Opening the list must only read saved snapshots');
   for (const width of [1440, 1024, 768, 390, 320]) {
@@ -85,11 +85,11 @@ try {
   assert.match(page.url(), /account-pool\/accounts\/100\/usage$/);
   await page.locator('.usage-owner-meta').waitFor();
   assert.match(await page.locator('.usage-owner-meta').textContent(), /owner@example.com/);
-  assert.match(await page.locator('.usage-metrics').textContent(), /USD\s171\.47/);
-  assert.equal(await page.locator('.usage-chart-unit').textContent(), 'Cumulative spend · USD');
-  assert.match(await page.locator('.usage-chart-point title').textContent(), /USD\s171\.47/);
+  assert.match(await page.locator('.usage-metrics').textContent(), /171\.47 \$/);
+  assert.equal(await page.locator('.usage-chart-unit').textContent(), 'Cumulative spend');
+  assert.match(await page.locator('.usage-chart-point title').textContent(), /171\.47 \$/);
   await page.getByRole('button', { name: 'View data', exact: true }).click();
-  assert.match(await page.locator('.usage-data-table').textContent(), /USD\s171\.47/);
+  assert.match(await page.locator('.usage-data-table').textContent(), /171\.47 \$/);
   await page.getByRole('button', { name: 'Sync now', exact: true }).click();
   await page.getByText('Account data updated.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'View submission' }).click();

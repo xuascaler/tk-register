@@ -180,7 +180,7 @@ The response is a stored view, not a real-time supplier query. Use `last_success
 | A later collection failed | Previous successful `snapshot` retained; `last_error` populated and `last_attempt_at` updated | Display retained values as last-known data and show their original update time. |
 | Account exists but has no collected data | `snapshot: null`; individual collection times may also be null | Show unavailable data, such as `—`. Do not infer zero usage. |
 | One metric is unavailable | That metric is null even when other snapshot fields have values | Show only available metrics. |
-| Supplier explicitly returned zero | The numeric field is `0` | Show a known zero, such as `0%` or `USD 0.00`. |
+| Supplier explicitly returned zero | The numeric field is `0` | Show a known zero, such as `0%` or `0.00 $`. |
 
 A new accepted supplier identity or plan can start a new account lifetime. Older snapshots are retained internally but are not returned as the current lifetime's latest snapshot.
 

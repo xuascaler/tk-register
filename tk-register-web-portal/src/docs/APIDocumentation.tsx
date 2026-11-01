@@ -242,7 +242,7 @@ function LookupResponse({ onFeedback }: { onFeedback: CopyFeedback }) {
       <ul className='api-docs-bullets'>
         <li><strong>No collection yet:</strong> <code>snapshot</code> is <code>null</code>. Show unavailable values as “—”; do not infer zero.</li>
         <li><strong>A later collection fails:</strong> the current lifetime’s last successful snapshot is retained. <code>last_error</code> and <code>last_attempt_at</code> describe the latest attempt.</li>
-        <li><strong>A missing metric:</strong> the field is <code>null</code>. A measured zero remains <code>0</code>, such as <code>0%</code> or <code>USD 0.00</code>.</li>
+        <li><strong>A missing metric:</strong> the field is <code>null</code>. A measured zero remains <code>0</code>, such as <code>0%</code> or <code>0.00 $</code>.</li>
         <li><strong>Collection time:</strong> use <code>last_success_at</code> and <code>snapshot.collected_at</code> to show when displayed values were collected.</li>
       </ul>
       <p>Repeating a lookup does not make the snapshot newer. A new accepted vendor identity or plan can start a new account lifetime; older snapshots are not returned as its latest data.</p>
