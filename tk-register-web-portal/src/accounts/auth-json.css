@@ -1,0 +1,62 @@
+.account-authentication { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin: 24px 0; padding: 22px 24px; border: 1px solid var(--border); border-radius: 9px; }
+.account-auth-copy { min-width: 0; }
+.account-auth-copy h2 { font-size: 15px; margin-bottom: 5px; }
+.account-auth-copy p, .account-auth-updated { color: var(--muted); font-size: 12px; line-height: 1.7; }
+.account-auth-updated { display: block; margin-top: 6px; font-size: 11px; }
+.account-authentication > .button { flex-shrink: 0; min-height: 42px; }
+.account-auth-dialog { width: min(620px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); margin: auto; padding: 0; overflow-y: auto; color: var(--ink); background: #fff; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 72px #18355226; }
+.account-auth-dialog::backdrop { background: #1c314650; }
+.account-auth-dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 28px 21px; border-bottom: 1px solid var(--border); }
+.account-auth-dialog-heading h2 { margin: 0; font-size: 22px; line-height: 1.35; letter-spacing: -.5px; }
+.account-auth-dialog-heading p { margin-top: 7px; color: var(--muted); font-size: 13px; }
+.account-auth-close { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; background: transparent; border: 0; border-radius: 5px; color: var(--muted); flex-shrink: 0; }
+.account-auth-close:hover:not(:disabled) { background: #f1f5fa; }
+.account-auth-dialog-body { padding: 22px 28px; }
+.account-auth-identity { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 22px; border: 1px solid var(--border); border-radius: 7px; background: #f9fbfe; }
+.account-auth-identity > div { min-width: 0; }
+.account-auth-identity-icon { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; color: #7a8ca4; background: #fff; flex-shrink: 0; }
+.account-auth-identity strong { display: block; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.account-auth-identity div > span { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.account-auth-field-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.account-auth-field-heading label { font-size: 14px; font-weight: 500; }
+.account-auth-field-heading label span { color: #8091a7; }
+.account-auth-dialog .account-auth-upload { min-height: 34px; padding: 7px 10px; font-size: 12px; gap: 6px; }
+.account-auth-dialog .account-auth-dialog-body textarea { display: block; width: 100%; min-width: 0; min-height: 220px; max-height: 400px; resize: vertical; padding: 14px 15px; border: 1px solid var(--field); border-radius: 7px; background: #fff; color: var(--ink); font: 13px/1.65 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; }
+.account-auth-dialog .account-auth-dialog-body textarea::placeholder { color: #8999af; }
+.account-auth-dialog .account-auth-dialog-body textarea:focus { outline: 3px solid #e3ecf8; outline-offset: 0; border-color: #7b9bc0; }
+.account-auth-dialog .account-auth-dialog-body textarea[aria-invalid='true'] { border-color: #c9676e; }
+.account-auth-dialog .account-auth-dialog-body textarea:disabled { color: #69798c; background: #f8fafc; }
+.account-auth-field-help { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 6px 12px; margin-top: 9px; color: #7e8ea3; font-size: 11px; }
+.account-auth-field-help > span:first-child { overflow-wrap: anywhere; min-width: 0; }
+.account-auth-valid { display: inline-flex; align-items: center; gap: 4px; color: #408369; white-space: nowrap; }
+.account-auth-valid svg { width: 13px; height: 13px; }
+.account-auth-private { display: flex; align-items: flex-start; gap: 8px; color: #7a8ca3; font-size: 12px; line-height: 1.7; margin-top: 20px; }
+.account-auth-private svg { width: 14px; height: 14px; margin-top: 3px; }
+.account-auth-dialog-footer { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 17px 28px; border-top: 1px solid var(--border); background: #fafbfd; }
+.account-auth-dialog-footer .button { min-height: 42px; min-width: 90px; justify-content: center; }
+.account-auth-dialog-footer .button.primary { min-width: 162px; }
+.account-auth-dialog .notice { margin-top: 14px; margin-bottom: 0; font-size: 12px; overflow-wrap: anywhere; }
+.account-auth-dialog .notice.account-auth-uncertain, .notice.account-auth-refresh-warning { background: #fdfaf3; border: 1px solid #eadfc9; color: #866c41; }
+.account-auth-check, .account-auth-unavailable { margin-bottom: 20px; }
+.account-auth-check .notice { margin-top: 0; margin-bottom: 10px; }
+.account-auth-unavailable { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 9px; padding: 13px 14px; background: #f4f7fb; border-radius: 6px; color: #667a95; font-size: 12px; }
+.account-auth-unavailable .usage-text-button { grid-column: 2; font-size: 12px; justify-self: start; }
+.account-auth-progress { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: #50749d; margin-top: 16px; }
+.account-auth-progress svg { width: 16px; height: 16px; margin-top: 1px; }
+@media (max-width: 720px) {
+  .account-authentication { padding: 20px; align-items: flex-start; flex-direction: column; gap: 15px; }
+}
+@media (max-width: 480px) {
+  .account-auth-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+  .account-auth-dialog-heading { padding: 20px 18px 18px; gap: 10px; }
+  .account-auth-dialog-heading h2 { font-size: 20px; }
+  .account-auth-close { width: 36px; height: 36px; }
+  .account-auth-dialog-body { padding: 18px; }
+  .account-auth-identity { padding: 12px; gap: 10px; }
+  .account-auth-dialog .account-auth-dialog-body textarea { font-size: 16px; min-height: 230px; }
+  .account-auth-dialog-footer { padding: 15px 18px; }
+  .account-auth-dialog-footer .button, .account-auth-dialog-footer .button.primary { min-width: 0; }
+  .account-auth-dialog-footer .button.primary { flex: 1; }
+  .account-auth-dialog-footer .button.secondary { flex: 0 0 80px; }
+  .account-auth-dialog .account-auth-upload { min-height: 40px; padding: 8px; }
+}

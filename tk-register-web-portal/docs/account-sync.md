@@ -55,6 +55,20 @@ External clients can read an owned account's saved data using `GET /tk-register/
 
 The username must match the token owner, including when that owner is an administrator. The limit is 60 lookup requests per minute per user. See the [Account Lookup API reference](account-lookup-api.md) for the complete contract and examples. This external endpoint is separate from the browser-session routes below.
 
+## Updating Auth JSON
+
+An accepted Claude account's detail page includes **Authentication → Update Auth JSON**. Members can update their own accounts; administrators can use the same editor in **Account pool → Accounts**. The editor accepts a complete JSON object pasted into the field or uploaded from a JSON file up to 2 MB. It never displays existing credentials. Validation uses the same Claude credential rules as account submission.
+
+Opening the editor signs in to the configured supplier website and searches using the complete account email. Only the filtered result pages are read. The backend compares full normalized account emails: one exact match identifies the account; multiple exact matches require an already-confirmed supplier website record ID. A missing or ambiguous match stops the operation. The plan is not an identity condition because the supplier may have changed it. The website record ID is distinct from its visible platform account ID and is stored separately on the local account.
+
+The backend checks the supplier's current lock and raw account status both before editing and when saving. An unlocked account without a positive platform ID can be edited; otherwise the supplier must report `ban`, `offline`, or `login_failed`. These checks do not use the locally normalized `Unknown` status. The account's latest supplier form values are read again before the update, and only `cpa_auth_json` is replaced. Existing passwords, original submission records, tags, and unrelated account details are not changed.
+
+After a confirmed supplier update, the server immediately queries that account again and saves its current status, quota windows, cumulative tokens, amount, currency and collection timestamp as a new snapshot. The UI reloads the saved detail and trend. This does not wait for the scheduled interval and does not claim that saving credentials has restored the account: the supplier's returned status remains authoritative.
+
+Credential saving and subsequent account refresh have separate outcomes. If saving succeeds but refresh fails, the response still reports `updated: true`, `refresh_status: failed`, and a safe message; the last successful snapshot remains visible. A timeout or connection loss after a write may have reached the supplier is reported as `AUTH_JSON_UPDATE_UNCONFIRMED`. Writes are never retried automatically. An ordinary subsequent GET or a user-selected **Sync now** cannot repeat the credential update.
+
+Updates use browser-session ownership/admin and CSRF checks, per-user rate limits, and Redis leases under `tk-register:`. A supplier-account lease prevents concurrent updates even when two local histories refer to the same vendor account; the existing collection lease prevents a scheduled read from overwriting the immediate refresh. Audit records contain the actor, owner, account, confirmed supplier record ID, request ID, outcome and refresh outcome, but no credential body. Replacement credentials are forwarded to the supplier without adding another local secret copy; the original encrypted submission remains historical.
+
 ## Browser API contract
 
 The following paths are relative to `/tk-register/api` and use the existing JSON envelope (`data` contains the payload). They require the current browser session. Writes additionally require the existing CSRF and origin checks; the user's personal API token does not authorize these browser-session routes.
@@ -64,9 +78,12 @@ The following paths are relative to `/tk-register/api` and use the existing JSON
 | `GET /accounts?page=1&search=&status=` | Owner-scoped saved account list: `items`, `total`, `page`, `page_size`. |
 | `GET /accounts/:id?days=7` | Owned account, current-lifetime snapshots, collection interval and timezone. `days` accepts 7, 30 or 90. |
 | `POST /accounts/:id/sync` | Explicit fresh collection using `{}`; returns the account with its latest saved result or `last_error`. |
+| `GET /accounts/:id/auth-json` | Fresh supplier eligibility and account identity, without credentials: `account`, `plan`, `editable`, `reason`, `supplier_record_id`, `updated_at`. |
+| `POST /accounts/:id/auth-json` | `{ "auth_json": object-or-JSON-string }`; updates credentials once and immediately refreshes the account. Returns `updated`, `refresh_status`, `refresh_message`, `account`, `updated_at`. A confirmed update can return `account: null` if local readback fails; the UI retains its existing data and reports the readback failure. |
 | `GET /admin/synced-accounts?page=1&search=&status=` | Administrator saved account list across users; same metrics plus `user_id` and `user_email`. |
 | `GET /admin/synced-accounts/:id?days=7` | Administrator view of a stable synced account and its snapshots. |
 | `POST /admin/synced-accounts/:id/sync` | Administrator-triggered fresh collection for that account, with the same configuration, concurrency and cooldown checks. |
+| `GET/POST /admin/synced-accounts/:id/auth-json` | Administrator version of the eligibility/update endpoints, with the same upstream and refresh behavior. |
 | `GET /admin/account-sync` | Administrator configuration without the saved password, plus collection status. |
 | `PUT /admin/account-sync` | Save `enabled`, `interval_hours`, `timezone`, `website_username` and optional `website_password`. |
 | `POST /admin/account-sync/test-login` | Test `website_username` and optional `website_password`; success returns `authenticated: true`. A blank password uses the saved password only for the same saved username. |

@@ -34,7 +34,9 @@ type SyncedAccount struct {
 	RemoteID            *string     `gorm:"size:32"`
 	PlatformAccountID   *string     `gorm:"size:32"`
 	IdentityKey         string      `gorm:"size:64;not null"`
-	SnapshotStatus      *string     `gorm:"size:80;index"`
+	SupplierRecordID    *string     `gorm:"size:32"`
+	AuthJSONUpdatedAt   *time.Time
+	SnapshotStatus      *string `gorm:"size:80;index"`
 	LastSuccessAt       *time.Time
 	LastAttemptAt       *time.Time
 	LastError           string `gorm:"size:255;not null;default:''"`
@@ -105,6 +107,8 @@ type AccountDTO struct {
 	LastAttemptAt       *time.Time          `json:"last_attempt_at"`
 	LastError           string              `json:"last_error"`
 	Snapshot            *AccountSnapshotDTO `json:"snapshot"`
+	SupplierRecordID    *string             `json:"supplier_record_id"`
+	AuthJSONUpdatedAt   *time.Time          `json:"auth_json_updated_at"`
 }
 type AccountPage struct {
 	Items    []AccountDTO `json:"items"`
@@ -116,7 +120,7 @@ type AccountPage struct {
 var ErrAccountIdentityChanged = errors.New("account identity changed during collection")
 
 func (s *Store) migrateAccountSync() error {
-	if err := s.DB.AutoMigrate(&SyncedAccount{}, &AccountSnapshot{}, &AccountSyncState{}); err != nil {
+	if err := s.DB.AutoMigrate(&SyncedAccount{}, &AccountSnapshot{}, &AccountSyncState{}, &AccountAuthJSONAudit{}); err != nil {
 		return err
 	}
 	if err := s.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&AccountSyncState{ID: 1, Status: "idle"}).Error; err != nil {
@@ -186,6 +190,7 @@ func (s *Store) ensureSyncedAccounts(ctx context.Context, userID uint64) error {
 			updates := map[string]any{"account": row.Account, "plan": row.Plan, "latest_submission_id": row.LatestSubmissionID, "latest_submitted_at": row.LatestSubmittedAt, "submission_status": row.SubmissionStatus, "current_submission_id": row.CurrentSubmissionID, "remote_id": row.RemoteID, "platform_account_id": row.PlatformAccountID, "identity_key": row.IdentityKey}
 			if existing.IdentityKey != row.IdentityKey {
 				updates["snapshot_status"], updates["last_success_at"], updates["last_attempt_at"], updates["last_error"] = nil, nil, nil, ""
+				updates["supplier_record_id"], updates["auth_json_updated_at"] = nil, nil
 			}
 			if err = tx.Model(&existing).Updates(updates).Error; err != nil {
 				return err
@@ -199,7 +204,7 @@ func snapshotDTO(row AccountSnapshot) AccountSnapshotDTO {
 	return AccountSnapshotDTO{ID: idString(row.ID), AccountID: idString(row.AccountID), SnapshotDate: row.SnapshotDate, CollectedAt: row.CollectedAt.UTC(), DataSource: row.DataSource, AccountSnapshotValues: row.AccountSnapshotValues}
 }
 func (s *Store) accountDTO(ctx context.Context, row SyncedAccount) (AccountDTO, error) {
-	out := AccountDTO{ID: idString(row.ID), Account: row.Account, Plan: row.Plan, VendorID: idString(row.VendorID), LatestSubmissionID: idString(row.LatestSubmissionID), SubmissionStatus: row.SubmissionStatus, RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt, LastError: row.LastError}
+	out := AccountDTO{ID: idString(row.ID), Account: row.Account, Plan: row.Plan, VendorID: idString(row.VendorID), LatestSubmissionID: idString(row.LatestSubmissionID), SubmissionStatus: row.SubmissionStatus, RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt, LastError: row.LastError, SupplierRecordID: row.SupplierRecordID, AuthJSONUpdatedAt: row.AuthJSONUpdatedAt}
 	if row.CurrentSubmissionID != nil {
 		v := idString(*row.CurrentSubmissionID)
 		out.CurrentSubmissionID = &v

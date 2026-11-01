@@ -151,6 +151,10 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		vendorFailure(w, err)
 		return true
 	}
+	if len(parts) == 2 && parts[1] == "auth-json" {
+		a.accountAuthJSON(w, r, user, id, adminAccounts, lookupAccount)
+		return true
+	}
 	if len(parts) == 1 && r.Method == "GET" {
 		days := 7
 		if raw := r.URL.Query().Get("days"); raw != "" {

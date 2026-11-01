@@ -142,45 +142,9 @@ func ValidateSubmissionInput(input map[string]any) (map[string]any, map[string]a
 	if !present {
 		return invalid("Authentication JSON is required.")
 	}
-	var auth map[string]any
-	if str, ok := authRaw.(string); ok {
-		if len(str) > 2<<20 || common.Unmarshal([]byte(str), &auth) != nil {
-			return invalid("Authentication JSON must be a valid object.")
-		}
-	} else {
-		var ok bool
-		auth, ok = authRaw.(map[string]any)
-		if !ok {
-			return invalid("Authentication JSON must be an object.")
-		}
-	}
-	for _, key := range []string{"id_token", "access_token", "refresh_token", "last_refresh", "email", "account_uuid", "organization_uuid", "organization_name", "type", "expired", "proxy_url", "verification_status"} {
-		value, ok := auth[key].(string)
-		if !ok || len(value) > 16384 || (key != "id_token" && strings.TrimSpace(value) == "") {
-			return invalid("Authentication JSON is missing a required field: " + key + ".")
-		}
-	}
-	devices, ok := auth["claude_device_ids"].([]any)
-	if !ok || len(devices) == 0 || len(devices) > 32 {
-		return invalid("Authentication JSON must contain claude_device_ids.")
-	}
-	for _, d := range devices {
-		if s, ok := d.(string); !ok || strings.TrimSpace(s) == "" || len(s) > 1024 {
-			return invalid("Invalid authentication device ID.")
-		}
-	}
-	for _, key := range []string{"last_refresh", "expired"} {
-		if _, e := time.Parse(time.RFC3339, auth[key].(string)); e != nil {
-			return invalid("Authentication timestamps must use RFC3339.")
-		}
-	}
-	proxy, e := url.Parse(auth["proxy_url"].(string))
-	if e != nil || proxy.Host == "" || !enumValue(proxy.Scheme, "http", "https", "socks5", "socks5h") {
-		return invalid("Authentication JSON has an invalid proxy URL.")
-	}
-	raw, e := common.Marshal(auth)
-	if e != nil || len(raw) > 2<<20 {
-		return invalid("Authentication JSON is too large.")
+	auth, err := ValidateClaudeAuthJSON(authRaw)
+	if err != nil {
+		return invalid(err.Error())
 	}
 	out["auth_json"] = auth
 	for _, name := range []string{"payment_method", "register_device", "recharge_time", "remark"} {
@@ -436,4 +400,53 @@ func (d *vendorDate) UnmarshalJSON(raw []byte) error {
 	}
 	*d = vendorDate(str)
 	return nil
+}
+
+// ValidateClaudeAuthJSON is shared by submission and credential replacement.
+// Errors name invalid fields only; credential values are never returned.
+func ValidateClaudeAuthJSON(authRaw any) (map[string]any, error) {
+	invalid := func(message string) (map[string]any, error) {
+		return nil, vendorError(400, "INVALID_AUTH_JSON", message)
+	}
+	var auth map[string]any
+	if str, ok := authRaw.(string); ok {
+		if len(str) > 2<<20 || common.Unmarshal([]byte(str), &auth) != nil {
+			return invalid("Authentication JSON must be a valid object.")
+		}
+	} else {
+		var ok bool
+		auth, ok = authRaw.(map[string]any)
+		if !ok {
+			return invalid("Authentication JSON must be an object.")
+		}
+	}
+	for _, key := range []string{"id_token", "access_token", "refresh_token", "last_refresh", "email", "account_uuid", "organization_uuid", "organization_name", "type", "expired", "proxy_url", "verification_status"} {
+		value, ok := auth[key].(string)
+		if !ok || len(value) > 16384 || (key != "id_token" && strings.TrimSpace(value) == "") {
+			return invalid("Authentication JSON is missing a required field: " + key + ".")
+		}
+	}
+	devices, ok := auth["claude_device_ids"].([]any)
+	if !ok || len(devices) == 0 || len(devices) > 32 {
+		return invalid("Authentication JSON must contain claude_device_ids.")
+	}
+	for _, d := range devices {
+		if s, ok := d.(string); !ok || strings.TrimSpace(s) == "" || len(s) > 1024 {
+			return invalid("Invalid authentication device ID.")
+		}
+	}
+	for _, key := range []string{"last_refresh", "expired"} {
+		if _, e := time.Parse(time.RFC3339, auth[key].(string)); e != nil {
+			return invalid("Authentication timestamps must use RFC3339.")
+		}
+	}
+	proxy, e := url.Parse(auth["proxy_url"].(string))
+	if e != nil || proxy.Host == "" || !enumValue(proxy.Scheme, "http", "https", "socks5", "socks5h") {
+		return invalid("Authentication JSON has an invalid proxy URL.")
+	}
+	raw, e := common.Marshal(auth)
+	if e != nil || len(raw) > 2<<20 {
+		return invalid("Authentication JSON is too large.")
+	}
+	return auth, nil
 }

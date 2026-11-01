@@ -29,6 +29,8 @@ export type SyncedAccount = {
   submission_status: string;
   remote_id: string | null;
   platform_account_id: string | null;
+  supplier_record_id?: string | null;
+  auth_json_updated_at?: string | null;
   last_success_at: string | null;
   last_attempt_at: string | null;
   last_error: string;

@@ -35,6 +35,7 @@ type app struct {
 	secure                             bool
 	vendorTransport                    http.RoundTripper
 	accountCollector                   accountCollector
+	accountAuthEditor                  accountAuthEditor
 }
 type envelope struct {
 	Success    bool   `json:"success"`

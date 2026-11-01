@@ -6,6 +6,8 @@ import Select from '../submissions/Select';
 import { AdminBadge } from '../admin/shared';
 import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statusLabel, statusTone, trendSegments, type Metric } from './helpers';
 import type { AccountDetails, AccountPage, AccountSnapshot, SyncedAccount } from './types';
+import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
+import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
 
 function Status({ account }: { account: SyncedAccount }) {
   return <span className={`usage-status ${statusTone(account.snapshot?.account_status)}`}>{statusLabel(account.snapshot?.account_status)}</span>;
@@ -116,11 +118,16 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   const [metric, setMetric] = useState<Metric>('cost_total');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [refreshWarning, setRefreshWarning] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [attempt, setAttempt] = useState(0);
   const pending = useRef<AbortController | null>(null);
-  useEffect(() => () => pending.current?.abort(), [id]);
+  useEffect(() => {
+    setEditorOpen(false); setRefreshWarning(''); setNotice(''); setSyncing(false);
+    return () => pending.current?.abort();
+  }, [id, endpoint]);
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError('');
     request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal })
@@ -132,7 +139,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   async function sync() {
     if (syncing) return;
     const controller = new AbortController(); pending.current = controller;
-    setSyncing(true); setError(''); setNotice('');
+    setSyncing(true); setError(''); setNotice(''); setRefreshWarning('');
     try {
       const result = await request<{ account: SyncedAccount }>(`${endpoint}/${encodeURIComponent(id)}/sync`, { method: 'POST', body: {}, signal: controller.signal });
       if (!controller.signal.aborted) {
@@ -147,6 +154,28 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       }
     }
   }
+  async function credentialsSaved(result: AuthJSONUpdateResult) {
+    setEditorOpen(false); setError('');
+    // The returned account may represent a newer lifetime. Trust its timestamp
+    // instead of attaching the completed operation's timestamp to that identity.
+    setData(current => current && { ...current, account: result.account || current.account });
+    if (result.refresh_status === 'succeeded') {
+      setNotice(authJSONResultMessage(result)); setRefreshWarning('');
+    } else {
+      setNotice(''); setRefreshWarning(authJSONResultMessage(result));
+    }
+    // The mutation is already confirmed. A separate read failure must not be
+    // presented as a failed credential update or discard the returned account.
+    const controller = new AbortController(); pending.current = controller; setLoading(true);
+    try {
+      const next = await request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal });
+      if (!controller.signal.aborted) setData(next);
+    } catch {
+      if (!controller.signal.aborted) setRefreshWarning(current => `${current ? `${current} ` : 'Auth JSON updated. '}The latest page data could not be loaded. Refresh this page to try again.`);
+    } finally {
+      if (!controller.signal.aborted) setLoading(false);
+    }
+  }
   const account = data?.account, snapshot = account?.snapshot;
   return <section className='usage-detail'>
     <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />{admin ? 'Account pool / Accounts' : 'Accounts'}</button>
@@ -155,17 +184,20 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       <div className='usage-meta'>{admin && <span className='usage-owner-meta'>User <strong>{account.user_email || '—'}</strong></span>}<span>Account ID <strong>{account.platform_account_id || account.remote_id || '—'}</strong></span><span>Last updated <strong>{formatTime(account.last_success_at, data.timezone)}</strong></span>{account.latest_submission_id && <button className='usage-text-button' onClick={() => onSubmission(account.current_submission_id || account.latest_submission_id)}>View submission<ArrowUpRight aria-hidden='true' /></button>}</div>
       <ErrorNotice>{error}</ErrorNotice>
       {notice && <p className='notice success' role='status'>{notice}</p>}
+      {refreshWarning && <p className='notice account-auth-refresh-warning' role='status'>{refreshWarning}</p>}
       {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><details><summary>View details</summary><p>{account.last_error}</p><span>Attempted {formatTime(account.last_attempt_at, data.timezone)}</span></details></div>}
+      <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} />
       <div className='usage-metrics'>
         <div><span>Total spent</span><strong>{formatCost(snapshot?.cost_total, snapshot?.currency)}</strong><small>{account.last_error && snapshot ? 'Last known cumulative total' : 'Cumulative total'}</small></div>
         <div><span>Input tokens</span><strong>{formatTokens(snapshot?.input_tokens_total, true)}</strong><small>{formatTokens(snapshot?.input_tokens_total)} tokens</small></div>
         <div><span>Output tokens</span><strong>{formatTokens(snapshot?.output_tokens_total, true)}</strong><small>{formatTokens(snapshot?.output_tokens_total)} tokens</small></div>
       </div>
       <div className='usage-windows-panel'><div><UsageWindow label='5-hour usage' value={snapshot?.usage_5h_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_5h_at, data.timezone)}</span></div><div><UsageWindow label='7-day usage' value={snapshot?.usage_7d_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_7d_at, data.timezone)}</span></div></div>
-      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>Usage trend</h2><p className='usage-small'>Saved observations, collected every {data.interval_hours} {data.interval_hours === 1 ? 'hour' : 'hours'} when enabled.</p></div><Select id='usage-date-range' label='Date range' hiddenLabel value={days} onChange={setDays} disabled={syncing} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '90', label: 'Last 90 days' }]} /></div>
+      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>Usage trend</h2><p className='usage-small'>Saved observations, collected every {data.interval_hours} {data.interval_hours === 1 ? 'hour' : 'hours'} when enabled.</p></div><Select id='usage-date-range' label='Date range' hiddenLabel value={days} onChange={setDays} disabled={syncing || loading} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '90', label: 'Last 90 days' }]} /></div>
         <div className='usage-metric-tabs' role='group' aria-label='Trend metric'>{(Object.keys(metricNames) as Metric[]).map(key => <button key={key} aria-pressed={metric === key} onClick={() => setMetric(key)}>{metricNames[key]}</button>)}</div>
         {loading ? <Loading label='Loading usage history…' /> : <Trend snapshots={data.snapshots} interval={data.interval_hours} timezone={data.timezone} metric={metric} />}
       </section>
+      {editorOpen && <AuthJSONEditor account={account} endpoint={endpoint} onClose={() => setEditorOpen(false)} onSaved={credentialsSaved} />}
     </>}
   </section>;
 }

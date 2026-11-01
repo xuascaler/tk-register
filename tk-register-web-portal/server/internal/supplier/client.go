@@ -1,5 +1,5 @@
-// Package supplier reads the supplier website's account list. It deliberately
-// does not implement account submission, editing, or any other vendor mutation.
+// Package supplier reads the supplier website and supports the narrowly scoped
+// update of an existing Claude account's authentication JSON.
 package supplier
 
 import (
@@ -102,6 +102,7 @@ func NewClient() *Client {
 type session struct {
 	http      *http.Client
 	token     string
+	publicKey string
 	remaining int
 }
 
@@ -269,6 +270,7 @@ func (s *session) login(ctx context.Context, username, password string) error {
 		return safeError(CodeCredentialsInvalid)
 	}
 	s.token = ""
+	s.publicKey = ""
 	status, body, err := s.request(ctx, http.MethodPost, apiPrefix+"/pubkey", map[string]string{"username": username})
 	if err != nil {
 		return err
@@ -302,6 +304,7 @@ func (s *session) login(ctx context.Context, username, password string) error {
 		return safeError(CodeContractMismatch)
 	}
 	s.token = result.Token
+	s.publicKey = pubkey.PublicKey
 	return nil
 }
 
