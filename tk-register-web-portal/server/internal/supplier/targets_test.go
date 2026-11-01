@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -23,7 +26,15 @@ func targetClient(t *testing.T, read func(*http.Request, int) *http.Response) (*
 		}
 		return read(r, n)
 	}}
-	return f.client(), f
+	client := f.client()
+	base := client.transport
+	var mutex sync.Mutex
+	client.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return base.RoundTrip(r)
+	})
+	return client, f
 }
 
 func TestCollectTargetsOneSessionOrderedExactMatchesAndReadOnlyMetadata(t *testing.T) {
@@ -43,6 +54,7 @@ func TestCollectTargetsOneSessionOrderedExactMatchesAndReadOnlyMetadata(t *testi
 	if err != nil || len(got) != 3 || f.logins != 1 || f.keys != 1 || f.reads != 2 {
 		t.Fatalf("incorrect shared batch: result=%+v err=%v logins=%d reads=%d", got, err, f.logins, f.reads)
 	}
+	sort.Strings(keywords)
 	if !reflect.DeepEqual(keywords, []string{"First@example.com", "second@example.com"}) {
 		t.Fatal(keywords)
 	}
@@ -123,22 +135,17 @@ func TestCollectTargetsFilteredPaginationPerAccount(t *testing.T) {
 }
 
 func TestCollectTargetsOneReauthenticationAcrossWholeBatch(t *testing.T) {
-	targets := []Target{{Account: "one@example.com"}, {Account: "two@example.com"}, {Account: "three@example.com"}, {Account: "four@example.com"}}
+	targets := []Target{{Account: "one@example.com"}, {Account: "one@example.com"}, {Account: "one@example.com"}}
 	client, f := targetClient(t, func(r *http.Request, n int) *http.Response {
-		if n == 1 || r.URL.Query().Get("keyword") == "three@example.com" {
-			return jsonResponse(401, map[string]any{"error": "TOKEN_SECRET"})
-		}
-		return jsonResponse(200, map[string]any{"total": 1, "list": []any{editableFixture(n, r.URL.Query().Get("keyword"))}})
+		return jsonResponse(401, map[string]any{"error": "TOKEN_SECRET"})
 	})
 	got, err := client.CollectTargets(context.Background(), "supplier-user", "private-password-中文", targets)
-	if err != nil || f.logins != 2 || f.keys != 2 || f.reads != 4 {
+	if err != nil || f.logins != 2 || f.keys != 2 || f.reads != 2 {
 		t.Fatalf("unexpected retries: err=%v logins=%d reads=%d", err, f.logins, f.reads)
 	}
-	if got[0].Err != nil || got[1].Err != nil || got[0].Account == nil || got[1].Account == nil {
-		t.Fatal("first reauthentication did not recover")
+	for _, result := range got {
+		requireSupplierCode(t, result.Err, CodeSessionExpired)
 	}
-	requireSupplierCode(t, got[2].Err, CodeSessionExpired)
-	requireSupplierCode(t, got[3].Err, CodeSessionExpired)
 }
 
 func TestCollectTargetsInitialLoginFailureIsTopLevel(t *testing.T) {
@@ -206,10 +213,20 @@ func TestCollectTargetsStopsNetworkAfterCallerCancellation(t *testing.T) {
 		return jsonResponse(200, map[string]any{"total": 1, "list": []any{editableFixture(n, r.URL.Query().Get("keyword"))}})
 	})
 	got, err := client.CollectTargets(ctx, "supplier-user", "private-password-中文", []Target{{Account: "first@example.com"}, {Account: "second@example.com"}})
-	if err != nil || len(got) != 2 || f.reads != 1 || got[0].Account == nil {
-		t.Fatalf("cancellation lost completed result: %+v %v", got, err)
+	if err != nil || len(got) != 2 || f.reads != 1 {
+		t.Fatalf("cancellation sent extra reads: %+v %v", got, err)
 	}
-	requireSupplierCode(t, got[1].Err, CodeUnavailable)
+	completed := 0
+	for _, result := range got {
+		if result.Account != nil {
+			completed++
+		} else {
+			requireSupplierCode(t, result.Err, CodeUnavailable)
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("cancellation lost completed result: %+v", got)
+	}
 }
 
 func TestCollectTargetsReadTimeoutDoesNotStarveRemainingAccounts(t *testing.T) {
@@ -233,8 +250,178 @@ func TestCollectTargetsReadTimeoutDoesNotStarveRemainingAccounts(t *testing.T) {
 	if err != nil || len(got) != 2 || f.logins != 1 || f.reads != 1 {
 		t.Fatalf("timeout damaged batch: %+v %v", got, err)
 	}
-	requireSupplierCode(t, got[0].Err, CodeUnavailable)
+	requireSupplierCode(t, got[0].Err, CodeTimeout)
 	if got[1].Err != nil || got[1].Account == nil {
 		t.Fatal("healthy account was skipped after timeout")
+	}
+}
+
+func TestCollectTargetsThreeWorkersPacedFullPage(t *testing.T) {
+	client, fixture := targetClient(t, nil)
+	base := client.transport
+	var active, maximum atomic.Int32
+	var mu sync.Mutex
+	starts := []time.Time{}
+	client.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != apiPrefix+"/accounts" {
+			return base.RoundTrip(r)
+		}
+		if r.URL.Query().Get("keyword") == "" || r.Header.Get("Authorization") != "Bearer token-1" {
+			t.Fatal("missing filtered session request")
+		}
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			old := maximum.Load()
+			if current <= old || maximum.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		mu.Lock()
+		starts = append(starts, time.Now())
+		mu.Unlock()
+		select {
+		case <-time.After(600 * time.Millisecond):
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+		return jsonResponse(200, map[string]any{"total": 1, "list": []any{editableFixture(1, r.URL.Query().Get("keyword"))}}), nil
+	})
+	targets := make([]Target, 20)
+	for i := range targets {
+		targets[i] = Target{Account: fmt.Sprintf("page%d@example.com", i)}
+	}
+	started := time.Now()
+	got, err := client.CollectTargets(context.Background(), "supplier-user", "private-password-中文", targets)
+	if err != nil || len(got) != 20 || fixture.logins != 1 || maximum.Load() < 2 || maximum.Load() > 3 {
+		t.Fatalf("bad parallel batch: err=%v max=%d logins=%d", err, maximum.Load(), fixture.logins)
+	}
+	for i, result := range got {
+		if result.Target != targets[i] || result.Err != nil || result.Account == nil {
+			t.Fatalf("missing/incorrect page result %d: %+v", i, result)
+		}
+	}
+	if time.Since(started) > 10*time.Second {
+		t.Fatal("full page was serialized")
+	}
+	for i := 1; i < len(starts); i++ {
+		if starts[i].Sub(starts[i-1]) < minBatchReadInterval-30*time.Millisecond {
+			t.Fatal("batch burst supplier reads without pacing")
+		}
+	}
+}
+
+func TestCollectTargetsSimultaneousAndDelayedOldToken401ShareReauthentication(t *testing.T) {
+	client, fixture := targetClient(t, nil)
+	base := client.transport
+	var mu sync.Mutex
+	oldReads := 0
+	newReads := 0
+	allOldStarted := make(chan struct{})
+	newLoginComplete := make(chan struct{})
+	client.transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != apiPrefix+"/accounts" {
+			response, err := base.RoundTrip(r)
+			if r.URL.Path == apiPrefix+"/login" && fixture.logins == 2 {
+				close(newLoginComplete)
+			}
+			return response, err
+		}
+		switch r.Header.Get("Authorization") {
+		case "Bearer token-1":
+			mu.Lock()
+			oldReads++
+			if oldReads == 3 {
+				close(allOldStarted)
+			}
+			mu.Unlock()
+			select {
+			case <-allOldStarted:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+			if r.URL.Query().Get("keyword") == "late@example.com" {
+				select {
+				case <-newLoginComplete:
+				case <-r.Context().Done():
+					return nil, r.Context().Err()
+				}
+			}
+			return jsonResponse(401, map[string]any{"error": "TOKEN_SECRET"}), nil
+		case "Bearer token-2":
+			mu.Lock()
+			newReads++
+			mu.Unlock()
+			return jsonResponse(200, map[string]any{"total": 1, "list": []any{editableFixture(1, r.URL.Query().Get("keyword"))}}), nil
+		default:
+			t.Fatal("incorrect shared token")
+			return nil, nil
+		}
+	})
+	targets := []Target{{Account: "one@example.com"}, {Account: "two@example.com"}, {Account: "late@example.com"}, {Account: "four@example.com"}}
+	got, err := client.CollectTargets(context.Background(), "supplier-user", "private-password-中文", targets)
+	if err != nil || fixture.logins != 2 || fixture.keys != 2 || oldReads != 3 || newReads != 4 {
+		t.Fatalf("relogin amplification: err=%v logins=%d old=%d new=%d", err, fixture.logins, oldReads, newReads)
+	}
+	for _, result := range got {
+		if result.Err != nil || result.Account == nil {
+			t.Fatalf("old token response poisoned refreshed session: %+v", result)
+		}
+	}
+}
+
+func TestCollectTargetsRateLimitedIsDistinctAndNeverRetried(t *testing.T) {
+	client, fixture := targetClient(t, func(r *http.Request, n int) *http.Response {
+		if r.URL.Query().Get("keyword") == "limited@example.com" {
+			return jsonResponse(429, map[string]any{"error": "TOKEN_SECRET"})
+		}
+		return jsonResponse(200, map[string]any{"total": 1, "list": []any{editableFixture(n, r.URL.Query().Get("keyword"))}})
+	})
+	got, err := client.CollectTargets(context.Background(), "supplier-user", "private-password-中文", []Target{{Account: "limited@example.com"}, {Account: "good@example.com"}})
+	if err != nil || fixture.reads != 2 || fixture.logins != 1 {
+		t.Fatal("429 retried or broke batch")
+	}
+	requireSupplierCode(t, got[0].Err, CodeRateLimited)
+	if got[1].Err != nil || got[1].Account == nil {
+		t.Fatal("unrelated success was discarded")
+	}
+}
+
+func TestTargetBatchWaiterCancellationDoesNotPoisonSharedLogin(t *testing.T) {
+	_, pub := keys(t)
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	batchCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b := &targetBatch{ctx: batchCtx, username: "supplier-user", password: "private-password-中文", token: "old-token"}
+	b.remaining.Store(10)
+	b.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == apiPrefix+"/pubkey" {
+			close(started)
+			select {
+			case <-finish:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+			return jsonResponse(200, map[string]any{"public_key": pub}), nil
+		}
+		return jsonResponse(200, map[string]any{"token": "new-token"}), nil
+	})}
+	waitCtx, stop := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { _, err := b.refresh(waitCtx, 0); result <- err }()
+	<-started
+	stop()
+	select {
+	case err := <-result:
+		requireSupplierCode(t, err, CodeUnavailable)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled caller blocked behind shared login")
+	}
+	close(finish)
+	b.reauthWork.Wait()
+	token, err := b.refresh(context.Background(), 0)
+	if err != nil || token != "new-token" {
+		t.Fatal("cancelled waiter poisoned login", err)
 	}
 }

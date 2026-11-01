@@ -44,6 +44,10 @@ func pageCollectionError(err error) string {
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
 		switch upstream.Code {
+		case supplier.CodeTimeout:
+			return "The supplier website timed out. Previously collected data is retained."
+		case supplier.CodeRateLimited:
+			return "The supplier website is limiting requests. Please try again shortly. Previously collected data is retained."
 		case supplier.CodeAccountNotFound:
 			return "This account was not found on the supplier website. Previously collected data is retained."
 		case supplier.CodeAccountAmbiguous:

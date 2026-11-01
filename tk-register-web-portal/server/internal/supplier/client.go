@@ -39,6 +39,8 @@ const (
 	CodeSessionExpired     = "supplier_session_expired"
 	CodeUnavailable        = "supplier_unavailable"
 	CodeContractMismatch   = "supplier_contract_mismatch"
+	CodeTimeout            = "supplier_timeout"
+	CodeRateLimited        = "supplier_rate_limited"
 )
 
 // Error contains only fixed, public-safe messages. Upstream response bodies,
@@ -55,6 +57,8 @@ func safeError(code string) *Error {
 		CodeCredentialsInvalid: "The supplier rejected the username or password.",
 		CodeSessionExpired:     "The supplier session expired again after signing in. Please try later.",
 		CodeUnavailable:        "The supplier website is unavailable. Please try later.",
+		CodeTimeout:            "The supplier website request timed out. Please try later.",
+		CodeRateLimited:        "The supplier website is rate limiting requests. Please wait before trying again.",
 		CodeContractMismatch:   "The supplier website returned an unsupported response. Please check the integration.",
 	}
 	return &Error{Code: code, Message: messages[code]}
@@ -108,6 +112,8 @@ type session struct {
 	readAuthError       error
 	targetReadLimit     int
 	targetReads         int
+	targetReadDelegate  func(context.Context, string, string, string) (int, []byte, error)
+	classifyReadErrors  bool
 }
 
 func (c *Client) newSession() *session {
@@ -233,9 +239,15 @@ func (s *session) request(ctx context.Context, method, path string, payload any)
 	}
 	response, err := s.http.Do(req)
 	if err != nil {
+		if s.classifyReadErrors {
+			return 0, nil, collectionTransportError(ctx, err)
+		}
 		return 0, nil, safeError(CodeUnavailable)
 	}
 	defer response.Body.Close()
+	if s.classifyReadErrors && response.StatusCode == http.StatusTooManyRequests {
+		return 0, nil, safeError(CodeRateLimited)
+	}
 	// Error responses are not needed for parsing, and may echo secrets. Do not
 	// read, return, or log their bodies at all.
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -243,6 +255,9 @@ func (s *session) request(ctx context.Context, method, path string, payload any)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
+		if s.classifyReadErrors {
+			return 0, nil, collectionTransportError(ctx, err)
+		}
 		return 0, nil, safeError(CodeUnavailable)
 	}
 	if len(body) > maxResponseBytes {
