@@ -110,6 +110,8 @@ All identifiers are JSON strings. All times shown below are examples.
       "output_tokens_total": 240000,
       "cost_total": 123.45,
       "currency": "CNY",
+      "cost_total_usd": 17.145833333333332,
+      "exchange_rate_cny_per_usd": 7.2,
       "usage_5h_percent": 15,
       "reset_5h_at": "2026-11-01T06:00:00+08:00",
       "usage_7d_percent": 42,
@@ -154,13 +156,17 @@ All identifiers are JSON strings. All times shown below are examples.
 | `account_status` | string or null | Normalized supplier status at collection time, for example `active`, `offline`, `banned`, `pending`, `limited` or `unknown`. |
 | `input_tokens_total` | number or null | Cumulative input-token counter. |
 | `output_tokens_total` | number or null | Cumulative output-token counter. |
-| `cost_total` | number or null | Cumulative spending in the accompanying `currency`. Already converted to currency units by TK Register. |
-| `currency` | string or null | Currency of `cost_total`, such as `CNY`. |
+| `cost_total` | number or null | Original cumulative spending in the accompanying `currency`, already normalized from supplier micro-units into currency units. Retained unchanged for compatibility. |
+| `currency` | string or null | Currency of the original `cost_total`, such as `CNY`. |
+| `cost_total_usd` | number or null | Cumulative spending in USD, calculated as `cost_total / 7.2` when `currency` is `CNY`. Null when the original amount is unavailable or the currency is missing or not CNY. A known zero remains `0`. |
+| `exchange_rate_cny_per_usd` | number | Fixed conversion rate, always `7.2`: CNY per USD. Present even when `cost_total_usd` is null. |
 | `usage_5h_percent` | number or null | Usage percentage in the five-hour window, such as `15` for 15%. |
 | `reset_5h_at` | RFC3339 string or null | Five-hour window reset time. |
 | `usage_7d_percent` | number or null | Usage percentage in the seven-day window. |
 | `reset_7d_at` | RFC3339 string or null | Seven-day window reset time. |
 | `data_source` | string | Collection source; `website` for this supplier integration. |
+
+`cost_total_usd` retains calculation precision in the API; clients can format it to two decimal places for display. Do not convert `cost_total_usd` again. The original `cost_total` and `currency` retain their previous meanings. This fixed rate applies to both latest and historical snapshot responses; it is not a live or date-specific exchange rate.
 
 The response does not contain account passwords, `auth_json`, personal token values, supplier Bearer credentials or supplier website login credentials.
 
@@ -174,7 +180,7 @@ The response is a stored view, not a real-time supplier query. Use `last_success
 | A later collection failed | Previous successful `snapshot` retained; `last_error` populated and `last_attempt_at` updated | Display retained values as last-known data and show their original update time. |
 | Account exists but has no collected data | `snapshot: null`; individual collection times may also be null | Show unavailable data, such as `—`. Do not infer zero usage. |
 | One metric is unavailable | That metric is null even when other snapshot fields have values | Show only available metrics. |
-| Supplier explicitly returned zero | The numeric field is `0` | Show a known zero, such as `0%` or `CNY 0.00`. |
+| Supplier explicitly returned zero | The numeric field is `0` | Show a known zero, such as `0%` or `USD 0.00`. |
 
 A new accepted supplier identity or plan can start a new account lifetime. Older snapshots are retained internally but are not returned as the current lifetime's latest snapshot.
 

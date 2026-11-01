@@ -144,6 +144,10 @@ func TestPageSyncPartialResultsAndLastSuccess(t *testing.T) {
 	if out.Accounts[0].Snapshot == nil || *out.Accounts[0].Snapshot.CostTotal != 123.45 || out.Accounts[0].LastSuccessAt.Before(at) || out.Accounts[0].UserID != "" {
 		t.Fatal("successful row not refreshed")
 	}
+	updatedSnapshot := out.Accounts[0].Snapshot
+	if updatedSnapshot.CostTotalUSD == nil || *updatedSnapshot.CostTotalUSD != *updatedSnapshot.CostTotal/7.2 || updatedSnapshot.ExchangeRateCNYPerUSD != 7.2 {
+		t.Fatal("row sync omitted or rounded derived USD values")
+	}
 	failed, _ := a.store.SyncedAccountForUser(context.Background(), owner.ID, rows[1].ID)
 	if failed.Snapshot == nil || *failed.Snapshot.CostTotal != 8 || !failed.LastSuccessAt.Equal(at) || failed.LastAttemptAt == nil || !failed.LastAttemptAt.After(at) || failed.LastError == "" {
 		t.Fatal("failed row lost saved data", failed)

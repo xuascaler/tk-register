@@ -18,9 +18,9 @@ try {
   const failures = [], requests = [], pageErrors = [];
   let role = 'admin';
   page.on('pageerror', error => pageErrors.push(error.message));
-  const snapshot = { id: '1', account_id: '100', collected_at: '2026-11-01T02:00:00+08:00', account_status: 'active', cost_total: 1234.56, currency: 'CNY', input_tokens_total: 120000, output_tokens_total: 200000, usage_5h_percent: 15, usage_7d_percent: 42, reset_5h_at: null, reset_7d_at: null, data_source: 'website' };
+  const snapshot = { id: '1', account_id: '100', collected_at: '2026-11-01T02:00:00+08:00', account_status: 'active', cost_total: 1234.56, currency: 'CNY', cost_total_usd: 1234.56 / 7.2, exchange_rate_cny_per_usd: 7.2, input_tokens_total: 120000, output_tokens_total: 200000, usage_5h_percent: 15, usage_7d_percent: 42, reset_5h_at: null, reset_7d_at: null, data_source: 'website' };
   const account = { id: '100', account: 'alice@example.com', user_id: '7', user_email: 'owner@example.com', plan: 'claude/cc-max-20x', vendor_id: '1', vendor_name: 'TK Register 0', current_submission_id: '22', latest_submission_id: '23', submission_status: 'accepted', remote_id: '456', platform_account_id: '789', last_success_at: snapshot.collected_at, last_attempt_at: snapshot.collected_at, last_error: '', snapshot };
-  const accounts = [account, { ...account, id: '101', account: 'zero@example.com', snapshot: { ...snapshot, cost_total: 0, usage_5h_percent: 0 } }, { ...account, id: '102', account: 'missing@example.com', snapshot: null, last_success_at: null }];
+  const accounts = [account, { ...account, id: '101', account: 'zero@example.com', snapshot: { ...snapshot, cost_total: 0, cost_total_usd: 0, usage_5h_percent: 0 } }, { ...account, id: '102', account: 'missing@example.com', snapshot: null, last_success_at: null }];
   await page.route('**/tk-register/api/**', async route => {
     const req = route.request(), url = new URL(req.url()), path = url.pathname.replace('/tk-register/api', '');
     requests.push(`${req.method()} ${path}${url.search}`);
@@ -47,7 +47,8 @@ try {
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
   assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Sync']);
   assert.equal(await page.locator('.usage-owner-email').first().textContent(), 'owner@example.com');
-  assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /CNY\s0\.00/);
+  assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'alice@example.com' }).textContent(), /USD\s171\.47/);
+  assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /USD\s0\.00/);
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'missing@example.com' }).textContent(), /No data collected/);
   assert.equal(requests.some(r => r.startsWith('POST')), false, 'Opening the list must only read saved snapshots');
   for (const width of [1440, 1024, 768, 390, 320]) {
@@ -84,6 +85,11 @@ try {
   assert.match(page.url(), /account-pool\/accounts\/100\/usage$/);
   await page.locator('.usage-owner-meta').waitFor();
   assert.match(await page.locator('.usage-owner-meta').textContent(), /owner@example.com/);
+  assert.match(await page.locator('.usage-metrics').textContent(), /USD\s171\.47/);
+  assert.equal(await page.locator('.usage-chart-unit').textContent(), 'Cumulative spend · USD');
+  assert.match(await page.locator('.usage-chart-point title').textContent(), /USD\s171\.47/);
+  await page.getByRole('button', { name: 'View data', exact: true }).click();
+  assert.match(await page.locator('.usage-data-table').textContent(), /USD\s171\.47/);
   await page.getByRole('button', { name: 'Sync now', exact: true }).click();
   await page.getByText('Account data updated.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'View submission' }).click();

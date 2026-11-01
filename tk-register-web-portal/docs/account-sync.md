@@ -47,9 +47,11 @@ The account detail page shows cumulative spending, input/output tokens, quota-wi
 
 ## Values and history
 
-- Supplier `cpa_usage.cost` is expressed in micro-CNY. The server divides it by **1,000,000**, stores the resulting amount with currency `CNY`, and the frontend displays that amount directly. It does not apply the supplier page's fixed-rate USD conversion.
+- Supplier `cpa_usage.cost` is expressed in micro-CNY. The server divides it by **1,000,000** and continues to store the resulting amount as `cost_total` with currency `CNY`. The saved original amount and currency are unchanged.
+- Every account snapshot response adds `cost_total_usd` and `exchange_rate_cny_per_usd`. For CNY snapshots, `cost_total_usd` is `cost_total / 7.2`; the rate is always `7.2` CNY per USD. The API retains calculation precision. Missing amounts and missing or unsupported currencies produce `cost_total_usd: null`; a known zero produces `0`.
+- Member and administrator account lists, detail totals, spending trends, and observation tables display `cost_total_usd` as USD with two decimal places. Latest and historical responses use the same fixed rate. This is not a live or date-specific exchange-rate system, and no stored snapshot migration is required.
 - Input and output tokens are cumulative counters. Five-hour and seven-day quota values are normalized to percentages by the server before display.
-- An unavailable metric remains SQL `NULL` / JSON `null` and appears as **—**. A known zero remains `0`, `0%` or `CNY 0.00` as appropriate.
+- An unavailable metric remains SQL `NULL` / JSON `null` and appears as **—**. A known zero remains `0`, `0%` or `USD 0.00` as appropriate.
 - Failed collection does not replace the latest successful snapshot with zeros. The list shows **Last known** and **Update failed**; detail shows the failure and the timestamp of the retained successful data. An account that has never been successfully collected continues to show **—**.
 - Snapshot dates follow the configured timezone; `collected_at` records the actual collection instant. The supplier's account-metadata timestamp is not treated as a usage-update timestamp, so `source_updated_at` stays null unless a reliable usage timestamp is available.
 - Trends plot saved cumulative observations. Missing observations, long gaps, currency changes and counter resets are not joined into a continuous line. They do not represent zero consumption or calculated interval usage.
@@ -95,6 +97,8 @@ The following paths are relative to `/tk-register/api` and use the existing JSON
 | `GET /admin/account-sync` | Administrator configuration without the saved password, plus collection status. |
 | `PUT /admin/account-sync` | Save `enabled`, `interval_hours`, `timezone`, `website_username` and optional `website_password`. |
 | `POST /admin/account-sync/test-login` | Test `website_username` and optional `website_password`; success returns `authenticated: true`. A blank password uses the saved password only for the same saved username. |
+
+Account snapshots in list, detail, historical, manual-sync and Auth JSON refresh responses share the original `cost_total` / `currency` fields and the derived `cost_total_usd` / `exchange_rate_cny_per_usd` fields described above. The personal-token lookup uses the same snapshot format.
 
 The list sends a one-ID batch for each manual Sync click. Batch clients must inspect each result; HTTP 200 can contain both successful and failed rows. Batch requests never report retained database data as a fresh supplier success. A successful HTTP response to single-account manual sync does not by itself mean the supplier collection succeeded: the returned account's `last_error` must also be checked. Missing configuration, concurrent execution, rate limits and service failures can instead produce an HTTP error. The UI reloads the saved detail after an explicit attempt so retained values and failure timestamps remain visible.
 

@@ -9,6 +9,8 @@ export type AccountSnapshot = {
   output_tokens_total: number | null;
   cost_total: number | null;
   currency: string | null;
+  cost_total_usd: number | null;
+  exchange_rate_cny_per_usd: number;
   usage_5h_percent: number | null;
   reset_5h_at: string | null;
   usage_7d_percent: number | null;

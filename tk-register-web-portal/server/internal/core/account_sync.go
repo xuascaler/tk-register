@@ -83,11 +83,13 @@ type AccountSyncState struct {
 }
 
 type AccountSnapshotDTO struct {
-	ID           string    `json:"id"`
-	AccountID    string    `json:"account_id"`
-	SnapshotDate string    `json:"snapshot_date"`
-	CollectedAt  time.Time `json:"collected_at"`
-	DataSource   string    `json:"data_source"`
+	ID                    string    `json:"id"`
+	AccountID             string    `json:"account_id"`
+	SnapshotDate          string    `json:"snapshot_date"`
+	CollectedAt           time.Time `json:"collected_at"`
+	DataSource            string    `json:"data_source"`
+	CostTotalUSD          *float64  `json:"cost_total_usd"`
+	ExchangeRateCNYPerUSD float64   `json:"exchange_rate_cny_per_usd"`
 	AccountSnapshotValues
 }
 type AccountDTO struct {
@@ -200,8 +202,18 @@ func (s *Store) ensureSyncedAccounts(ctx context.Context, userID uint64) error {
 	})
 }
 
+const exchangeRateCNYPerUSD = 7.2
+
 func snapshotDTO(row AccountSnapshot) AccountSnapshotDTO {
-	return AccountSnapshotDTO{ID: idString(row.ID), AccountID: idString(row.AccountID), SnapshotDate: row.SnapshotDate, CollectedAt: row.CollectedAt.UTC(), DataSource: row.DataSource, AccountSnapshotValues: row.AccountSnapshotValues}
+	out := AccountSnapshotDTO{ID: idString(row.ID), AccountID: idString(row.AccountID), SnapshotDate: row.SnapshotDate, CollectedAt: row.CollectedAt.UTC(), DataSource: row.DataSource, AccountSnapshotValues: row.AccountSnapshotValues, ExchangeRateCNYPerUSD: exchangeRateCNYPerUSD}
+	// Conversion is a response-only value. Keep the original observation and its
+	// currency intact, including for historical snapshots. Display rounding belongs
+	// to the client; an absent amount or an unsupported currency is not zero USD.
+	if row.CostTotal != nil && row.Currency != nil && strings.EqualFold(strings.TrimSpace(*row.Currency), "CNY") && !math.IsNaN(*row.CostTotal) && !math.IsInf(*row.CostTotal, 0) {
+		usd := *row.CostTotal / exchangeRateCNYPerUSD
+		out.CostTotalUSD = &usd
+	}
+	return out
 }
 func (s *Store) accountDTO(ctx context.Context, row SyncedAccount) (AccountDTO, error) {
 	out := AccountDTO{ID: idString(row.ID), Account: row.Account, Plan: row.Plan, VendorID: idString(row.VendorID), LatestSubmissionID: idString(row.LatestSubmissionID), SubmissionStatus: row.SubmissionStatus, RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt, LastError: row.LastError, SupplierRecordID: row.SupplierRecordID, AuthJSONUpdatedAt: row.AuthJSONUpdatedAt}

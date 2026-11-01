@@ -452,8 +452,8 @@ func parseAccount(raw rawAccount) (Account, error) {
 		return a, err
 	}
 	if a.CostTotal != nil {
-		// The site's ql formatter divides by 1e6 to display CNY. Its USD
-		// display is a fixed-rate conversion, which we intentionally omit.
+		// The site's ql formatter divides by 1e6 to display CNY. Preserve
+		// that original currency here; account response DTOs derive USD.
 		*a.CostTotal /= 1e6
 		currency := "CNY"
 		a.Currency = &currency

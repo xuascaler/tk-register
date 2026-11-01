@@ -76,6 +76,9 @@ func TestAccountLookupOwnerAndSnapshotContract(t *testing.T) {
 	if out.Snapshot == nil || out.Snapshot.CostTotal == nil || *out.Snapshot.CostTotal != 0 || out.Snapshot.OutputTokensTotal != nil || *out.Snapshot.AccountStatus != "active" || out.LastError == nil || out.LastSuccessAt == nil {
 		t.Fatalf("lost retained, zero or nullable data: %+v", out)
 	}
+	if out.Snapshot.CostTotalUSD == nil || *out.Snapshot.CostTotalUSD != 0 || out.Snapshot.ExchangeRateCNYPerUSD != 7.2 {
+		t.Fatal("public lookup lost derived USD zero or exchange rate")
+	}
 	if out.PlatformAccountID == nil || *out.PlatformAccountID != platform || out.RemoteID == nil || *out.RemoteID != *target.RemoteID {
 		t.Fatal("account IDs were mixed")
 	}

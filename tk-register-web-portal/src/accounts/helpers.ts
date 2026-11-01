@@ -1,6 +1,6 @@
 import type { AccountSnapshot } from './types';
 
-export type Metric = 'cost_total' | 'input_tokens_total' | 'output_tokens_total';
+export type Metric = 'cost_total_usd' | 'input_tokens_total' | 'output_tokens_total';
 export type TrendPoint = { time: number; value: number; snapshot: AccountSnapshot };
 
 export function knownNumber(value: number | null | undefined): value is number {
@@ -47,7 +47,7 @@ export function statusTone(status: string | null | undefined) {
   return label === 'Active' ? 'positive' : ['Banned', 'Expired'].includes(label) ? 'negative' : label === 'Pending' ? 'pending' : 'neutral';
 }
 
-// Missing snapshots, changing currency and reset counters are gaps, never zeros.
+// Spend uses the server's USD value. Missing conversions and reset counters are gaps, never zeros.
 export function trendSegments(snapshots: AccountSnapshot[], metric: Metric, intervalHours: number) {
   const ordered = [...snapshots].filter(s => Number.isFinite(Date.parse(s.collected_at))).sort((a, b) => Date.parse(a.collected_at) - Date.parse(b.collected_at));
   const segments: TrendPoint[][] = [];
@@ -55,15 +55,14 @@ export function trendSegments(snapshots: AccountSnapshot[], metric: Metric, inte
   const maxGap = Math.max(1, intervalHours) * 3600_000 * 1.6;
   for (const snapshot of ordered) {
     const value = snapshot[metric];
-    const currency = snapshot.currency?.trim().toUpperCase();
-    if (!knownNumber(value) || (metric === 'cost_total' && (!currency || !/^[A-Z]{3}$/.test(currency)))) {
+    if (!knownNumber(value)) {
       if (current.length) segments.push(current);
       current = [];
       continue;
     }
     const time = Date.parse(snapshot.collected_at);
     const previous = current.at(-1);
-    if (previous && (time - previous.time > maxGap || value < previous.value || (metric === 'cost_total' && currency !== previous.snapshot.currency?.trim().toUpperCase()))) {
+    if (previous && (time - previous.time > maxGap || value < previous.value)) {
       segments.push(current);
       current = [];
     }

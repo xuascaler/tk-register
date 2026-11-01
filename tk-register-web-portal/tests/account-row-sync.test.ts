@@ -14,7 +14,7 @@ function account(id: string, at = savedAt): SyncedAccount {
     last_success_at: at, last_attempt_at: at, last_error: '',
     snapshot: { id: `snapshot-${id}`, account_id: id, snapshot_date: at.slice(0, 10), collected_at: at,
       source_updated_at: null, account_status: 'active', input_tokens_total: 20, output_tokens_total: 30,
-      cost_total: 12.5, currency: 'CNY', usage_5h_percent: 25, reset_5h_at: null,
+      cost_total: 12.5, currency: 'CNY', cost_total_usd: 12.5 / 7.2, exchange_rate_cny_per_usd: 7.2, usage_5h_percent: 25, reset_5h_at: null,
       usage_7d_percent: 50, reset_7d_at: null, data_source: 'website' },
   };
 }
@@ -42,7 +42,7 @@ for (const endpoint of ['/accounts', '/admin/synced-accounts'] as AccountListEnd
 
   test(`${endpoint} manual sync sends only the clicked local ID with session and CSRF`, async t => {
     const controller = new AbortController(); const current = page(); const updated = account('7', collectedAt);
-    updated.snapshot!.account_status = 'banned'; let calls = 0;
+    updated.snapshot!.account_status = 'banned'; updated.snapshot!.cost_total = 72; updated.snapshot!.cost_total_usd = 10; let calls = 0;
     setCSRFToken('test-csrf'); t.after(() => setCSRFToken(''));
     t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
       calls++; assert.equal(url, `/tk-register/api${endpoint}/sync`); assert.equal(init.method, 'POST');
@@ -57,6 +57,9 @@ for (const endpoint of ['/accounts', '/admin/synced-accounts'] as AccountListEnd
     assert.deepEqual(merged.items.map(row => row.id), ['7', '8']);
     assert.equal(merged.items[0].last_success_at, collectedAt);
     assert.equal(merged.items[0].snapshot?.account_status, 'banned');
+    assert.equal(merged.items[0].snapshot?.cost_total_usd, 10);
+    assert.equal(merged.items[0].snapshot?.cost_total, 72);
+    assert.equal(merged.items[0].snapshot?.exchange_rate_cny_per_usd, 7.2);
     assert.equal(merged.items[1], current.items[1]);
     assert.equal(merged.total, 35); assert.equal(merged.page, 2); assert.equal(calls, 1);
   });

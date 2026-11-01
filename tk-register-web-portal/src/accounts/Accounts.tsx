@@ -115,7 +115,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
           {admin && <td data-label='User' className='usage-owner-cell'><span className='usage-owner-email'>{account.user_email || '—'}</span></td>}
           <td data-label='Status'><Status account={account} />{stale && account.snapshot && <span className='usage-small'>Last known</span>}</td>
           <td data-label='Usage windows'><UsageWindow label='5 hours' value={account.snapshot?.usage_5h_percent} /><UsageWindow label='7 days' value={account.snapshot?.usage_7d_percent} /></td>
-          <td data-label='Total spent' className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total, account.snapshot?.currency)}</strong>{stale && account.snapshot && <span className='usage-small'>Last known total</span>}</td>
+          <td data-label='Total spent' className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total_usd, 'USD')}</strong>{stale && account.snapshot && <span className='usage-small'>Last known total</span>}</td>
           <td data-label='Last updated'><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>
             <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>Updating account…</span> : !eligible ? <span className='usage-small'>Awaiting acceptance</span> : failure ? <details className='usage-sync-error'><summary>{rateLimited ? 'Rate limited' : 'Sync failed'}</summary><p>{failure}</p><span>{account.snapshot ? 'Showing the last successful data.' : 'No data has been collected yet.'}</span></details> : refresh?.status === 'skipped' ? <details className='usage-sync-error'><summary>Not updated</summary><p>{refresh.message}</p></details> : refresh?.status === 'updated' ? <span className='usage-row-success'>Updated</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</div>
           </td>
@@ -129,7 +129,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
   </section>;
 }
 
-const metricNames: Record<Metric, string> = { cost_total: 'Total spent', input_tokens_total: 'Input tokens', output_tokens_total: 'Output tokens' };
+const metricNames: Record<Metric, string> = { cost_total_usd: 'Total spent', input_tokens_total: 'Input tokens', output_tokens_total: 'Output tokens' };
 
 function Trend({ snapshots, interval, timezone, metric }: { snapshots: AccountSnapshot[]; interval: number; timezone: string; metric: Metric }) {
   const target = useRef<HTMLDivElement>(null);
@@ -141,12 +141,7 @@ function Trend({ snapshots, interval, timezone, metric }: { snapshots: AccountSn
     const observer = new ResizeObserver(entries => setWidth(Math.max(240, entries[0].contentRect.width)));
     observer.observe(element); return () => observer.disconnect();
   }, []);
-  const segments = trendSegments(snapshots, metric, interval);
-  const currencies = [...new Set(segments.flat().map(p => p.snapshot.currency).filter(Boolean))];
-  const mixedCurrency = metric === 'cost_total' && currencies.length > 1;
-  // Keep separate currencies out of a shared numeric axis. The data table retains all observations.
-  const currency = currencies.at(-1) || null;
-  const displayed = metric === 'cost_total' ? segments.map(segment => segment.filter(p => p.snapshot.currency === currency)).filter(segment => segment.length) : segments;
+  const displayed = trendSegments(snapshots, metric, interval);
   const points = displayed.flat();
   const height = 260, left = width < 420 ? 56 : 72, right = 20, top = 24, bottom = 44;
   const first = Math.min(...points.map(p => p.time)), last = Math.max(...points.map(p => p.time));
@@ -154,17 +149,17 @@ function Trend({ snapshots, interval, timezone, metric }: { snapshots: AccountSn
   const span = Math.max(1, max - min), lo = Math.max(0, min - span * .12), hi = max + span * .12;
   const x = (time: number) => left + (last === first ? .5 : (time - first) / (last - first)) * (width - left - right);
   const y = (value: number) => top + (1 - (value - lo) / (hi - lo)) * (height - top - bottom);
-  const valueLabel = (value: number | null, unit = currency) => metric === 'cost_total' ? formatCost(value, unit) : formatTokens(value);
+  const valueLabel = (value: number | null) => metric === 'cost_total_usd' ? formatCost(value, 'USD') : formatTokens(value);
   const ticks = width < 500 ? 3 : 4;
   return <div ref={target} className='usage-trend'>
-    <div className='usage-chart-unit'>{metric === 'cost_total' ? currency ? `Cumulative spend · ${currency}` : 'Cumulative spend' : `Cumulative ${metric === 'input_tokens_total' ? 'input' : 'output'} tokens`}</div>
+    <div className='usage-chart-unit'>{metric === 'cost_total_usd' ? 'Cumulative spend · USD' : `Cumulative ${metric === 'input_tokens_total' ? 'input' : 'output'} tokens`}</div>
     {!points.length ? <div className='usage-chart-empty'><h3>No usage data yet</h3><p>A trend will appear after successful collections.</p></div> : <svg className='usage-chart' width={width} height={height} viewBox={`0 0 ${width} ${height}`} role='img' aria-label={`${metricNames[metric]} over time, ${points.length} collected observations. Gaps indicate unavailable data or a counter reset.`}>
-      {[0, 1, 2, 3].map(index => { const value = lo + (hi - lo) * index / 3; const pos = y(value); return <g key={index}><line x1={left} y1={pos} x2={width - right} y2={pos} className='usage-gridline' /><text x={left - 10} y={pos + 4} textAnchor='end'>{new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)}</text></g>; })}
+      {[0, 1, 2, 3].map(index => { const value = lo + (hi - lo) * index / 3; const pos = y(value); return <g key={index}><line x1={left} y1={pos} x2={width - right} y2={pos} className='usage-gridline' /><text x={left - 10} y={pos + 4} textAnchor='end'>{new Intl.NumberFormat('en-US', { notation: 'compact', minimumFractionDigits: metric === 'cost_total_usd' ? 2 : 0, maximumFractionDigits: metric === 'cost_total_usd' ? 2 : 1 }).format(value)}</text></g>; })}
       {Array.from({ length: first === last ? 1 : ticks }, (_, index) => { const time = first === last ? first : first + (last - first) * index / (ticks - 1); return <text key={index} x={x(time)} y={height - 16} textAnchor={first === last ? 'middle' : index === 0 ? 'start' : index === ticks - 1 ? 'end' : 'middle'}>{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: timezone }).format(time)}</text>; })}
       {displayed.map((segment, index) => <g key={index}><polyline fill='none' className='usage-chart-line' points={segment.map(point => `${x(point.time)},${y(point.value)}`).join(' ')} />{segment.map(point => <circle key={point.snapshot.id} cx={x(point.time)} cy={y(point.value)} r={points.length > 45 ? 2 : 3.5} className='usage-chart-point'><title>{formatTime(point.snapshot.collected_at, timezone)}: {valueLabel(point.value)}</title></circle>)}</g>)}
     </svg>}
-    <div className='usage-chart-bottom'><span>{mixedCurrency ? `Chart shows ${currency}; other currencies remain in the data table. ` : ''}Collection times use {timezone}. Gaps are not zero usage.</span><button className='usage-text-button' onClick={() => setTable(v => !v)} aria-expanded={table}>{table ? 'Hide data' : 'View data'}</button></div>
-    {table && <div className='usage-data-scroll'><table className='usage-data-table'><caption className='sr-only'>Collected usage values</caption><thead><tr><th scope='col'>Collected at</th><th scope='col'>{metricNames[metric]}</th></tr></thead><tbody>{snapshots.map(row => <tr key={row.id}><td>{formatTime(row.collected_at, timezone)}</td><td>{valueLabel(row[metric], row.currency)}</td></tr>)}</tbody></table>{!snapshots.length && <p className='usage-small'>No observations in this date range.</p>}</div>}
+    <div className='usage-chart-bottom'><span>Collection times use {timezone}. Gaps are not zero usage.</span><button className='usage-text-button' onClick={() => setTable(v => !v)} aria-expanded={table}>{table ? 'Hide data' : 'View data'}</button></div>
+    {table && <div className='usage-data-scroll'><table className='usage-data-table'><caption className='sr-only'>Collected usage values</caption><thead><tr><th scope='col'>Collected at</th><th scope='col'>{metricNames[metric]}</th></tr></thead><tbody>{snapshots.map(row => <tr key={row.id}><td>{formatTime(row.collected_at, timezone)}</td><td>{valueLabel(row[metric])}</td></tr>)}</tbody></table>{!snapshots.length && <p className='usage-small'>No observations in this date range.</p>}</div>}
   </div>;
 }
 
@@ -172,7 +167,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountDetails | null>(null);
   const [days, setDays] = useState('7');
-  const [metric, setMetric] = useState<Metric>('cost_total');
+  const [metric, setMetric] = useState<Metric>('cost_total_usd');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -245,7 +240,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><details><summary>View details</summary><p>{account.last_error}</p><span>Attempted {formatTime(account.last_attempt_at, data.timezone)}</span></details></div>}
       <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} />
       <div className='usage-metrics'>
-        <div><span>Total spent</span><strong>{formatCost(snapshot?.cost_total, snapshot?.currency)}</strong><small>{account.last_error && snapshot ? 'Last known cumulative total' : 'Cumulative total'}</small></div>
+        <div><span>Total spent</span><strong>{formatCost(snapshot?.cost_total_usd, 'USD')}</strong><small>{account.last_error && snapshot ? 'Last known cumulative total' : 'Cumulative total'}</small></div>
         <div><span>Input tokens</span><strong>{formatTokens(snapshot?.input_tokens_total, true)}</strong><small>{formatTokens(snapshot?.input_tokens_total)} tokens</small></div>
         <div><span>Output tokens</span><strong>{formatTokens(snapshot?.output_tokens_total, true)}</strong><small>{formatTokens(snapshot?.output_tokens_total)} tokens</small></div>
       </div>
