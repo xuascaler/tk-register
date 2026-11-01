@@ -8,7 +8,7 @@ import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statu
 import type { AccountDetails, AccountPage, AccountSnapshot, SyncedAccount } from './types';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
 import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
-import { loadAndSyncAccountPage, pageSyncSummary, type SyncedAccountPage } from './page-sync';
+import { loadAccountPage, mergeSyncedAccount, syncAccountRow, type AccountRowSyncResult } from './row-sync';
 
 function Status({ account }: { account: SyncedAccount }) {
   return <span className={`usage-status ${statusTone(account.snapshot?.account_status)}`}>{statusLabel(account.snapshot?.account_status)}</span>;
@@ -30,10 +30,14 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
   const [page, setPage] = useState(1);
   const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<SyncedAccountPage | null>(null);
-  const [syncError, setSyncError] = useState('');
+  const [syncingID, setSyncingID] = useState<string | null>(null);
+  const [rowResults, setRowResults] = useState<Record<string, AccountRowSyncResult & { retryAt?: number }>>({});
+  const [now, setNow] = useState(Date.now);
+  const [loadedScope, setLoadedScope] = useState('');
   const [error, setError] = useState('');
+  const pending = useRef<{ id: string; controller: AbortController } | null>(null);
+  const revision = useRef(0);
+  const scope = `${endpoint}:${page}:${query}:${status}:${attempt}`;
   useEffect(() => {
     const nextQuery = search.trim();
     if (nextQuery === query) return;
@@ -42,53 +46,86 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
   }, [search, query]);
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setSyncing(false); setError(''); setSyncError(''); setSyncResult(null);
+    const version = ++revision.current;
+    setLoading(true); setSyncingID(null); setError(''); setRowResults({});
     const params = new URLSearchParams({ page: String(page), search: query, status });
-    void loadAndSyncAccountPage(endpoint, params, controller.signal, {
-      onLoaded: result => { setData(result); setLoading(false); },
-      onLoadError: cause => { setError(errorMessage(cause)); setLoading(false); },
-      onSyncing: setSyncing,
-      onSynced: result => { setData(result.page); setSyncResult(result); },
-      onSyncError: cause => setSyncError(errorMessage(cause)),
-    });
-    return () => controller.abort();
-  }, [page, query, status, attempt, endpoint]);
+    void loadAccountPage(endpoint, params, controller.signal)
+      .then(result => { if (!controller.signal.aborted && version === revision.current) { setData(result); setLoadedScope(scope); } })
+      .catch(cause => { if (!controller.signal.aborted && version === revision.current) setError(errorMessage(cause)); })
+      .finally(() => { if (!controller.signal.aborted && version === revision.current) setLoading(false); });
+    return () => {
+      controller.abort();
+      pending.current?.controller.abort();
+      pending.current = null;
+    };
+  }, [page, query, status, attempt, endpoint, scope]);
+  useEffect(() => {
+    const deadlines = Object.values(rowResults).map(result => result.retryAt || 0);
+    if (!deadlines.some(deadline => deadline > Date.now())) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => {
+      const time = Date.now(); setNow(time);
+      if (!deadlines.some(deadline => deadline > time)) window.clearInterval(timer);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [rowResults]);
+  async function sync(account: SyncedAccount) {
+    // The ref prevents double clicks before React has rendered the disabled
+    // buttons. One explicit request at a time avoids competing supplier leases.
+    if (pending.current || loading || loadedScope !== scope || !account.current_submission_id || (rowResults[account.id]?.retryAt || 0) > Date.now()) return;
+    const operation = { id: account.id, controller: new AbortController() };
+    const version = revision.current;
+    pending.current = operation; setSyncingID(account.id);
+    setRowResults(current => { const next = { ...current }; delete next[account.id]; return next; });
+    try {
+      const result = await syncAccountRow(endpoint, account, operation.controller.signal);
+      if (operation.controller.signal.aborted || pending.current !== operation || version !== revision.current) return;
+      setData(current => current && mergeSyncedAccount(current, result));
+      setRowResults(current => ({ ...current, [account.id]: { ...result, retryAt: result.retryAfter ? Date.now() + result.retryAfter * 1000 : undefined } }));
+    } catch (cause) {
+      if (!operation.controller.signal.aborted && pending.current === operation && version === revision.current) {
+        setRowResults(current => ({ ...current, [account.id]: { account, status: 'failed', message: errorMessage(cause) } }));
+      }
+    } finally {
+      if (pending.current === operation) { pending.current = null; setSyncingID(null); }
+    }
+  }
   return <section className='usage-accounts'>
-    <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>
+    <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Saved account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>
     <div className='usage-toolbar'>
       <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>Search accounts</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder={admin ? 'Search account or user email' : 'Search by account email'} maxLength={254} /></label>
       <Select id='usage-account-status' label='Account status' hiddenLabel value={status} onChange={value => { setStatus(value); setPage(1); }} options={[{ value: '', label: 'All account statuses' }, { value: 'active', label: 'Active' }, { value: 'offline', label: 'Offline' }, { value: 'banned', label: 'Banned' }, { value: 'unknown', label: 'Unknown' }]} />
-      <button className='button pale usage-icon-button' disabled={loading || syncing} aria-label='Refresh accounts from vendor' title='Refresh accounts from vendor' onClick={() => setAttempt(v => v + 1)}><RefreshCw className={loading || syncing ? 'usage-spinning' : ''} aria-hidden='true' /></button>
     </div>
     <ErrorNotice>{error}</ErrorNotice>
-    {data && (loading || syncing || syncError || syncResult) && <div className={`usage-page-update ${syncError || syncResult?.failed ? 'has-warning' : ''}`} role='status' aria-live='polite'>
-      <RefreshCw className={loading || syncing ? 'usage-spinning' : ''} aria-hidden='true' />
-      <span>{loading ? 'Loading accounts…' : syncing ? 'Updating this page from the vendor. Showing saved data while the update completes.' : syncError ? `Could not update this page. Showing saved data. ${syncError}` : `${pageSyncSummary(syncResult!)}.`}
-        {!loading && !syncing && syncResult && status && syncResult.statusesChanged && <small>Account statuses changed. Refresh to reapply the selected filter.</small>}
-      </span>
-    </div>}
-    {!data && loading ? <Loading label='Loading accounts…' /> : <div className={`usage-list-shell ${loading ? 'usage-list-loading' : ''}`} aria-busy={loading || syncing}>
+    {error && <button className='button pale usage-load-retry' disabled={loading} onClick={() => setAttempt(value => value + 1)}>Try again</button>}
+    {!data ? (loading ? <Loading label='Loading accounts…' /> : null) : <div className={`usage-list-shell ${loading ? 'usage-list-loading' : ''}`} aria-busy={loading}>
       <div className='usage-table-scroll'><table className={`usage-accounts-table ${admin ? 'usage-admin-table' : ''}`}>
         <caption className='sr-only'>{admin ? 'Accounts across all users and their latest successfully collected data' : 'Your accounts and their latest successfully collected data'}</caption>
-        <thead><tr><th scope='col'>Account / plan</th>{admin && <th scope='col'>User</th>}<th scope='col'>Status</th><th scope='col'>Usage windows</th><th scope='col' className='usage-total-cell'>Total spent</th><th scope='col'>Last updated</th></tr></thead>
+        <thead><tr><th scope='col'>Account / plan</th>{admin && <th scope='col'>User</th>}<th scope='col'>Status</th><th scope='col'>Usage windows</th><th scope='col' className='usage-total-cell'>Total spent</th><th scope='col'>Last updated</th><th scope='col' className='usage-sync-heading'>Sync</th></tr></thead>
         <tbody>{data?.items.map(account => {
-          const refresh = syncResult?.results[account.id];
-          const stale = Boolean(syncError || refresh?.status === 'failed' || refresh?.status === 'skipped' || account.last_error);
-          return <tr key={account.id}>
+          const refresh = rowResults[account.id];
+          const busy = syncingID === account.id;
+          const eligible = Boolean(account.current_submission_id);
+          const failure = refresh?.status === 'failed' ? refresh.message : refresh?.status === 'updated' ? '' : account.last_error;
+          const stale = Boolean(failure || refresh?.status === 'skipped');
+          const retryIn = Math.max(0, Math.ceil(((refresh?.retryAt || 0) - now) / 1000));
+          const rateLimited = /rate.limit|limiting requests|too many requests|http 429/i.test(failure || '');
+          return <tr key={account.id} aria-busy={busy}>
           <td className='usage-account-cell'><button className='usage-email' onClick={() => onOpen(account.id)}>{account.account}<ArrowUpRight aria-hidden='true' /></button><span className='usage-secondary'>{account.plan}</span><span className='usage-small'>Account ID {account.platform_account_id || account.remote_id || '—'}</span></td>
           {admin && <td data-label='User' className='usage-owner-cell'><span className='usage-owner-email'>{account.user_email || '—'}</span></td>}
           <td data-label='Status'><Status account={account} />{stale && account.snapshot && <span className='usage-small'>Last known</span>}</td>
           <td data-label='Usage windows'><UsageWindow label='5 hours' value={account.snapshot?.usage_5h_percent} /><UsageWindow label='7 days' value={account.snapshot?.usage_7d_percent} /></td>
           <td data-label='Total spent' className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total, account.snapshot?.currency)}</strong>{stale && account.snapshot && <span className='usage-small'>Last known total</span>}</td>
           <td data-label='Last updated'><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>
-            {syncing ? <span className='usage-row-sync'>Updating…</span> : refresh?.status === 'skipped' ? <span className='usage-small usage-sync-skipped' title={refresh.message}>Skipped<span className='sr-only'>{refresh.message ? `: ${refresh.message}` : ''}</span></span> : refresh?.status === 'failed' || account.last_error ? <button className='usage-error-link' title={refresh?.message || account.last_error} onClick={() => onOpen(account.id)}>Update failed<span className='sr-only'>{refresh?.message ? `: ${refresh.message}` : ''}</span></button> : syncError ? <span className='usage-small'>Not refreshed</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}
+            <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>Updating account…</span> : !eligible ? <span className='usage-small'>Awaiting acceptance</span> : failure ? <details className='usage-sync-error'><summary>{rateLimited ? 'Rate limited' : 'Sync failed'}</summary><p>{failure}</p><span>{account.snapshot ? 'Showing the last successful data.' : 'No data has been collected yet.'}</span></details> : refresh?.status === 'skipped' ? <details className='usage-sync-error'><summary>Not updated</summary><p>{refresh.message}</p></details> : refresh?.status === 'updated' ? <span className='usage-row-success'>Updated</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</div>
           </td>
+          <td className='usage-sync-cell'><button className='button pale usage-sync-button' type='button' aria-label={`Sync ${account.account}`} disabled={loading || loadedScope !== scope || syncingID !== null || !eligible || retryIn > 0} onClick={() => void sync(account)}><RefreshCw className={busy ? 'usage-spinning' : ''} aria-hidden='true' />{busy ? 'Syncing' : 'Sync'}</button>{retryIn > 0 && <span className='usage-sync-cooldown'>Retry in {retryIn}s</span>}</td>
         </tr>; })}</tbody>
       </table></div>
       {!data?.items.length && <div className='usage-empty'><h2>{query || status ? 'No matching accounts' : 'No accounts yet'}</h2><p>{query || status ? 'Try another email or account status.' : admin ? 'Submitted accounts from all users will appear here with their latest available data.' : 'Your submitted accounts will appear here with their latest available data.'}</p></div>}
       {data && data.total > 0 && <div className='usage-pagination'><span>{data.total.toLocaleString()} {data.total === 1 ? 'account' : 'accounts'} · Page {data.page} of {Math.max(1, Math.ceil(data.total / data.page_size))}</span><div><button className='button pale' disabled={loading || page <= 1} onClick={() => setPage(p => p - 1)}><ChevronLeft aria-hidden='true' />Previous</button><button className='button pale' disabled={loading || page * data.page_size >= data.total} onClick={() => setPage(p => p + 1)}>Next<ChevronRight aria-hidden='true' /></button></div></div>}
     </div>}
-    <p className='usage-footnote'><Clock3 aria-hidden='true' />Accounts on this page update automatically when you open it or change the page, search, or filter. Failed or skipped updates retain the last successful data. Missing values are shown as “—”.</p>
+    <p className='usage-footnote'><Clock3 aria-hidden='true' />Use Sync to update an individual account. Automatic collection follows the configured schedule. Failed updates retain the last successful data.</p>
   </section>;
 }
 

@@ -45,7 +45,7 @@ try {
   await mkdir('test-results', { recursive: true });
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/account-pool/accounts`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Last updated']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Sync']);
   assert.equal(await page.locator('.usage-owner-email').first().textContent(), 'owner@example.com');
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /CNY\s0\.00/);
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'missing@example.com' }).textContent(), /No data collected/);
@@ -102,7 +102,7 @@ try {
   assert.match(page.url(), /account-pool\/accounts\/42$/);
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Status', 'Usage windows', 'Total spent', 'Last updated']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Sync']);
   assert.equal(await page.locator('.usage-owner-email').count(), 0);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).click();
   await page.getByRole('button', { name: 'Sync now', exact: true }).waitFor();
