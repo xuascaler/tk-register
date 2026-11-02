@@ -178,7 +178,7 @@ export default function SubmissionHistory({
                         </button>
                         <span>{item.plan}</span>
                         <span className='row-meta'>
-                          {item.remote_alias || `Submission ${item.id}`} ·{' '}
+                          {item.remote_alias?.replaceAll('温州润晨', 'xxxxx') || `Submission ${item.id}`} ·{' '}
                           {item.vendor_name}
                         </span>
                         <span className='row-meta'>
