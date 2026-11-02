@@ -224,7 +224,7 @@ func (v *VendorService) create(ctx context.Context, userID uint64, input CreateS
 		if result.gatewayStatus == 0 && result.httpStatus != nil && !result.responseIncomplete && !result.responseTruncated {
 			apiResponse.HTTPStatus = *result.httpStatus
 			apiResponse.ContentType = result.contentType
-			apiResponse.Body = redactVendorCredential(result.completeResponseBody, token)
+			apiResponse.Body = redactVendorCredential(maskSubmissionResponseAlias(result.completeResponseBody), token)
 		} else {
 			apiResponse.HTTPStatus = result.gatewayStatus
 			if apiResponse.HTTPStatus == 0 {
@@ -235,6 +235,29 @@ func (v *VendorService) create(ctx context.Context, userID uint64, input CreateS
 		}
 	}
 	return v.finish(userID, record, execution, result, normalized, token)
+}
+
+// Mask only the public submission response's top-level alias. RawMessage keeps
+// other values intact, including numbers too large for a float64.
+func maskSubmissionResponseAlias(body []byte) []byte {
+	var response map[string]json.RawMessage
+	if json.Unmarshal(body, &response) != nil {
+		return body
+	}
+	var alias string
+	if json.Unmarshal(response["alias"], &alias) != nil || !strings.Contains(alias, "温州润晨") {
+		return body
+	}
+	maskedAlias, err := json.Marshal(strings.ReplaceAll(alias, "温州润晨", "xxxxx"))
+	if err != nil {
+		return body
+	}
+	response["alias"] = maskedAlias
+	maskedBody, err := json.Marshal(response)
+	if err != nil {
+		return body
+	}
+	return maskedBody
 }
 
 // Keep normal upstream responses byte-for-byte intact, but never return the

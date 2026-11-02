@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -175,6 +176,47 @@ func TestExternalSubmissionPassthroughAndOwnerAttribution(t *testing.T) {
 				t.Fatal("request ID does not correlate with execution")
 			}
 		})
+	}
+}
+
+func TestExternalSubmissionMasksAliasAndPreservesResponseMetadata(t *testing.T) {
+	a, _, _ := fixture(t)
+	admin, _, _ := vendorSession(t, a, "api-alias-admin@example.com", "admin")
+	user, _, _ := vendorSession(t, a, "api-alias-submit@example.com", "member")
+	configuredVendor(t, a, admin.ID)
+	token, err := a.store.GenerateAPIToken(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outboundRequestID string
+	a.vendorTransport = vendorRoundTrip(func(r *http.Request) (*http.Response, error) {
+		outboundRequestID = r.Header.Get("X-Request-ID")
+		response := remoteResponse(http.StatusCreated, `{"id":9007199254740993,"alias":"\u6e29\u5dde\u6da6\u6668-温州润晨","message":"温州润晨","extra":{"opaque":18446744073709551615}}`)
+		response.Header.Set("Content-Type", "application/json; charset=utf-8")
+		return response, nil
+	})
+	raw, err := common.Marshal(submissionParameters())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := apiRequest(t, a, "POST", claudeAccountsAPIPath, token.PlaintextToken, "application/json", string(raw))
+	requireStatus(t, w, http.StatusCreated)
+	if w.Header().Get("Content-Type") != "application/json; charset=utf-8" || w.Header().Get("X-Submission-ID") == "" || outboundRequestID == "" || w.Header().Get("X-Request-ID") != outboundRequestID {
+		t.Fatal("content type or correlation headers changed")
+	}
+	var body map[string]json.RawMessage
+	if err := common.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 4 || string(body["alias"]) != `"xxxxx-xxxxx"` || string(body["id"]) != "9007199254740993" || string(body["message"]) != `"温州润晨"` || string(body["extra"]) != `{"opaque":18446744073709551615}` {
+		t.Fatal("alias mask or non-alias response fields incorrect", w.Body.String())
+	}
+	var submission core.Submission
+	if err := a.store.DB.First(&submission, w.Header().Get("X-Submission-ID")).Error; err != nil {
+		t.Fatal(err)
+	}
+	if submission.UserID != user.ID || submission.RemoteAlias == nil || *submission.RemoteAlias != "温州润晨-温州润晨" {
+		t.Fatal("stored submission owner or original alias changed")
 	}
 }
 

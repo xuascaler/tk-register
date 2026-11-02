@@ -182,7 +182,7 @@ function GettingStarted({ baseURL, onNavigate, onManageToken, onFeedback }: Navi
     </section>
     <section className='api-docs-content-block'>
       <h2>Choose the response contract</h2>
-      <p>Submissions pass through the vendor’s status, content type, and complete response body. Lookups and Auth JSON updates return TK Register’s <code>success</code> / <code>data</code> JSON envelope.</p>
+      <p>Submissions return the vendor’s status, content type, and response body, with the vendor name masked in <code>alias</code> and any echoed shared credential redacted. Lookups and Auth JSON updates return TK Register’s <code>success</code> / <code>data</code> JSON envelope.</p>
       <p>Account lookup reads saved snapshots and does not refresh supplier data. Use the returned collection timestamps when displaying account status or usage.</p>
       <p>A confirmed Auth JSON update immediately attempts to refresh that account. Check <code>updated</code> and <code>refresh_status</code> separately: saving credentials can succeed even when the following refresh fails.</p>
     </section>
@@ -264,6 +264,7 @@ function SubmissionResponse({ onFeedback }: { onFeedback: CopyFeedback }) {
   return <>
     <section className='api-docs-content-block'><h3>Vendor response</h3>
       <p>When the vendor returns a complete response of 256 KiB or less, TK Register passes through its HTTP status, content type, and body without adding a JSON envelope. If the shared vendor credential is echoed in that body, it is redacted.</p>
+      <p>The vendor name in the top-level <code>alias</code> string is replaced with <code>xxxxx</code>, matching the account history display. This does not change the account ID or other business fields.</p>
       <p>There is no fixed TK Register success body for this endpoint. Read the vendor’s response to determine the result. A complete vendor error response, including a duplicate-account error, is passed through in the same way.</p>
       <CodeBlock title='Response header examples' text={'X-Request-ID: <request identifier>\nX-Submission-ID: <local submission identifier>'} onFeedback={onFeedback} />
     </section>
