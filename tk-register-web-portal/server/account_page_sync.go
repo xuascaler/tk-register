@@ -40,6 +40,15 @@ type pageSyncResponse struct {
 func pageTargetKey(target supplier.Target) string {
 	return strings.ToLower(strings.TrimSpace(target.Account)) + "\x00" + target.RecordID
 }
+
+func supplierAccountSnapshot(record *supplier.Account) core.AccountSnapshotValues {
+	snapshot := core.AccountSnapshotValues{AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
+	if record.PlatformAccountID != "" {
+		snapshot.PlatformAccountID = &record.PlatformAccountID
+	}
+	return snapshot
+}
+
 func pageCollectionError(err error) string {
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
@@ -245,11 +254,7 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 				record := result.Account
 				rowErr = a.store.ConfirmSupplierRecord(saveCtx, target.ID, target.IdentityKey, record.ID)
 				if rowErr == nil {
-					snapshot := core.AccountSnapshotValues{AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
-					if record.PlatformAccountID != "" {
-						snapshot.PlatformAccountID = &record.PlatformAccountID
-					}
-					rowErr = a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, snapshot, at, values.String("account_sync_timezone"))
+					rowErr = a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, supplierAccountSnapshot(record), at, values.String("account_sync_timezone"))
 				}
 				if rowErr != nil {
 					message = "Account data could not be saved. Previously collected data is retained."

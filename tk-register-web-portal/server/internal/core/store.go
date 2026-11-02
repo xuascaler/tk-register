@@ -182,6 +182,10 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
+	if err = s.DB.AutoMigrate(&PostSubmissionSyncJob{}); err != nil {
+		s.Close()
+		return nil, errors.New("could not migrate post-submission sync jobs")
+	}
 	if err = s.validateVendorSecrets(); err != nil {
 		s.Close()
 		return nil, err

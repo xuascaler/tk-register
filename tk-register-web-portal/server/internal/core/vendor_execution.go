@@ -633,8 +633,12 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	e = v.Store.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := tx.Model(&ProtocolExecution{}).Where("id = ? AND status = ?", execution.ID, "running").Updates(updates).Error; e != nil {
-			return e
+		finished := tx.Model(&ProtocolExecution{}).Where("id = ? AND status = ?", execution.ID, "running").Updates(updates)
+		if finished.Error != nil {
+			return finished.Error
+		}
+		if finished.RowsAffected == 0 {
+			return nil
 		}
 		changes := map[string]any{}
 		if execution.Operation == "push" {
@@ -675,7 +679,16 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 			}
 		}
 		if len(changes) > 0 {
-			return tx.Model(&Submission{}).Where("id = ? AND user_id = ?", record.ID, userID).Updates(changes).Error
+			if err := tx.Model(&Submission{}).Where("id = ? AND user_id = ?", record.ID, userID).Updates(changes).Error; err != nil {
+				return err
+			}
+		}
+		if execution.Operation == "push" && result.status == "succeeded" {
+			var accepted Submission
+			if err := tx.Select("id, user_id, vendor_id, account, plan, status, source, remote_id, platform_account_id, created_at").Where("id = ? AND user_id = ?", record.ID, userID).First(&accepted).Error; err != nil {
+				return err
+			}
+			return enqueuePostSubmissionSyncTx(tx, accepted, now)
 		}
 		return nil
 	})

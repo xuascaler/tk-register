@@ -161,45 +161,83 @@ func (s *Store) ensureSyncedAccounts(ctx context.Context, userID uint64) error {
 			return err
 		}
 		for _, latest := range latestRows {
-			var current Submission
-			err := accountGroup(tx.Model(&Submission{}).Select("id, user_id, vendor_id, account, plan, status, remote_id, platform_account_id, created_at"), latest).Where("status = ? AND remote_id IS NOT NULL AND remote_id <> ?", "accepted", "").Order("created_at DESC, id DESC").First(&current).Error
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return err
-			}
-			row := SyncedAccount{AccountKey: accountDigest(idString(latest.UserID), idString(latest.VendorID), strings.ToLower(strings.TrimSpace(latest.Account))), UserID: latest.UserID, VendorID: latest.VendorID, Account: latest.Account, Plan: latest.Plan, LatestSubmissionID: latest.ID, LatestSubmittedAt: latest.CreatedAt, SubmissionStatus: latest.Status, IdentityKey: accountDigest("unconfirmed")}
-			if err == nil {
-				row.CurrentSubmissionID = &current.ID
-				row.Plan, row.RemoteID, row.PlatformAccountID = current.Plan, current.RemoteID, current.PlatformAccountID
-				row.IdentityKey = remoteIdentity(current)
-			}
-			if err = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
-				return err
-			}
-			var existing SyncedAccount
-			if err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("account_key = ?", row.AccountKey).First(&existing).Error; err != nil {
-				return err
-			}
-			// A slower concurrent refresh must not restore an older submission.
-			if existing.LatestSubmittedAt.After(row.LatestSubmittedAt) || (existing.LatestSubmittedAt.Equal(row.LatestSubmittedAt) && existing.LatestSubmissionID > row.LatestSubmissionID) {
-				continue
-			}
-			// A newly accepted submission with the same remote ID and plan is
-			// still the same lifetime. A later return to an old ID or plan starts
-			// a fresh lifetime and must not revive its historical observations.
-			if existing.CurrentSubmissionID != nil && row.CurrentSubmissionID != nil && existing.RemoteID != nil && row.RemoteID != nil && *existing.RemoteID == *row.RemoteID && existing.Plan == row.Plan {
-				row.IdentityKey = existing.IdentityKey
-			}
-			updates := map[string]any{"account": row.Account, "plan": row.Plan, "latest_submission_id": row.LatestSubmissionID, "latest_submitted_at": row.LatestSubmittedAt, "submission_status": row.SubmissionStatus, "current_submission_id": row.CurrentSubmissionID, "remote_id": row.RemoteID, "platform_account_id": row.PlatformAccountID, "identity_key": row.IdentityKey}
-			if existing.IdentityKey != row.IdentityKey {
-				updates["snapshot_status"], updates["last_success_at"], updates["last_attempt_at"], updates["last_error"] = nil, nil, nil, ""
-				updates["supplier_record_id"], updates["auth_json_updated_at"] = nil, nil
-			}
-			if err = tx.Model(&existing).Updates(updates).Error; err != nil {
+			if _, err := ensureSyncedAccountTx(tx, latest); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// This helper always uses the caller's transaction. Submission acceptance and
+// its first account identity can therefore commit together with follow-up work.
+func ensureSyncedAccountForSubmissionTx(tx *gorm.DB, submission Submission) (SyncedAccount, error) {
+	var latest Submission
+	if err := accountGroup(tx.Model(&Submission{}).Select("id, user_id, vendor_id, account, plan, status, remote_id, platform_account_id, created_at"), submission).
+		Order("created_at DESC, id DESC").First(&latest).Error; err != nil {
+		return SyncedAccount{}, err
+	}
+	return ensureSyncedAccountTx(tx, latest)
+}
+
+func ensureSyncedAccountTx(tx *gorm.DB, latest Submission) (SyncedAccount, error) {
+	var current Submission
+	err := accountGroup(tx.Model(&Submission{}).Select("id, user_id, vendor_id, account, plan, status, remote_id, platform_account_id, created_at"), latest).Where("status = ? AND remote_id IS NOT NULL AND remote_id <> ?", "accepted", "").Order("created_at DESC, id DESC").First(&current).Error
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return SyncedAccount{}, err
+	}
+	row := SyncedAccount{AccountKey: accountDigest(idString(latest.UserID), idString(latest.VendorID), strings.ToLower(strings.TrimSpace(latest.Account))), UserID: latest.UserID, VendorID: latest.VendorID, Account: latest.Account, Plan: latest.Plan, LatestSubmissionID: latest.ID, LatestSubmittedAt: latest.CreatedAt, SubmissionStatus: latest.Status, IdentityKey: accountDigest("unconfirmed")}
+	if err == nil {
+		row.CurrentSubmissionID = &current.ID
+		row.Plan, row.RemoteID, row.PlatformAccountID = current.Plan, current.RemoteID, current.PlatformAccountID
+		row.IdentityKey = remoteIdentity(current)
+	}
+	if err = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+		return SyncedAccount{}, err
+	}
+	var existing SyncedAccount
+	if err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("account_key = ?", row.AccountKey).First(&existing).Error; err != nil {
+		return SyncedAccount{}, err
+	}
+	// A slower concurrent refresh must not restore an older submission.
+	if existing.LatestSubmittedAt.After(row.LatestSubmittedAt) || (existing.LatestSubmittedAt.Equal(row.LatestSubmittedAt) && existing.LatestSubmissionID > row.LatestSubmissionID) {
+		return existing, nil
+	}
+	// A transaction may have read submissions before waiting for this row lock.
+	// Its latest submission can match while its accepted lifetime is still old
+	// (for example, an earlier running push completed in the meantime).
+	if existing.CurrentSubmissionID != nil && (row.CurrentSubmissionID == nil || *existing.CurrentSubmissionID != *row.CurrentSubmissionID) {
+		var accepted Submission
+		err := tx.Select("id, created_at").First(&accepted, *existing.CurrentSubmissionID).Error
+		if errors.Is(err, ErrNotFound) {
+			return existing, nil // The locked account is newer than this read snapshot.
+		}
+		if err != nil {
+			return SyncedAccount{}, err
+		}
+		if row.CurrentSubmissionID == nil || accepted.CreatedAt.After(current.CreatedAt) || (accepted.CreatedAt.Equal(current.CreatedAt) && accepted.ID > current.ID) {
+			return existing, nil
+		}
+	}
+	if existing.LatestSubmissionID == row.LatestSubmissionID && existing.SubmissionStatus != "running" && row.SubmissionStatus == "running" {
+		row.SubmissionStatus = existing.SubmissionStatus
+	}
+	// A newly accepted submission with the same remote ID and plan is
+	// still the same lifetime. A later return to an old ID or plan starts
+	// a fresh lifetime and must not revive its historical observations.
+	if existing.CurrentSubmissionID != nil && row.CurrentSubmissionID != nil && existing.RemoteID != nil && row.RemoteID != nil && *existing.RemoteID == *row.RemoteID && existing.Plan == row.Plan {
+		row.IdentityKey = existing.IdentityKey
+	}
+	updates := map[string]any{"account": row.Account, "plan": row.Plan, "latest_submission_id": row.LatestSubmissionID, "latest_submitted_at": row.LatestSubmittedAt, "submission_status": row.SubmissionStatus, "current_submission_id": row.CurrentSubmissionID, "remote_id": row.RemoteID, "platform_account_id": row.PlatformAccountID, "identity_key": row.IdentityKey}
+	if existing.IdentityKey != row.IdentityKey {
+		updates["snapshot_status"], updates["last_success_at"], updates["last_attempt_at"], updates["last_error"] = nil, nil, nil, ""
+		updates["supplier_record_id"], updates["auth_json_updated_at"] = nil, nil
+	}
+	if err = tx.Model(&existing).Updates(updates).Error; err != nil {
+		return SyncedAccount{}, err
+	}
+	err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, existing.ID).Error
+	return existing, err
 }
 
 const exchangeRateCNYPerUSD = 7.2

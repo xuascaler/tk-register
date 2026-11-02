@@ -45,6 +45,30 @@ The account detail page shows cumulative spending, input/output tokens, quota-wi
 
 **Submission history** lists saved submission attempts; opening or refreshing a history list reads those stored records. Individual submission details retain their explicit status and billing queries. These queries are separate from scheduled account-usage collection, and account usage pages do not alter the account-submission workflow.
 
+## Automatic Sync after API submission
+
+A newly accepted API account submission with a valid vendor account ID schedules one targeted account read for **three seconds after acceptance**. The original submission response is returned without waiting for this read. The worker runs in the existing backend process and updates the same account snapshot used by Accounts and the personal-token lookup API. No additional frontend polling or special display is added. Loading a page or calling lookup still reads saved data only.
+
+The accepted submission, stable local account and pending job are committed in one database transaction. The `account_post_submit_sync_jobs` table stores:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Local job ID. |
+| `submission_id` | Unique foreign key to `submissions.id`; at most one job per accepted API submission. |
+| `account_id` | Foreign key to `synced_accounts.id`, the stable local account. |
+| `user_id` | Foreign key to `users.id`, the account owner. |
+| `identity_key` | Account lifetime captured when the task is queued. |
+| `status` | `pending`, `running`, `succeeded`, `failed` or `skipped`. |
+| `next_run_at` | Earliest execution time in UTC; initially acceptance time plus three seconds. |
+| `created_at`, `started_at`, `finished_at` | Job lifecycle timestamps in UTC. |
+| `last_error` | Sanitized outcome without credentials or upstream response bodies. |
+
+The worker checks for due work every second and handles one job at a time. It uses the same Redis lease, `tk-register:account-sync:lease`, as scheduled and manual synchronization. When that lease is occupied, it does not contact the supplier or mark an attempt started; it leaves the job pending and writes `next_run_at = now + 5 seconds` to the database. Execution can therefore occur later than three seconds when other collection work is active.
+
+After acquiring the lease, the worker claims the task atomically, signs in with the currently saved supplier website credentials, and queries only the submitted account. It validates ownership, vendor, account identity and the current accepted submission before querying and before saving. Changed or ineligible targets are skipped. Saved credentials are required; the periodic `enabled` switch controls the periodic schedule only.
+
+A completed collection succeeds or fails once; the job does not automatically retry the query, and it never repeats account creation. The existing single reauthentication on an expired supplier session remains part of a collection attempt. Failure retains prior successful data. Pending jobs survive backend restarts; interrupted running jobs older than two minutes are marked failed instead of replayed. Manual Sync and the regular two-hour schedule remain available. Historical accepted submissions are not backfilled into this queue.
+
 ## Values and history
 
 - Supplier `cpa_usage.cost` is expressed in micro-CNY. The server divides it by **1,000,000** and continues to store the resulting amount as `cost_total` with currency `CNY`. The saved original amount and currency are unchanged.
