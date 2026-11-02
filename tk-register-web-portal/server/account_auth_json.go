@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,9 @@ type authJSONProblem struct {
 }
 
 func authJSONError(err error) authJSONProblem {
+	if errors.Is(err, core.ErrAccountOwnershipConflict) {
+		return authJSONProblem{409, "ACCOUNT_OWNERSHIP_CONFLICT", "This account has conflicting ownership records. An administrator must resolve them before its credentials can be updated."}
+	}
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
 		switch upstream.Code {
@@ -57,13 +61,26 @@ func authJSONError(err error) authJSONProblem {
 }
 func authJSONFail(w http.ResponseWriter, p authJSONProblem) { fail(w, p.status, p.code, p.message) }
 
+// Both the cookie-authenticated editor and the personal-token API use the same
+// validation, locks, vendor write, audit and immediate refresh. The API adapter
+// supplies parsed input and a public response projection, never a fake session.
+type authJSONOperation struct {
+	Token         *core.UserAPIToken
+	Input         any
+	FormatAccount func(core.AccountDTO) any
+}
+
 func (a *app) accountAuthJSON(w http.ResponseWriter, r *http.Request, user *core.User, id uint64, admin bool, lookup func(uint64) (core.AccountDTO, error)) {
+	a.runAccountAuthJSON(w, r, user, id, admin, lookup, authJSONOperation{})
+}
+
+func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *core.User, id uint64, admin bool, lookup func(uint64) (core.AccountDTO, error), operation authJSONOperation) {
 	if r.Method != "GET" && r.Method != "POST" {
 		fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
 		return
 	}
-	// accountSyncRoutes has already performed the session/CSRF, role and owner
-	// checks. Re-read the scoped row instead of trusting any client-supplied ID.
+	// The adapter has authenticated the caller. Re-read the scoped row instead
+	// of trusting any client-supplied ID. Personal tokens never get admin scope.
 	query := a.store.DB.WithContext(r.Context()).Where("id = ?", id)
 	if !admin {
 		query = query.Where("user_id = ?", user.ID)
@@ -84,6 +101,14 @@ func (a *app) accountAuthJSON(w http.ResponseWriter, r *http.Request, user *core
 	}
 	if !vendor.Enabled || vendor.Code != "tk-register-0" || vendor.BaseURL != supplier.Origin || !strings.HasPrefix(target.Plan, "claude/") {
 		fail(w, 409, "AUTH_JSON_UNSUPPORTED", "Auth JSON updates are unavailable for this account or vendor.")
+		return
+	}
+	if err := a.store.CheckAuthJSONOwnership(r.Context(), target); err != nil {
+		if errors.Is(err, core.ErrAccountOwnershipConflict) {
+			fail(w, 409, "ACCOUNT_OWNERSHIP_CONFLICT", "This account has conflicting ownership records. An administrator must resolve them before its credentials can be updated.")
+		} else {
+			internal(w)
+		}
 		return
 	}
 	values, err := a.store.Settings(r.Context())
@@ -133,18 +158,23 @@ func (a *app) accountAuthJSON(w http.ResponseWriter, r *http.Request, user *core
 		ok(w, map[string]any{"account": info.Account, "plan": info.Plan, "editable": info.Editable, "reason": info.Reason, "supplier_record_id": info.RecordID, "updated_at": target.AuthJSONUpdatedAt})
 		return
 	}
-	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+	contentType, _, parseErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if parseErr != nil || contentType != "application/json" {
 		fail(w, 415, "INVALID_CONTENT_TYPE", "Use application/json.")
 		return
 	}
-	var input struct {
-		AuthJSON any `json:"auth_json"`
+	inputAuthJSON := operation.Input
+	if operation.Token == nil {
+		var input struct {
+			AuthJSON any `json:"auth_json"`
+		}
+		if err = common.DecodeJson(http.MaxBytesReader(w, r.Body, 3<<20), &input); err != nil {
+			fail(w, 400, "INVALID_REQUEST", "Provide auth_json as a JSON object or JSON string.")
+			return
+		}
+		inputAuthJSON = input.AuthJSON
 	}
-	if err = common.DecodeJson(http.MaxBytesReader(w, r.Body, 3<<20), &input); err != nil {
-		fail(w, 400, "INVALID_REQUEST", "Provide auth_json as a JSON object or JSON string.")
-		return
-	}
-	normalized, err := core.ValidateClaudeAuthJSON(input.AuthJSON)
+	normalized, err := core.ValidateClaudeAccountAuthJSON(inputAuthJSON, target.Account)
 	if err != nil {
 		vendorFailure(w, err)
 		return
@@ -192,14 +222,39 @@ func (a *app) accountAuthJSON(w http.ResponseWriter, r *http.Request, user *core
 	// persist its outcome even when the browser navigates away or disconnects.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 55*time.Second)
 	defer cancel()
-	audit, err := a.store.BeginAuthJSONUpdate(ctx, target, user.ID, w.Header().Get("X-Request-ID"))
+	source := "web"
+	var tokenID, tokenRevision *uint64
+	if operation.Token != nil {
+		source = "api"
+		tokenID, tokenRevision = &operation.Token.ID, &operation.Token.Revision
+	}
+	audit, err := a.store.BeginAuthJSONUpdateWithSource(ctx, target, user.ID, w.Header().Get("X-Request-ID"), source, tokenID, tokenRevision)
 	if err != nil {
 		if errors.Is(err, core.ErrAccountIdentityChanged) {
 			fail(w, 409, "ACCOUNT_CHANGED", "This account changed. Reload the page before updating.")
+		} else if errors.Is(err, core.ErrInvalidAPIToken) {
+			bearerFailure(w)
+		} else if errors.Is(err, core.ErrAPITokenScope) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="tk-register", error="insufficient_scope", scope="`+core.ClaudeAuthJSONUpdateScope+`"`)
+			fail(w, 403, "INSUFFICIENT_SCOPE", "This API token does not have the required permission.")
+		} else if errors.Is(err, core.ErrAccountOwnershipConflict) {
+			fail(w, 409, "ACCOUNT_OWNERSHIP_CONFLICT", "This account has conflicting ownership records. An administrator must resolve them before its credentials can be updated.")
 		} else {
 			internal(w)
 		}
 		return
+	}
+	auditID := strconv.FormatUint(audit.ID, 10)
+	w.Header().Set("X-Auth-JSON-Audit-ID", auditID)
+	// A newly resolved website ID can conflict even when no ID was saved on
+	// this local row. Recheck after resolution and before the supplier PUT.
+	selection.BeforeUpdate = func(checkCtx context.Context, info supplier.EditInfo) error {
+		if !strings.EqualFold(strings.TrimSpace(info.Account), strings.TrimSpace(target.Account)) {
+			return errors.New("supplier account identity mismatch")
+		}
+		confirmed := target
+		confirmed.SupplierRecordID = &info.RecordID
+		return a.store.CheckAuthJSONOwnership(checkCtx, confirmed)
 	}
 	updateCtx, updateCancel := context.WithTimeout(ctx, 35*time.Second)
 	info, updateErr := editor.UpdateAuthJSON(updateCtx, username, password, selection, json.RawMessage(raw))
@@ -213,7 +268,7 @@ func (a *app) accountAuthJSON(w http.ResponseWriter, r *http.Request, user *core
 		status = "failed"
 		if code == "AUTH_JSON_UPDATE_UNCONFIRMED" {
 			status = "unknown"
-		} else if code == "AUTH_JSON_UPDATE_REJECTED" || code == "AUTH_JSON_NOT_EDITABLE" {
+		} else if code == "AUTH_JSON_UPDATE_REJECTED" || code == "AUTH_JSON_NOT_EDITABLE" || code == "ACCOUNT_OWNERSHIP_CONFLICT" {
 			status = "rejected"
 		}
 	}
@@ -258,8 +313,12 @@ func (a *app) accountAuthJSON(w http.ResponseWriter, r *http.Request, user *core
 	// because subsequent persistence/readback fails.
 	account, lookupErr := lookup(id)
 	if lookupErr != nil {
-		ok(w, map[string]any{"updated": true, "refresh_status": "failed", "refresh_message": "Auth JSON updated, but local account data could not be loaded. Reload the page.", "account": nil, "updated_at": at})
+		ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": "failed", "refresh_message": "Auth JSON updated, but local account data could not be loaded. Reload the page.", "account": nil, "updated_at": at})
 		return
 	}
-	ok(w, map[string]any{"updated": true, "refresh_status": refreshStatus, "refresh_message": refreshMessage, "account": account, "updated_at": at})
+	var result any = account
+	if operation.FormatAccount != nil {
+		result = operation.FormatAccount(account)
+	}
+	ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": refreshStatus, "refresh_message": refreshMessage, "account": result, "updated_at": at})
 }

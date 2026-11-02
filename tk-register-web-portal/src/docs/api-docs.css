@@ -265,7 +265,7 @@
 .api-docs-disclosure-body > .api-docs-table:first-child { margin-top: 0; }
 .api-docs-note { font-size: 13px; margin-top: 24px; }
 .api-docs-bullets { display: grid; gap: 10px; margin: 14px 0; padding-left: 21px; color: var(--muted); }
-.api-docs-next-links { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 30px; }
+.api-docs-next-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 30px; }
 .api-docs-next-links a { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 62px; padding: 15px 18px; border: 1px solid #dce6f3; border-radius: 8px; background: #f8fafd; font-size: 13px; font-weight: 500; }
 .api-docs-next-links a:hover { background: #edf3fb; text-decoration: none; }
 .api-docs-feedback:empty { display: none; }

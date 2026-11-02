@@ -198,11 +198,14 @@ func TestAPITokenScopePermissionsAndNoAdministratorBypass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(DefaultAPITokenScope) > 32 {
+	if !reflect.DeepEqual(generated.Token.Scopes, strings.Fields(DefaultAPITokenScope)) {
+		t.Fatal("token metadata does not reflect granted scopes")
+	}
+	if len(DefaultAPITokenScope) > 128 {
 		t.Fatal("default scopes exceed stored column size")
 	}
 	id, _ := ParseBusinessID(generated.Token.ID)
-	for _, scope := range []string{ClaudeSubmitScope, AccountsReadScope} {
+	for _, scope := range []string{ClaudeSubmitScope, AccountsReadScope, ClaudeAuthJSONUpdateScope} {
 		got, _, err := s.AuthenticateAPITokenForScope(ctx, generated.PlaintextToken, scope)
 		if err != nil || got.ID != u.ID {
 			t.Fatal("default token lacks advertised permission", scope, err)
@@ -247,7 +250,7 @@ func TestAPITokenScopePermissionsAndNoAdministratorBypass(t *testing.T) {
 	if _, _, err = s.AuthenticateAPITokenForScope(ctx, generated.PlaintextToken, AccountsReadScope); !errors.Is(err, ErrInvalidAPIToken) {
 		t.Fatal("rotation left old read credential active")
 	}
-	for _, scope := range []string{ClaudeSubmitScope, AccountsReadScope} {
+	for _, scope := range []string{ClaudeSubmitScope, AccountsReadScope, ClaudeAuthJSONUpdateScope} {
 		if _, _, err = s.AuthenticateAPITokenForScope(ctx, rotated.PlaintextToken, scope); err != nil {
 			t.Fatal("rotated token lacks default permission", scope, err)
 		}
@@ -315,7 +318,7 @@ func TestLegacyAPITokenScopeMigrationRunsOnOpenAndIsIdempotent(t *testing.T) {
 		for j := range after {
 			want := before[j]
 			if want.Scope == ClaudeSubmitScope {
-				want.Scope = DefaultAPITokenScope
+				want.Scope = legacyReadAPITokenScope
 			}
 			if !reflect.DeepEqual(after[j], want) {
 				t.Fatal("migration changed token fields beyond the legacy scope")
@@ -334,6 +337,11 @@ func TestLegacyAPITokenScopeMigrationRunsOnOpenAndIsIdempotent(t *testing.T) {
 			}
 		} else if !errors.Is(err, ErrInvalidAPIToken) {
 			t.Fatal("migration revived invalid credential", kind, err)
+		}
+	}
+	for _, kind := range []string{"active", "read-only"} {
+		if _, _, err = s.AuthenticateAPITokenForScope(ctx, raw[kind], ClaudeAuthJSONUpdateScope); !errors.Is(err, ErrAPITokenScope) {
+			t.Fatal("historical read migration silently granted Auth JSON update", kind, err)
 		}
 	}
 	// An explicit permission reduction after upgrade must survive later starts.

@@ -44,15 +44,32 @@ func lookupParameters(r *http.Request) (username, account string, valid bool) {
 	}
 	username = core.NormalizeEmail(params.Get("username"))
 	account = strings.TrimSpace(params.Get("account"))
+	return username, account, validAccountLookupIdentity(username, account)
+}
+
+func validAccountLookupIdentity(username, account string) bool {
 	if !core.ValidEmail(username) || !utf8.ValidString(account) || len(account) == 0 || len(account) > 254 {
-		return "", "", false
+		return false
 	}
 	for _, c := range account {
 		if unicode.IsSpace(c) || unicode.IsControl(c) {
-			return "", "", false
+			return false
 		}
 	}
-	return username, account, true
+	return true
+}
+
+func publicAccountLookup(row core.AccountDTO, username string, intervalHours int) accountLookupResult {
+	var lastError *string
+	if row.LastError != "" {
+		lastError = &row.LastError
+	}
+	return accountLookupResult{
+		ID: row.ID, Username: username, Account: row.Account, Vendor: "tk-register-0", Plan: row.Plan,
+		RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, SubmissionStatus: row.SubmissionStatus,
+		Snapshot: row.Snapshot, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt,
+		LastError: lastError, IntervalHours: intervalHours,
+	}
 }
 
 func (a *app) claudeAccountLookupAPI(w http.ResponseWriter, r *http.Request) {
@@ -104,14 +121,5 @@ func (a *app) claudeAccountLookupAPI(w http.ResponseWriter, r *http.Request) {
 		internal(w)
 		return
 	}
-	var lastError *string
-	if row.LastError != "" {
-		lastError = &row.LastError
-	}
-	ok(w, accountLookupResult{
-		ID: row.ID, Username: user.Email, Account: row.Account, Vendor: "tk-register-0", Plan: row.Plan,
-		RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, SubmissionStatus: row.SubmissionStatus,
-		Snapshot: row.Snapshot, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt,
-		LastError: lastError, IntervalHours: settings.Int("account_sync_interval_hours"),
-	})
+	ok(w, publicAccountLookup(row, user.Email, settings.Int("account_sync_interval_hours")))
 }

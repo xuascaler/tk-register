@@ -31,6 +31,10 @@ const (
 type Target struct {
 	Account  string
 	RecordID string
+	// BeforeUpdate checks local ownership against the freshly resolved website
+	// row, while the caller still holds its mutation lease. It is never invoked
+	// by read-only preflight or collection and receives no supplier credentials.
+	BeforeUpdate func(context.Context, EditInfo) error
 }
 
 // EditInfo contains no existing credentials or other private supplier fields.
@@ -251,6 +255,11 @@ func (c *Client) UpdateAuthJSON(ctx context.Context, username, password string, 
 	}
 	if !row.info.Editable {
 		return row.info, authError(CodeNotEditable)
+	}
+	if target.BeforeUpdate != nil {
+		if err := target.BeforeUpdate(ctx, row.info); err != nil {
+			return row.info, err
+		}
 	}
 	body, err := row.updateBody(authJSON)
 	if err != nil {

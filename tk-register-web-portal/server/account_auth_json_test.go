@@ -30,12 +30,17 @@ func (m *mockAuthEditor) CheckAuthJSON(_ context.Context, u, p string, target su
 	m.target = target
 	return m.info, m.checkErr
 }
-func (m *mockAuthEditor) UpdateAuthJSON(_ context.Context, u, p string, target supplier.Target, raw json.RawMessage) (supplier.EditInfo, error) {
+func (m *mockAuthEditor) UpdateAuthJSON(ctx context.Context, u, p string, target supplier.Target, raw json.RawMessage) (supplier.EditInfo, error) {
 	m.updates++
 	m.target = target
 	m.raw = raw
 	if m.onUpdate != nil {
 		m.onUpdate()
+	}
+	if target.BeforeUpdate != nil {
+		if err := target.BeforeUpdate(ctx, m.info); err != nil {
+			return m.info, err
+		}
 	}
 	return m.info, m.updateErr
 }
@@ -64,7 +69,9 @@ func setupAuthUpdate(t *testing.T) (*app, *core.User, *http.Cookie, string, core
 	return a, owner, cookie, csrf, target, fake
 }
 func authInput() map[string]any {
-	return map[string]any{"auth_json": submissionParameters()["auth_json"]}
+	credentials := submissionParameters()["auth_json"].(map[string]any)
+	credentials["email"] = "account@example.com"
+	return map[string]any{"auth_json": credentials}
 }
 func authRoute(id uint64) string { return fmt.Sprintf("accounts/%d/auth-json", id) }
 func authAudits(t *testing.T, a *app) []core.AccountAuthJSONAudit {
@@ -123,7 +130,7 @@ func TestAuthJSONUpdatePersistsMetadataAndImmediatelyRefreshes(t *testing.T) {
 		t.Fatal("verified mapping was not retained")
 	}
 
-	raw, _ := common.Marshal(submissionParameters()["auth_json"])
+	raw, _ := common.Marshal(authInput()["auth_json"])
 	w = request(t, a, "POST", authRoute(target.ID), map[string]any{"auth_json": string(raw)}, cookie, csrf)
 	requireStatus(t, w, 200)
 	assertNoSecrets(t, w.Body.String())

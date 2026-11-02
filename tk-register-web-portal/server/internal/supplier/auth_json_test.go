@@ -310,3 +310,57 @@ func TestCollectAccountRefreshesTargetUsageWithFreshLogin(t *testing.T) {
 		t.Fatalf("incorrect immediate refresh: %+v", a)
 	}
 }
+
+func TestAuthJSONUpdateChecksFreshResolvedIdentityBeforePUT(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reject=%t", reject), func(t *testing.T) {
+			puts, checks := 0, 0
+			guardErr := errors.New("local ownership conflict")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client, fixture := authClient(t, oneRecord(editableFixture(99, "account@example.com")), func(r *http.Request) (*http.Response, error) {
+				puts++
+				if checks != 1 {
+					t.Fatal("PUT ran before local ownership guard")
+				}
+				return jsonResponse(200, map[string]bool{"success": true}), nil
+			})
+			target := Target{Account: "account@example.com", RecordID: "88", BeforeUpdate: func(gotCtx context.Context, info EditInfo) error {
+				checks++
+				if gotCtx != ctx || info.RecordID != "99" || info.Account != "account@example.com" || !info.Editable {
+					t.Fatal("guard did not receive fresh exact-match identity and bounded context")
+				}
+				if reject {
+					return guardErr
+				}
+				return nil
+			}}
+			if _, err := client.CheckAuthJSON(ctx, "supplier-user", "private-password-中文", target); err != nil || checks != 0 {
+				t.Fatal("read-only preflight invoked mutation guard", err)
+			}
+			info, err := client.UpdateAuthJSON(ctx, "supplier-user", "private-password-中文", target, json.RawMessage(`{"access_token":"new"}`))
+			if checks != 1 || info.RecordID != "99" || fixture.logins != 2 || fixture.reads != 2 {
+				t.Fatal("guard skipped, repeated, or added extra supplier lookup")
+			}
+			if reject {
+				if puts != 0 || !errors.Is(err, guardErr) {
+					t.Fatal("ownership rejection allowed PUT or lost typed error", err)
+				}
+			} else if puts != 1 || err != nil {
+				t.Fatal("approved write did not run exactly once", err)
+			}
+		})
+	}
+}
+
+func TestAuthJSONUpdateDoesNotRunOwnershipGuardForIneligibleRecord(t *testing.T) {
+	row := editableFixture(99, "account@example.com")
+	row["is_locked"] = 1
+	client, _ := authClient(t, oneRecord(row), nil)
+	target := Target{Account: "account@example.com", BeforeUpdate: func(context.Context, EditInfo) error {
+		t.Fatal("guard ran for supplier-rejected account")
+		return nil
+	}}
+	_, err := client.UpdateAuthJSON(context.Background(), "supplier-user", "private-password-中文", target, json.RawMessage(`{"access_token":"new"}`))
+	requireSupplierCode(t, err, CodeNotEditable)
+}

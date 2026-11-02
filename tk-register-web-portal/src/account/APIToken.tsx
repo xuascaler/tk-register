@@ -13,6 +13,7 @@ type Token = {
   last_used_at: string | null;
   expires_at: string | null;
   revoked_at: string | null;
+  scopes?: string[];
 };
 type TokenResponse = { token: Token | null; plaintext_token?: string };
 type Action = 'generate' | 'rotate' | 'revoke';
@@ -98,6 +99,7 @@ export default function APIToken() {
   const token = data?.token;
   const expired = Boolean(token?.expires_at && new Date(token.expires_at).getTime() <= Date.now());
   const active = Boolean(token && !token.revoked_at && !expired);
+  const canUpdateAuthJSON = Boolean(token?.scopes?.includes('claude:auth-json:update'));
 
   async function copy(value: string) {
     setCopyError('');
@@ -169,12 +171,12 @@ export default function APIToken() {
     <div className='account-row'>
       <div className='account-label'>Personal access</div>
       <div className='account-value api-token-content' aria-busy={busy || loading}>
-        <p className='api-token-description'>Submit accounts and read saved status and usage for your own accounts. API submissions appear in your submission history.</p>
+        <p className='api-token-description'>Submit accounts, read saved status and usage, and update Auth JSON for your own accounts. API submissions appear in your submission history.</p>
         {loading ? <Loading label='Loading token…' /> : data ? <>
           <div className={`api-token-card ${plaintext && active ? 'has-plaintext' : ''}`}>
             <div className='api-token-card-heading'>
               <span className='api-token-key'><KeyRound aria-hidden='true' /></span>
-              <div><h3>{active ? 'Your API token' : token?.revoked_at ? 'Token revoked' : expired ? 'Token expired' : 'No API token yet'}</h3><p>{active ? 'Submission and account lookup access' : 'Generate a token to submit accounts and read your saved account data.'}</p></div>
+              <div><h3>{active ? 'Your API token' : token?.revoked_at ? 'Token revoked' : expired ? 'Token expired' : 'No API token yet'}</h3><p>{active ? canUpdateAuthJSON ? 'Submission, account lookup, and Auth JSON updates' : 'Submission and account lookup access' : 'Generate a token to access your accounts through the API.'}</p></div>
               {active && <span className='verified'><ShieldCheck aria-hidden='true' />Active</span>}
             </div>
             {active && token && <>
@@ -183,6 +185,7 @@ export default function APIToken() {
                 {plaintext && <button type='button' className='api-token-icon-button' onClick={() => void copy(plaintext)} aria-label={copied ? 'Token copied' : 'Copy API token'} title={copied ? 'Copied' : 'Copy token'}>{copied ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}</button>}
               </div>
               <p className='account-help api-token-secret-help'>{plaintext ? 'Copy and save this token securely. Leaving this page hides it.' : 'For security, only the beginning and end are shown. Regenerate if you need a new token.'}</p>
+              {token.scopes && !canUpdateAuthJSON && <p className='account-help'>Auth JSON update access is unavailable for this token. Ask an administrator to check its permissions.</p>}
               <dl className='api-token-metadata'><div><dt>Created</dt><dd>{dateLabel(token.created_at)}</dd></div><div><dt>Last used</dt><dd>{token.last_used_at ? dateLabel(token.last_used_at) : 'Not used yet'}</dd></div>{token.expires_at && <div><dt>Expires</dt><dd>{dateLabel(token.expires_at)}</dd></div>}</dl>
             </>}
             <div className='api-token-actions'>

@@ -162,6 +162,10 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, errors.New("could not migrate API token permissions")
 	}
+	if err = s.migrateAPITokenAuthJSONScope(); err != nil {
+		s.Close()
+		return nil, errors.New("could not migrate Auth JSON API permissions")
+	}
 	if err = s.migrateAdmin(); err != nil {
 		s.Close()
 		return nil, err

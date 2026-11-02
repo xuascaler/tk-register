@@ -15,9 +15,12 @@ import (
 )
 
 const (
-	ClaudeSubmitScope    = "claude:submit"
-	AccountsReadScope    = "accounts:read"
-	DefaultAPITokenScope = ClaudeSubmitScope + " " + AccountsReadScope
+	ClaudeSubmitScope         = "claude:submit"
+	AccountsReadScope         = "accounts:read"
+	ClaudeAuthJSONUpdateScope = "claude:auth-json:update"
+	// Keep the historical migration separate from permissions granted to newly issued tokens.
+	legacyReadAPITokenScope = ClaudeSubmitScope + " " + AccountsReadScope
+	DefaultAPITokenScope    = legacyReadAPITokenScope + " " + ClaudeAuthJSONUpdateScope
 )
 
 var ErrInvalidAPIToken = errors.New("invalid API token")
@@ -33,6 +36,7 @@ type dataMigration struct {
 }
 
 const apiTokenReadScopeMigration = "api_token_accounts_read_v1"
+const apiTokenAuthJSONScopeMigration = "api_token_auth_json_update_v1"
 
 // Existing submission tokens gain own-account reads once without changing their
 // digest, revision, expiration or revocation. Later scope reductions are kept.
@@ -56,12 +60,56 @@ func (s *Store) migrateAPITokenReadScope() error {
 		if stored.ClaimID != marker.ClaimID {
 			return nil
 		}
-		return tx.Model(&UserAPIToken{}).Where("scope = ?", ClaudeSubmitScope).UpdateColumn("scope", DefaultAPITokenScope).Error
+		return tx.Model(&UserAPIToken{}).Where("scope = ?", ClaudeSubmitScope).UpdateColumn("scope", legacyReadAPITokenScope).Error
+	})
+}
+
+// Existing legitimate personal tokens gain Auth JSON updates once, without
+// rotation or any change to credential validity. Later explicit permission
+// reductions remain in effect across restarts. The durable claim and updates
+// share one transaction so a failed startup can safely retry the migration.
+func (s *Store) migrateAPITokenAuthJSONScope() error {
+	if err := s.DB.AutoMigrate(&dataMigration{}); err != nil {
+		return err
+	}
+	claim := make([]byte, 16)
+	if _, err := rand.Read(claim); err != nil {
+		return err
+	}
+	marker := dataMigration{Key: apiTokenAuthJSONScopeMigration, ClaimID: hex.EncodeToString(claim), AppliedAt: time.Now().UTC()}
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&marker).Error; err != nil {
+			return err
+		}
+		var stored dataMigration
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(clause.Eq{Column: "key", Value: marker.Key}).First(&stored).Error; err != nil {
+			return err
+		}
+		if stored.ClaimID != marker.ClaimID {
+			return nil
+		}
+		var tokens []UserAPIToken
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "scope").Find(&tokens).Error; err != nil {
+			return err
+		}
+		for _, token := range tokens {
+			if apiTokenHasScope(token.Scope, ClaudeAuthJSONUpdateScope) || (!apiTokenHasScope(token.Scope, ClaudeSubmitScope) && !apiTokenHasScope(token.Scope, AccountsReadScope)) {
+				continue
+			}
+			scope := strings.TrimSpace(token.Scope) + " " + ClaudeAuthJSONUpdateScope
+			if len(scope) > 128 {
+				return errors.New("API token permissions exceed stored column size")
+			}
+			if err := tx.Model(&UserAPIToken{}).Where("id = ?", token.ID).UpdateColumn("scope", scope).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
 func apiTokenHasScope(granted, required string) bool {
-	if required != ClaudeSubmitScope && required != AccountsReadScope {
+	if required != ClaudeSubmitScope && required != AccountsReadScope && required != ClaudeAuthJSONUpdateScope {
 		return false
 	}
 	for _, scope := range strings.Fields(granted) {
@@ -81,7 +129,7 @@ type UserAPIToken struct {
 	TokenHash  string     `gorm:"size:64;not null;uniqueIndex" json:"-"`
 	Prefix     string     `gorm:"size:16;not null" json:"-"`
 	LastFour   string     `gorm:"size:4;not null" json:"-"`
-	Scope      string     `gorm:"size:32;not null" json:"-"`
+	Scope      string     `gorm:"size:128;not null" json:"-"`
 	Revision   uint64     `gorm:"not null;default:1" json:"-"`
 	UseCount   uint64     `gorm:"not null;default:0" json:"-"`
 	CreatedAt  time.Time  `json:"-"`
@@ -92,6 +140,7 @@ type UserAPIToken struct {
 }
 
 type APITokenMetadata struct {
+	Scopes     []string   `json:"scopes"`
 	ID         string     `json:"id"`
 	Prefix     string     `json:"prefix"`
 	LastFour   string     `json:"last_four"`
@@ -108,7 +157,7 @@ type APITokenResult struct {
 }
 
 func apiTokenMetadata(t UserAPIToken) *APITokenMetadata {
-	return &APITokenMetadata{ID: idString(t.ID), Prefix: t.Prefix, LastFour: t.LastFour, Revision: t.Revision, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt, RevokedAt: t.RevokedAt}
+	return &APITokenMetadata{Scopes: strings.Fields(t.Scope), ID: idString(t.ID), Prefix: t.Prefix, LastFour: t.LastFour, Revision: t.Revision, CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, ExpiresAt: t.ExpiresAt, RevokedAt: t.RevokedAt}
 }
 
 func apiTokenHash(raw string) string {

@@ -140,9 +140,9 @@ All paths below are relative to `/tk-register/api` and require a TK session. Wri
 
 **My account → API documentation** is the in-app reference for every public token API. Open `/tk-register#/docs` for the endpoint directory, authentication and limits; each endpoint has linkable parameter, cURL, response and error sections. Examples use the current website origin. The guides never send live API requests or include the signed-in user's token. Profile, sign-in details and token management remain in **Account settings**.
 
-**Account settings → API token** lets an authenticated user generate, regenerate, copy and revoke their personal token for account submission and saved account lookup. The full token is returned only when generated or regenerated and is held only in the current page's memory. Reloading shows a masked identifier; lost tokens must be regenerated. Regeneration invalidates the previous token, and revocation prevents new requests with it. Requests already accepted for execution may finish.
+**Account settings → API token** lets an authenticated user generate, regenerate, copy and revoke their personal token for account submission, saved account lookup, and Auth JSON updates. The full token is returned only when generated or regenerated and is held only in the current page's memory. Reloading shows a masked identifier; lost tokens must be regenerated. Regeneration invalidates the previous token, and revocation prevents new requests with it. Requests already accepted for execution may finish.
 
-Tokens use 32 random bytes with a `tkr_` prefix. Only their SHA-256 digest and display fragments are stored in `user_api_tokens`; `user_id → users.id` is unique. The table also records scope, revision, creation, last-use, expiry and revocation timestamps. The default scopes are `claude:submit` and `accounts:read`. A one-time upgrade migration adds `accounts:read` to existing `claude:submit` tokens without changing their token value or revocation/expiry state; later restarts do not reapply the migration or overwrite subsequent scope changes. An administrator's personal token has the same owner-only submission and lookup permissions as a member's token. Tokens never authorize configuration, user administration, browser sessions or token management. Disabled, missing or unverified users cannot authenticate with a token.
+Tokens use 32 random bytes with a `tkr_` prefix. Only their SHA-256 digest and display fragments are stored in `user_api_tokens`; `user_id → users.id` is unique. The table also records scope, revision, creation, last-use, expiry and revocation timestamps. New tokens have `claude:submit`, `accounts:read`, and `claude:auth-json:update` scopes. The original account-lookup migration adds `accounts:read` to submission tokens. A separate one-time migration grants existing tokens Auth JSON update access without changing their value or revocation/expiry state; no regeneration is needed. Later restarts do not reapply the grants or overwrite subsequent scope changes. Safe token metadata returns the actual `scopes` array. An administrator's personal token has the same owner-only permissions as a member's token. Tokens never authorize configuration, user administration, browser sessions or token management. Disabled, missing or unverified users cannot authenticate with a token.
 
 | Browser method and path | Behavior |
 | --- | --- |
@@ -179,6 +179,20 @@ Authorization: Bearer <your TK Register API token>
 This endpoint requires `accounts:read` and both exact query identifiers, with no request body. It returns an owned account's saved status, cumulative usage, last successful collection time and sanitized latest collection error. It never triggers supplier login or synchronization. A personal administrator token cannot read another user's accounts. Missing or out-of-scope records return the same 404 response; the lookup limit is 60 requests per minute per user. The existing submission limit is unchanged.
 
 See the [Account Lookup API reference](docs/account-lookup-api.md) for cURL examples, response fields, null/zero/freshness behavior and error handling. The [Account usage collection guide](docs/account-sync.md) explains the default two-hour collection schedule and administrator configuration.
+
+### Auth JSON updates
+
+```http
+POST /tk-register/api/v1/vendors/tk-register-0/claude/accounts/auth-json
+Authorization: Bearer <personal token>
+Content-Type: application/json
+```
+
+Send `username`, `account`, and a complete `auth_json` object or JSON string. The token requires `claude:auth-json:update`; `username` must match its owner, and `auth_json.email` must match the submitted account after normalization. The API reuses the web editor's ownership, supplier identity, editability, locking, and update checks. Its limit is 10 update requests per minute per user, shared with web updates. It never automatically retries a supplier write.
+
+A confirmed update immediately attempts to refresh the account's status and usage. The response separates `updated` from `refresh_status`; a failed refresh does not undo the confirmed credential update. Each executed update has an audit record with source, actor, owner, account, token reference/revision, and separate update/refresh outcomes. It does not store the replacement credentials or create another submission. Keep `X-Request-ID` and, when present, `X-Auth-JSON-Audit-ID` for support.
+
+See the [Auth JSON Update API reference](docs/auth-json-update-api.md) for the full validation, cURL, response, audit, and error contract. The in-app guide is at `/tk-register#/docs/update-auth-json`.
 
 ## Administrator users and account pool
 

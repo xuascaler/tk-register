@@ -125,6 +125,10 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		a.claudeAccountLookupAPI(w, r)
 		return
 	}
+	if r.URL.Path == claudeAccountAuthJSONAPIPath {
+		a.claudeAccountAuthJSONAPI(w, r)
+		return
+	}
 	if r.Method != "GET" && r.Method != "HEAD" {
 		if r.Header.Get("Origin") != a.origin || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 			fail(w, 403, "ORIGIN_REJECTED", "This request must come from TK Register.")

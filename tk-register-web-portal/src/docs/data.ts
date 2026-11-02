@@ -1,4 +1,4 @@
-export type DocTopic = 'getting-started' | 'submit-account' | 'account-lookup';
+export type DocTopic = 'getting-started' | 'submit-account' | 'account-lookup' | 'update-auth-json';
 export type DocSection = 'parameters' | 'example' | 'response' | 'errors';
 export type EndpointTopic = Exclude<DocTopic, 'getting-started'>;
 
@@ -9,6 +9,7 @@ export const docTopics: { id: DocTopic; label: string }[] = [
   { id: 'getting-started', label: 'Getting started' },
   { id: 'submit-account', label: 'Submit account' },
   { id: 'account-lookup', label: 'Account lookup' },
+  { id: 'update-auth-json', label: 'Update Auth JSON' },
 ];
 
 export const docSections: { id: DocSection; label: string }[] = [
@@ -37,6 +38,15 @@ export const endpoints = {
     limit: '60 requests / minute',
     note: 'Reads saved data. Collection runs every 2 hours by default when enabled; administrators can change the interval. This request does not start a new collection.',
   },
+  'update-auth-json': {
+    title: 'Update Auth JSON',
+    method: 'POST',
+    path: `${accountsPath}/auth-json`,
+    description: 'Replace an owned Claude account’s authentication data, then refresh its status and usage.',
+    scope: 'claude:auth-json:update',
+    limit: '10 requests / minute',
+    note: 'Existing tokens gain update access automatically; you can keep using the same token. Updating credentials immediately attempts to refresh the account, but does not guarantee an active status.',
+  },
 } as const;
 
 export type FieldDefinition = {
@@ -60,6 +70,20 @@ export const submissionFields: FieldDefinition[] = [
   { name: 'register_time', type: 'string', required: true, description: 'Registration date as a valid calendar date in YYYY-MM-DD format.' },
   { name: 'plan_start_time', type: 'string', required: true, description: 'Plan start date in YYYY-MM-DD format.' },
   { name: 'plan_end_time', type: 'string', required: true, description: 'Plan end date in YYYY-MM-DD format, on or after plan_start_time.' },
+];
+
+export const authJSONUpdateFields: FieldDefinition[] = [
+  ...lookupFields,
+  { name: 'auth_json', type: 'object | string', required: true, description: 'The complete replacement authentication object, or its JSON string. Maximum 2 MiB. All 13 fields are required, and its email must match account after trimming and case normalization. Partial updates are not supported.' },
+];
+
+export const authJSONUpdateResponseFields: FieldDefinition[] = [
+  { name: 'updated', type: 'boolean', description: 'True only after the supplier confirms the credential update. Independent of the account’s active/inactive state.' },
+  { name: 'audit_id', type: 'string', description: 'Local Auth JSON update audit record ID. It is not a submission ID or a supplier account ID.' },
+  { name: 'updated_at', type: 'string', description: 'RFC3339 time when the supplier update completed.' },
+  { name: 'refresh_status', type: 'string', description: 'succeeded if account data was refreshed and saved; failed if refresh or local readback failed after the confirmed update.' },
+  { name: 'refresh_message', type: 'string', description: 'Safe human-readable explanation of the refresh outcome. Use refresh_status for program logic.' },
+  { name: 'account', type: 'object | null', description: 'The same safe account object returned by Account lookup. On refresh failure it can contain retained data; null if local readback failed. Check collection timestamps before treating it as fresh.' },
 ];
 
 export const optionalSubmissionFields: FieldDefinition[] = [
@@ -157,6 +181,24 @@ export const submissionErrors: ErrorDefinition[] = [
   { status: '504', code: 'UPSTREAM_TIMEOUT', description: 'The vendor request timed out. The account may already exist remotely; a manual retry is allowed.' },
 ];
 
+export const authJSONUpdateErrors: ErrorDefinition[] = [
+  { status: '400', code: 'INVALID_REQUEST / INVALID_PARAMETERS / INVALID_AUTH_JSON', description: 'Send only username, account, and a complete valid auth_json, each once. The request body must fit within 3 MiB and auth_json within 2 MiB. Correct missing fields, timestamps, device IDs, or proxy URL before retrying.' },
+  { status: '400', code: 'AUTH_JSON_EMAIL_MISMATCH', description: 'auth_json.email does not match the requested account after normalization. Supply credentials for that account.' },
+  ...sharedErrors,
+  { status: '404', code: 'ACCOUNT_NOT_FOUND / AUTH_JSON_ACCOUNT_NOT_FOUND', description: 'No owned local account matches, the username is not the token owner, or the supplier has no exact match for this account.' },
+  { status: '405', code: 'METHOD_NOT_ALLOWED', description: 'Use POST for this endpoint.' },
+  { status: '409', code: 'ACCOUNT_NOT_ACCEPTED / AUTH_JSON_UNSUPPORTED', description: 'The account has no accepted submission, or its vendor or plan does not support this operation.' },
+  { status: '409', code: 'ACCOUNT_OWNERSHIP_CONFLICT / AUTH_JSON_ACCOUNT_AMBIGUOUS', description: 'Account ownership or supplier identity is ambiguous. An administrator must resolve it before credentials can be changed.' },
+  { status: '409', code: 'AUTH_JSON_UPDATE_RUNNING / SYNC_RUNNING', description: 'Another update or collection is running. Wait for it to finish before starting a new request.' },
+  { status: '409', code: 'AUTH_JSON_NOT_EDITABLE / ACCOUNT_CHANGED', description: 'The supplier does not allow editing in the current state, or the local account changed during the operation. Check the account before trying again.' },
+  { status: '415', code: 'INVALID_CONTENT_TYPE', description: 'Send Content-Type: application/json.' },
+  { status: '429', code: 'RATE_LIMITED', description: 'The update limit of 10 requests per minute per user has been reached. Shared with web updates; wait for Retry-After.' },
+  { status: '502', code: 'AUTH_JSON_UPDATE_REJECTED', description: 'The supplier explicitly rejected the replacement credentials. The error response does not include its credential-bearing body.' },
+  { status: '502', code: 'AUTH_JSON_LOGIN_FAILED / AUTH_JSON_UNAVAILABLE', description: 'Supplier login, connection, or response processing failed. No update was confirmed. Contact an administrator if the issue persists.' },
+  { status: '503', code: 'SYNC_NOT_CONFIGURED / UNAVAILABLE', description: 'Supplier website login has not been configured, or a required local service is unavailable.' },
+  { status: '504', code: 'AUTH_JSON_UPDATE_UNCONFIRMED', description: 'The write may have reached the supplier, but its result could not be confirmed. The audit outcome is unknown. Check the account before a manual retry; do not retry automatically.' },
+];
+
 export const sampleSubmission = {
   plan: 'claude/cc-max-20x',
   account: 'claude.user@example.com',
@@ -185,6 +227,12 @@ export const sampleSubmission = {
   remark: 'Submitted via API',
 };
 
+export const sampleAuthJSONUpdate = {
+  username: 'member@example.com',
+  account: sampleSubmission.account,
+  auth_json: sampleSubmission.auth_json,
+};
+
 export function curlExample(topic: EndpointTopic, baseURL: string) {
   const url = baseURL + endpoints[topic].path;
   if (topic === 'account-lookup') {
@@ -203,7 +251,7 @@ export function curlExample(topic: EndpointTopic, baseURL: string) {
     '  -H "Authorization: Bearer ${TK_REGISTER_API_TOKEN}" \\',
     "  -H 'Content-Type: application/json' \\",
     "  --data-binary @- <<'JSON'",
-    JSON.stringify(sampleSubmission, null, 2),
+    JSON.stringify(topic === 'update-auth-json' ? sampleAuthJSONUpdate : sampleSubmission, null, 2),
     'JSON',
   ].join('\n');
 }
@@ -243,5 +291,17 @@ export const lookupResponse = {
     last_attempt_at: '2026-11-01T02:00:00+08:00',
     last_error: null,
     interval_hours: 2,
+  },
+};
+
+export const authJSONUpdateResponse = {
+  success: true,
+  data: {
+    updated: true,
+    audit_id: '2001',
+    updated_at: '2026-11-01T01:59:59+08:00',
+    refresh_status: 'succeeded',
+    refresh_message: 'Auth JSON updated and account data refreshed.',
+    account: lookupResponse.data,
   },
 };

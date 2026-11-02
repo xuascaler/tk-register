@@ -59,7 +59,7 @@ func TestCollectTargetsOneSessionOrderedExactMatchesAndReadOnlyMetadata(t *testi
 		t.Fatal(keywords)
 	}
 	for i, result := range got {
-		if result.Target != targets[i] || result.Err != nil || result.Account == nil || normalizeAccount(result.Account.Account) != normalizeAccount(targets[i].Account) || result.Account.Status == nil || *result.Account.Status != "active" || result.Account.Plan != "claude/cc-pro" {
+		if !reflect.DeepEqual(result.Target, targets[i]) || result.Err != nil || result.Account == nil || normalizeAccount(result.Account.Account) != normalizeAccount(targets[i].Account) || result.Account.Status == nil || *result.Account.Status != "active" || result.Account.Plan != "claude/cc-pro" {
 			t.Fatalf("incorrect result[%d]: %+v", i, result)
 		}
 	}
@@ -297,7 +297,7 @@ func TestCollectTargetsThreeWorkersPacedFullPage(t *testing.T) {
 		t.Fatalf("bad parallel batch: err=%v max=%d logins=%d", err, maximum.Load(), fixture.logins)
 	}
 	for i, result := range got {
-		if result.Target != targets[i] || result.Err != nil || result.Account == nil {
+		if !reflect.DeepEqual(result.Target, targets[i]) || result.Err != nil || result.Account == nil {
 			t.Fatalf("missing/incorrect page result %d: %+v", i, result)
 		}
 	}

@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, Copy, Info, KeyRound, LockKeyhole } from 'lucide-react';
 import {
   API_BASE_PATH, authenticationFields, curlExample, docSections, docTopics, endpoints,
+  authJSONUpdateErrors, authJSONUpdateFields, authJSONUpdateResponse, authJSONUpdateResponseFields,
   lookupErrors, lookupFields, lookupResponse, lookupResponseFields, optionalSubmissionFields,
   snapshotFields, submissionErrors, submissionFields,
   type DocSection, type DocTopic, type EndpointTopic, type ErrorDefinition, type FieldDefinition,
@@ -140,10 +141,11 @@ function DocumentationIndex({ baseURL, onNavigate, onManageToken, onFeedback }: 
       <DocLink topic='getting-started' onNavigate={onNavigate} className='api-docs-button'>Read guide <ArrowRight aria-hidden='true' /></DocLink>
     </div>
     <section className='api-docs-reference' aria-labelledby='api-docs-reference-title'>
-      <div className='api-docs-section-heading'><h2 id='api-docs-reference-title'>API reference</h2><span>2 endpoints</span></div>
+      <div className='api-docs-section-heading'><h2 id='api-docs-reference-title'>API reference</h2><span>{Object.keys(endpoints).length} endpoints</span></div>
       <div className='api-docs-api-list'>
         <EndpointLink topic='submit-account' onNavigate={onNavigate} />
         <EndpointLink topic='account-lookup' onNavigate={onNavigate} />
+        <EndpointLink topic='update-auth-json' onNavigate={onNavigate} />
       </div>
     </section>
     <BaseURL baseURL={baseURL} onFeedback={onFeedback} />
@@ -165,39 +167,45 @@ function GettingStarted({ baseURL, onNavigate, onManageToken, onFeedback }: Navi
     <BaseURL baseURL={baseURL} onFeedback={onFeedback} />
     <section className='api-docs-content-block'>
       <h2>Access and limits</h2>
-      <p>New tokens include both scopes below. Requests using different tokens for the same user share that user’s limits.</p>
+      <p>New tokens include the three scopes below. Existing tokens gain Auth JSON update access automatically without changing their value. You do not need to regenerate your token or update your scripts.</p>
+      <p>Requests using different tokens for the same user share that user’s limits.</p>
       <table className='api-docs-table api-docs-limits-table'>
         <caption className='sr-only'>API scopes and per-user rate limits</caption>
         <thead><tr><th scope='col'>Endpoint</th><th scope='col'>Scope and limit</th></tr></thead>
         <tbody>
           <tr><th scope='row'><DocLink topic='submit-account' onNavigate={onNavigate}>Submit account</DocLink></th><td><code>claude:submit</code><p>10 requests per minute per user, shared with the web submission form.</p></td></tr>
           <tr><th scope='row'><DocLink topic='account-lookup' onNavigate={onNavigate}>Account lookup</DocLink></th><td><code>accounts:read</code><p>60 requests per minute per user, separate from the submission limit.</p></td></tr>
+          <tr><th scope='row'><DocLink topic='update-auth-json' onNavigate={onNavigate}>Update Auth JSON</DocLink></th><td><code>claude:auth-json:update</code><p>10 requests per minute per user, shared with web Auth JSON updates. Separate from account submissions.</p></td></tr>
         </tbody>
       </table>
       <p>A local <code>429 RATE_LIMITED</code> response includes <code>Retry-After</code> in seconds. Keep <code>X-Request-ID</code> when requesting support. Error codes are listed in each endpoint’s guide.</p>
     </section>
     <section className='api-docs-content-block'>
       <h2>Choose the response contract</h2>
-      <p>Submissions pass through the vendor’s status, content type, and complete response body. Lookups return TK Register’s <code>success</code> / <code>data</code> JSON envelope. Handle these endpoints separately.</p>
+      <p>Submissions pass through the vendor’s status, content type, and complete response body. Lookups and Auth JSON updates return TK Register’s <code>success</code> / <code>data</code> JSON envelope.</p>
       <p>Account lookup reads saved snapshots and does not refresh supplier data. Use the returned collection timestamps when displaying account status or usage.</p>
+      <p>A confirmed Auth JSON update immediately attempts to refresh that account. Check <code>updated</code> and <code>refresh_status</code> separately: saving credentials can succeed even when the following refresh fails.</p>
     </section>
     <div className='api-docs-next-links'>
       <DocLink topic='submit-account' onNavigate={onNavigate}>Submit an account <ArrowRight aria-hidden='true' /></DocLink>
       <DocLink topic='account-lookup' onNavigate={onNavigate}>Look up an account <ArrowRight aria-hidden='true' /></DocLink>
+      <DocLink topic='update-auth-json' onNavigate={onNavigate}>Update Auth JSON <ArrowRight aria-hidden='true' /></DocLink>
     </div>
   </div>;
 }
 
 function Parameters({ topic, onNavigate }: Navigation & { topic: EndpointTopic }) {
   const lookup = topic === 'account-lookup';
+  const update = topic === 'update-auth-json';
   return <>
     <div className='api-docs-auth-line'><LockKeyhole aria-hidden='true' /><span>Authentication</span><code>Authorization: Bearer YOUR_TOKEN</code>
       <DocLink topic='getting-started' onNavigate={onNavigate} className='api-docs-text-link'>View guide <ArrowRight aria-hidden='true' /></DocLink>
     </div>
     <div className='api-docs-content-block'><h3>{lookup ? 'Query parameters' : 'JSON body'}</h3>
       <p>{lookup ? 'Send exactly these two parameters, each once, in the URL query string. Do not send a request body or any other query parameters.' : 'Send one JSON object with Content-Type: application/json. The request body must be 3 MiB or smaller. Do not add query parameters.'}</p>
-      <FieldTable fields={lookup ? lookupFields : submissionFields} label={lookup ? 'Required lookup query parameters' : 'Required submission fields'} />
-      {!lookup && <p>String limits use UTF-8 bytes. Submission values are not automatically trimmed; nonempty required strings cannot consist only of whitespace. Omit unused optional fields instead of sending <code>null</code>.</p>}
+      <FieldTable fields={lookup ? lookupFields : update ? authJSONUpdateFields : submissionFields} label={lookup ? 'Required lookup query parameters' : update ? 'Required Auth JSON update fields' : 'Required submission fields'} />
+      {!lookup && !update && <p>String limits use UTF-8 bytes. Submission values are not automatically trimmed; nonempty required strings cannot consist only of whitespace. Omit unused optional fields instead of sending <code>null</code>.</p>}
+      {update && <p>The server finds your account by user, vendor, and exact normalized account name. <code>auth_json.email</code> must match that account after trimming and case normalization. Do not send a supplier record ID, password, plan, or any other top-level field.</p>}
     </div>
     {lookup ? <section className='api-docs-content-block'>
       <h3>Exact account matching</h3>
@@ -210,21 +218,21 @@ function Parameters({ topic, onNavigate }: Navigation & { topic: EndpointTopic }
           <p>Additional fields inside <code>auth_json</code> are allowed and forwarded as part of the authentication object.</p>
         </div>
       </details>
-      <details className='api-docs-disclosure'><summary>Optional parameters <span>7 fields</span></summary>
+      {!update && <details className='api-docs-disclosure'><summary>Optional parameters <span>7 fields</span></summary>
         <div className='api-docs-disclosure-body'><FieldTable fields={optionalSubmissionFields} label='Optional submission fields' showOptional /></div>
-      </details>
-      <p className='api-docs-note'>This endpoint is dedicated to Claude. Do not send top-level <code>provider</code>, <code>model</code>, <code>account_type</code>, proxy routing fields, or the vendor’s shared Bearer credential. Unsupported top-level fields are rejected.</p>
+      </details>}
+      <p className='api-docs-note'>{update ? 'Only an accepted Claude account belonging to the token owner can be updated. The supplier must currently allow editing. The server verifies the supplier record and preserves its other fields. No new submission is created.' : <>This endpoint is dedicated to Claude. Do not send top-level <code>provider</code>, <code>model</code>, <code>account_type</code>, proxy routing fields, or the vendor’s shared Bearer credential. Unsupported top-level fields are rejected.</>}</p>
     </>}
   </>;
 }
 
 function CurlExample({ topic, baseURL, onFeedback }: { topic: EndpointTopic; baseURL: string; onFeedback: CopyFeedback }) {
   return <>
-    <section className='api-docs-content-block'><h3>{topic === 'account-lookup' ? 'Find your submitted account' : 'Submit a Claude account'}</h3>
+    <section className='api-docs-content-block'><h3>{topic === 'account-lookup' ? 'Find your submitted account' : topic === 'update-auth-json' ? 'Replace an account’s Auth JSON' : 'Submit a Claude account'}</h3>
       <p>Set your personal token in your shell, then run the request. All account values and credentials below are placeholders; replace them before use{topic === 'submit-account' ? ', including the sample dates' : ''}.</p>
       <CodeBlock title='Token environment variable' text="export TK_REGISTER_API_TOKEN='YOUR_TOKEN'" onFeedback={onFeedback} />
       <CodeBlock title='cURL request' text={curlExample(topic, baseURL)} onFeedback={onFeedback} />
-      <p>{topic === 'account-lookup' ? 'username identifies your TK Register login. account identifies the Claude account you submitted. This request reads saved data only.' : 'The request sends account credentials and can create a real vendor submission. TK Register does not retry the request automatically.'}</p>
+      <p>{topic === 'account-lookup' ? 'username identifies your TK Register login. account identifies the Claude account you submitted. This request reads saved data only.' : topic === 'update-auth-json' ? 'This changes the account’s credentials at the supplier. username is your TK Register email; account and auth_json.email identify the Claude account. Replace every credential placeholder and sample timestamp. TK Register sends the write once and does not automatically retry it.' : 'The request sends account credentials and can create a real vendor submission. TK Register does not retry the request automatically.'}</p>
     </section>
     <details className='api-docs-disclosure'><summary>Using a self-signed certificate</summary><div className='api-docs-disclosure-body'><p>The examples use normal TLS certificate verification. For a deployment whose self-signed certificate you intentionally trust, you can add <code>--insecure</code> to cURL. Omit this option when using a trusted certificate.</p></div></details>
   </>;
@@ -271,19 +279,42 @@ function SubmissionResponse({ onFeedback }: { onFeedback: CopyFeedback }) {
   </>;
 }
 
+function AuthJSONUpdateResponse({ onNavigate, onFeedback }: Navigation & { onFeedback: CopyFeedback }) {
+  return <>
+    <section className='api-docs-content-block'><h3>200 · Credentials updated</h3>
+      <p>The supplier confirmed the replacement credentials. The server immediately attempts to collect that account’s status, usage, and spend, without waiting for the scheduled collection interval.</p>
+      <CodeBlock title='JSON · Example response' text={JSON.stringify(authJSONUpdateResponse, null, 2)} onFeedback={onFeedback} />
+    </section>
+    <details className='api-docs-disclosure'><summary>Response fields <span>data</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={authJSONUpdateResponseFields} label='Fields in Auth JSON update response data' /></div></details>
+    <section className='api-docs-content-block'><h3>Handle the two outcomes separately</h3>
+      <p><code>updated: true</code> confirms the credential change. <code>refresh_status: succeeded</code> confirms that the refreshed account data was saved. Neither result guarantees the supplier account is active.</p>
+      <p>When saving succeeds but refresh fails, the API still returns HTTP 200 with <code>updated: true</code> and <code>refresh_status: failed</code>. The last successful snapshot is retained. <code>account</code> can be null if local readback failed. Sync the account again to refresh its data; do not repeat the credential update just because refresh failed.</p>
+      <p>The returned <code>account</code> follows the <DocLink topic='account-lookup' onNavigate={onNavigate} className='api-docs-text-link'>Account lookup</DocLink> response contract, including snapshot currency and USD conversion fields. Use <code>last_success_at</code> and <code>snapshot.collected_at</code> to distinguish fresh data from retained data.</p>
+    </section>
+    <section className='api-docs-content-block'><h3>Audit and request identifiers</h3>
+      <CodeBlock title='Response header examples' text={'X-Request-ID: <request identifier>\nX-Auth-JSON-Audit-ID: <local update audit identifier>'} onFeedback={onFeedback} />
+      <p>An audit record is created after authorization, validation, and lock acquisition, before the supplier write starts. Its ID is returned as <code>data.audit_id</code> on success and in <code>X-Auth-JSON-Audit-ID</code> whenever that record exists, including failed or unconfirmed updates.</p>
+      <p>The audit records the actor, owner, vendor, account, API token reference and revision, request ID, update outcome, and refresh outcome. It does not store the replacement Auth JSON or any token plaintext. Existing submission history is unchanged.</p>
+      <p>Errors rejected before an update begins have no update audit ID. Keep the request ID and audit ID, when available, for support.</p>
+    </section>
+  </>;
+}
+
 function Errors({ topic, onFeedback }: { topic: EndpointTopic; onFeedback: CopyFeedback }) {
   const lookup = topic === 'account-lookup';
-  const example = lookup ? { success: false, code: 'ACCOUNT_NOT_FOUND', message: 'The account could not be found.' } : { success: false, code: 'INVALID_PARAMETERS', message: 'Choose a supported Claude plan.' };
+  const update = topic === 'update-auth-json';
+  const example = lookup ? { success: false, code: 'ACCOUNT_NOT_FOUND', message: 'The account could not be found.' } : update ? { success: false, code: 'AUTH_JSON_UPDATE_UNCONFIRMED', message: 'We could not confirm whether the update completed. Check the account before trying again.' } : { success: false, code: 'INVALID_PARAMETERS', message: 'Choose a supported Claude plan.' };
   return <>
-    <section className='api-docs-content-block'><h3>{lookup ? 'Error responses' : 'Local errors and vendor errors'}</h3>
-      <p>{lookup ? 'Use the HTTP status and code to handle failed requests. Do not depend on exact message wording.' : 'Local authentication, validation, configuration, and connection errors use the envelope below. Complete vendor error responses use the vendor’s own status and body instead, with shared credentials redacted if echoed.'}</p>
+    <section className='api-docs-content-block'><h3>{lookup || update ? 'Error responses' : 'Local errors and vendor errors'}</h3>
+      <p>{lookup || update ? 'Use the HTTP status and code to handle failed requests. Do not depend on exact message wording.' : 'Local authentication, validation, configuration, and connection errors use the envelope below. Complete vendor error responses use the vendor’s own status and body instead, with shared credentials redacted if echoed.'}</p>
       <CodeBlock title='JSON · Local error example' text={JSON.stringify(example, null, 2)} onFeedback={onFeedback} />
-      <ErrorTable errors={lookup ? lookupErrors : submissionErrors} />
+      <ErrorTable errors={lookup ? lookupErrors : update ? authJSONUpdateErrors : submissionErrors} />
+      {update && <p>Existing tokens receive <code>claude:auth-json:update</code> automatically. If a valid token still receives <code>403 INSUFFICIENT_SCOPE</code>, ask an administrator to check its permissions. This feature does not require token regeneration.</p>}
     </section>
     <section className='api-docs-content-block'><h3>Rate limits and retries</h3>
-      <p>A local <code>429 RATE_LIMITED</code> response includes a <code>Retry-After</code> header and JSON <code>retry_after</code> value, both in seconds. Wait for this duration before sending another request.{!lookup && ' A vendor 429 response is passed through and does not guarantee these retry fields.'}</p>
-      <p>{lookup ? 'Lookups can be retried with a delay after transient connection errors or 503 responses because they do not create submissions or query the vendor. A 200 response with last_error describes a saved collection failure; polling repeatedly will not repair it.' : 'Do not automatically retry submissions. A connection failure or timeout does not prove the vendor did not receive your account. Review Submission history before a manual retry.'}</p>
-      <p>Keep <code>X-Request-ID</code>{lookup ? '' : ' and, when present, X-Submission-ID'} when requesting support.</p>
+      <p>A local <code>429 RATE_LIMITED</code> response includes a <code>Retry-After</code> header and JSON <code>retry_after</code> value, both in seconds. Wait for this duration before sending another request.{topic === 'submit-account' && ' A vendor 429 response is passed through and does not guarantee these retry fields.'}</p>
+      <p>{lookup ? 'Lookups can be retried with a delay after transient connection errors or 503 responses because they do not create submissions or query the vendor. A 200 response with last_error describes a saved collection failure; polling repeatedly will not repair it.' : update ? 'Do not automatically retry credential writes. A timeout or connection loss after sending the write can leave the audit result unknown. Check the account before a manual retry. A successful credential update followed by a failed refresh only needs another Sync.' : 'Do not automatically retry submissions. A connection failure or timeout does not prove the vendor did not receive your account. Review Submission history before a manual retry.'}</p>
+      <p>Keep <code>X-Request-ID</code>{lookup ? '' : update ? ' and, when present, X-Auth-JSON-Audit-ID' : ' and, when present, X-Submission-ID'} when requesting support.</p>
     </section>
   </>;
 }
@@ -311,7 +342,7 @@ function EndpointDocumentation({ topic, section, baseURL, onNavigate, onFeedback
       <code>{endpoint.path}</code><CopyButton text={baseURL + endpoint.path} label='Full endpoint URL' iconOnly onFeedback={onFeedback} />
     </div>
     <p className='api-docs-base-caption'>Base URL · <code>{baseURL}</code></p>
-    <div className='api-docs-meta'><span>Scope <code>{endpoint.scope}</code></span><span>{endpoint.limit} per user{topic === 'submit-account' ? ' · shared with the web form' : ''}</span></div>
+    <div className='api-docs-meta'><span>Scope <code>{endpoint.scope}</code></span><span>{endpoint.limit} per user{topic !== 'account-lookup' ? ' · shared with the web form' : ''}</span></div>
     <div className='api-docs-info'><Info aria-hidden='true' /><p>{endpoint.note}</p></div>
     <div className='api-docs-tabs' role='tablist' aria-label='Endpoint documentation sections'>
       {docSections.map((tab, index) => <button key={tab.id} type='button' role='tab'
@@ -324,7 +355,7 @@ function EndpointDocumentation({ topic, section, baseURL, onNavigate, onFeedback
       id={`${tabPrefix}-panel-${tab.id}`} aria-labelledby={`${tabPrefix}-tab-${tab.id}`} hidden={section !== tab.id} tabIndex={0}>
       {section === tab.id && (tab.id === 'parameters' ? <Parameters topic={topic} onNavigate={onNavigate} />
         : tab.id === 'example' ? <CurlExample topic={topic} baseURL={baseURL} onFeedback={onFeedback} />
-        : tab.id === 'response' ? topic === 'account-lookup' ? <LookupResponse onFeedback={onFeedback} /> : <SubmissionResponse onFeedback={onFeedback} />
+        : tab.id === 'response' ? topic === 'account-lookup' ? <LookupResponse onFeedback={onFeedback} /> : topic === 'update-auth-json' ? <AuthJSONUpdateResponse onNavigate={onNavigate} onFeedback={onFeedback} /> : <SubmissionResponse onFeedback={onFeedback} />
         : <Errors topic={topic} onFeedback={onFeedback} />)}
     </div>)}
   </>;

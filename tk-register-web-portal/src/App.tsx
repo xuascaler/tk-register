@@ -102,7 +102,7 @@ function readRoute(): Route {
   const [path, query] = window.location.hash.replace(/^#\/?/, '').split('?');
   const segments = path.split('/');
   if (segments[0] === 'docs') {
-    const docTopic = (['getting-started', 'submit-account', 'account-lookup'] as const).find(topic => topic === segments[1]);
+    const docTopic = (['getting-started', 'submit-account', 'account-lookup', 'update-auth-json'] as const).find(topic => topic === segments[1]);
     const docSection = docTopic && docTopic !== 'getting-started'
       ? (['parameters', 'example', 'response', 'errors'] as const).find(section => section === segments[2])
       : undefined;
