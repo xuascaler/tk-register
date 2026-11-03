@@ -13,7 +13,7 @@ The Account Lookup API returns the saved status, cumulative usage and latest col
 | Request parameters | `username` and `account`, in the query string |
 | Request body | None |
 | Response format | JSON, using the TK Register `success` / `data` envelope |
-| Rate limit | 60 lookup requests per minute per authenticated user |
+| Rate limit | 600 lookup requests per minute per authenticated user |
 | Data source | Saved TK Register account data and collection snapshots |
 
 This is a read endpoint. A lookup does not submit an account, sign in to the supplier website, refresh supplier data or start a collection run. It returns the same saved account metrics used by **My account → Accounts**.
@@ -210,7 +210,7 @@ The example message is illustrative. Use the HTTP status and `code` for programm
 | `429` | `RATE_LIMITED` | Per-user lookup limit reached. Wait for the supplied retry interval. |
 | `503` | `UNAVAILABLE` | A required database or Redis service is temporarily unavailable. Retry after a delay. |
 
-The lookup limit is **60 requests per minute per user**. Requests with another token for the same user share that user's limit. The submission API's separate limit is unchanged.
+The lookup limit is **600 requests per minute per user**. Requests with another token for the same user share that user's limit. Submission requests use a separate per-user limit.
 
 A rate-limited response includes `Retry-After` in seconds and a JSON `retry_after` value:
 

@@ -142,7 +142,7 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 		vendorFailure(w, err)
 		return
 	}
-	retry, err := loginAttempt.Run(ctx, a.redis, []string{redisPrefix + "account-sync:page-rate:" + strconv.FormatUint(user.ID, 10)}, 20, 60).Int()
+	retry, err := loginAttempt.Run(ctx, a.redis, []string{redisPrefix + "account-sync:page-rate:" + strconv.FormatUint(user.ID, 10)}, 200, 60).Int()
 	if err != nil {
 		internal(w)
 		return

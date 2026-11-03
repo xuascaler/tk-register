@@ -159,6 +159,36 @@ func TestAuthJSONUpdatePersistsMetadataAndImmediatelyRefreshes(t *testing.T) {
 	}
 }
 
+func TestAuthJSONEligibilityPerActorRateLimit(t *testing.T) {
+	a, owner, cookie, csrf, target, fake := setupAuthUpdate(t)
+	route := authRoute(target.ID)
+	for i := 0; i < 300; i++ {
+		requireStatus(t, request(t, a, "GET", route, nil, cookie, ""), 200)
+	}
+	w := request(t, a, "GET", route, nil, cookie, "")
+	requireStatus(t, w, 429)
+	key := redisPrefix + "account-auth-json:rate:GET:" + fmt.Sprint(owner.ID)
+	if w.Header().Get("Retry-After") != "60" || a.redis.TTL(context.Background(), key).Val() != time.Minute {
+		t.Fatal("eligibility rate limit window changed")
+	}
+	if fake.checks != 300 {
+		t.Fatal("rate-limited eligibility request contacted supplier", fake.checks)
+	}
+	// Eligibility checks do not consume the separate credential-update budget.
+	requireStatus(t, request(t, a, "POST", route, authInput(), cookie, csrf), 200)
+	if fake.updates != 1 {
+		t.Fatal("eligibility limit prevented credential update")
+	}
+	// The same target remains eligible for a different actor's allowance.
+	_, adminCookie, _ := vendorSession(t, a, "eligibility-admin@example.com", "admin")
+	adminRoute := fmt.Sprintf("admin/synced-accounts/%d/auth-json", target.ID)
+	requireStatus(t, request(t, a, "GET", adminRoute, nil, adminCookie, ""), 200)
+	requireStatus(t, request(t, a, "GET", route, nil, cookie, ""), 429)
+	if fake.checks != 301 {
+		t.Fatal("eligibility rate limit is not scoped to the requesting actor", fake.checks)
+	}
+}
+
 func TestAuthJSONRefreshFailurePreservesLastSuccess(t *testing.T) {
 	a, owner, cookie, csrf, target, fake := setupAuthUpdate(t)
 	at := time.Now().UTC().Add(-time.Hour)

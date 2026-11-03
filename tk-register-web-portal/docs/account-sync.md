@@ -94,7 +94,7 @@ Pending jobs survive backend restarts. An interrupted `running` job older than t
 
 External clients can read an owned account's saved data using `GET /tk-register/api/v1/vendors/tk-register-0/claude/accounts/lookup?username=<owner-email>&account=<submitted-account>` with a personal Bearer token carrying `accounts:read`. The endpoint returns the latest saved snapshot and collection timestamps without starting a supplier query or collection run. It uses the same null, zero and last-known-data semantics described above.
 
-The username must match the token owner, including when that owner is an administrator. The limit is 60 lookup requests per minute per user. See the [Account Lookup API reference](account-lookup-api.md) for the complete contract and examples. This external endpoint is separate from the browser-session routes below.
+The username must match the token owner, including when that owner is an administrator. The limit is 600 lookup requests per minute per user. See the [Account Lookup API reference](account-lookup-api.md) for the complete contract and examples. This external endpoint is separate from the browser-session routes below.
 
 ## Updating Auth JSON
 
@@ -132,6 +132,8 @@ The following paths are relative to `/tk-register/api` and use the existing JSON
 | `GET /admin/account-sync` | Administrator configuration without the saved password, plus collection status. |
 | `PUT /admin/account-sync` | Save `enabled`, `interval_hours`, `timezone`, `website_username` and optional `website_password`. |
 | `POST /admin/account-sync/test-login` | Test `website_username` and optional `website_password`; success returns `authenticated: true`. A blank password uses the saved password only for the same saved username. |
+
+Accounts-list Sync batch requests allow **200 requests per minute per acting user**, shared across member and administrator list routes. Each batch still accepts at most 20 account IDs. Auth JSON editor eligibility GETs allow **300 requests per minute per acting user**. Auth JSON writes allow **100 requests per minute per user**, shared between browser and public API updates. Detail-page Sync retains its cooldown of one request per minute for each acting user and account.
 
 Account snapshots in list, detail, historical, manual-sync and Auth JSON refresh responses share the original `cost_total` / `currency` fields and the derived `cost_total_usd` / `exchange_rate_cny_per_usd` fields described above. The personal-token lookup uses the same snapshot format.
 

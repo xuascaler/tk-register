@@ -119,7 +119,7 @@ func (a *app) claudeAccountsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Share the browser submission limit rather than granting a separate quota.
-	retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "vendor-action:push:" + strconv.FormatUint(user.ID, 10)}, 10, 60).Int()
+	retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "vendor-action:push:" + strconv.FormatUint(user.ID, 10)}, 100, 60).Int()
 	if err != nil {
 		internal(w)
 		return

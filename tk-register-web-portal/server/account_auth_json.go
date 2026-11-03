@@ -122,9 +122,9 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		fail(w, 503, "SYNC_NOT_CONFIGURED", "Website login has not been configured by an administrator.")
 		return
 	}
-	limit := 30
+	limit := 300
 	if r.Method == "POST" {
-		limit = 10
+		limit = 100
 	}
 	retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "account-auth-json:rate:" + r.Method + ":" + strconv.FormatUint(user.ID, 10)}, limit, 60).Int()
 	if err != nil {

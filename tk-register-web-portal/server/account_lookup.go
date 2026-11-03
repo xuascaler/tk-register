@@ -87,7 +87,7 @@ func (a *app) claudeAccountLookupAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	// Independent from the submission limit; rotating a token does not reset it.
 	key := redisPrefix + "account-lookup:" + strconv.FormatUint(user.ID, 10)
-	retry, err := loginAttempt.Run(ctx, a.redis, []string{key}, 60, 60).Int()
+	retry, err := loginAttempt.Run(ctx, a.redis, []string{key}, 600, 60).Int()
 	if err != nil {
 		internal(w)
 		return

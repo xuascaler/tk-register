@@ -10,7 +10,7 @@ The Auth JSON Update API replaces the authentication data for an accepted Claude
 | Required scope | `claude:auth-json:update` |
 | Content type | `application/json` |
 | Request body limit | 3 MiB; the decoded Auth JSON object is limited to 2 MiB |
-| Rate limit | 10 update requests per minute per user, shared with web Auth JSON updates |
+| Rate limit | 100 update requests per minute per user, shared with web Auth JSON updates |
 | Response format | TK Register JSON envelope, not the supplier response body |
 
 ## Authentication and ownership

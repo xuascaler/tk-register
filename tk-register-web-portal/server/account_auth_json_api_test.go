@@ -443,11 +443,11 @@ func TestAuthJSONAPISharesWebLeasesAndRateLimit(t *testing.T) {
 	if fake.updates != 0 || len(authAudits(t, a)) != 0 {
 		t.Fatal("lock failure reached vendor")
 	}
-	// A fresh minute allows exactly ten combined web/API update attempts. Token
+	// A fresh minute allows exactly 100 combined web/API update attempts. Token
 	// rotation does not reset the owner-scoped limit.
 	a.redis.Del(ctx, redisPrefix+"account-auth-json:rate:POST:"+fmt.Sprint(owner.ID))
 	fake.updateErr = &supplier.Error{Code: supplier.CodeUpdateRejected}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		if i%2 == 0 {
 			requireStatus(t, request(t, a, "POST", authRoute(target.ID), authInput(), cookie, csrf), 502)
 		} else {
@@ -456,8 +456,11 @@ func TestAuthJSONAPISharesWebLeasesAndRateLimit(t *testing.T) {
 	}
 	w := apiRequest(t, a, "POST", claudeAccountAuthJSONAPIPath, token.PlaintextToken, "application/json", body)
 	requireStatus(t, w, 429)
-	if w.Header().Get("Retry-After") == "" || fake.updates != 10 {
+	if w.Header().Get("Retry-After") != "60" || fake.updates != 100 {
 		t.Fatal("missing shared rate limit or Retry-After")
+	}
+	if ttl := a.redis.TTL(ctx, redisPrefix+"account-auth-json:rate:POST:"+fmt.Sprint(owner.ID)).Val(); ttl != time.Minute {
+		t.Fatalf("Auth JSON update rate window = %s, want one minute", ttl)
 	}
 	id, _ := core.ParseBusinessID(token.Token.ID)
 	rotated, err := a.store.RotateAPIToken(ctx, owner.ID, id, token.Token.Revision)
@@ -466,7 +469,7 @@ func TestAuthJSONAPISharesWebLeasesAndRateLimit(t *testing.T) {
 	}
 	requireStatus(t, apiRequest(t, a, "POST", claudeAccountAuthJSONAPIPath, rotated.PlaintextToken, "application/json", body), 429)
 	rows := authAudits(t, a)
-	if len(rows) != 10 || rows[0].Source != "web" || rows[0].APITokenID != nil || rows[1].Source != "api" {
+	if len(rows) != 100 || rows[0].Source != "web" || rows[0].APITokenID != nil || rows[1].Source != "api" {
 		t.Fatal("web/API audit sources or count incorrect", rows)
 	}
 }

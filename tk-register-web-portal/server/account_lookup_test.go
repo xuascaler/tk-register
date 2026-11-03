@@ -199,13 +199,13 @@ func TestAccountLookupPerUserRateLimit(t *testing.T) {
 	other, _, _ := vendorSession(t, a, "rate-other@example.com", "member")
 	token := lookupToken(t, a, owner.ID)
 	path := lookupURL(owner.Email, "missing@example.com")
-	for i := 0; i < 60; i++ {
+	for i := 0; i < 600; i++ {
 		requireStatus(t, apiRequest(t, a, "GET", path, token.PlaintextToken, "", ""), 404)
 	}
 	w := apiRequest(t, a, "GET", path, token.PlaintextToken, "", "")
 	requireStatus(t, w, 429)
-	if w.Header().Get("Retry-After") == "" {
-		t.Fatal("missing Retry-After")
+	if w.Header().Get("Retry-After") != "60" {
+		t.Fatal("lookup rate limit window changed")
 	}
 	id, _ := core.ParseBusinessID(token.Token.ID)
 	rotated, err := a.store.RotateAPIToken(ctx, owner.ID, id, token.Token.Revision)
@@ -218,7 +218,13 @@ func TestAccountLookupPerUserRateLimit(t *testing.T) {
 	if a.redis.Exists(ctx, redisPrefix+"vendor-action:push:"+fmt.Sprint(owner.ID)).Val() != 0 {
 		t.Fatal("lookup consumed submission allowance")
 	}
-	m.FastForward(61 * time.Second)
+	m.FastForward(59 * time.Second)
+	w = apiRequest(t, a, "GET", path, rotated.PlaintextToken, "", "")
+	requireStatus(t, w, 429)
+	if w.Header().Get("Retry-After") != "1" {
+		t.Fatal("lookup retry did not retain the original minute window")
+	}
+	m.FastForward(time.Second)
 	requireStatus(t, apiRequest(t, a, "GET", path, rotated.PlaintextToken, "", ""), 404)
 	for _, key := range a.redis.Keys(ctx, "*").Val() {
 		if !strings.HasPrefix(key, redisPrefix) || strings.Contains(key, token.PlaintextToken) {

@@ -35,7 +35,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 		limit := 30
 		kind := "query"
 		if route == "submissions" {
-			limit = 10
+			limit = 100
 			kind = "push"
 		}
 		retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "vendor-action:" + kind + ":" + strconv.FormatUint(user.ID, 10)}, limit, 60).Int()

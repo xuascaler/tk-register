@@ -173,9 +173,9 @@ function GettingStarted({ baseURL, onNavigate, onManageToken, onFeedback }: Navi
         <caption className='sr-only'>API scopes and per-user rate limits</caption>
         <thead><tr><th scope='col'>Endpoint</th><th scope='col'>Scope and limit</th></tr></thead>
         <tbody>
-          <tr><th scope='row'><DocLink topic='submit-account' onNavigate={onNavigate}>Submit account</DocLink></th><td><code>claude:submit</code><p>10 requests per minute per user, shared with the web submission form.</p></td></tr>
-          <tr><th scope='row'><DocLink topic='account-lookup' onNavigate={onNavigate}>Account lookup</DocLink></th><td><code>accounts:read</code><p>60 requests per minute per user, separate from the submission limit.</p></td></tr>
-          <tr><th scope='row'><DocLink topic='update-auth-json' onNavigate={onNavigate}>Update Auth JSON</DocLink></th><td><code>claude:auth-json:update</code><p>10 requests per minute per user, shared with web Auth JSON updates. Separate from account submissions.</p></td></tr>
+          <tr><th scope='row'><DocLink topic='submit-account' onNavigate={onNavigate}>Submit account</DocLink></th><td><code>claude:submit</code><p>100 requests per minute per user, shared with the web submission form.</p></td></tr>
+          <tr><th scope='row'><DocLink topic='account-lookup' onNavigate={onNavigate}>Account lookup</DocLink></th><td><code>accounts:read</code><p>600 requests per minute per user, separate from the submission limit.</p></td></tr>
+          <tr><th scope='row'><DocLink topic='update-auth-json' onNavigate={onNavigate}>Update Auth JSON</DocLink></th><td><code>claude:auth-json:update</code><p>100 requests per minute per user, shared with web Auth JSON updates. Separate from account submissions.</p></td></tr>
         </tbody>
       </table>
       <p>A local <code>429 RATE_LIMITED</code> response includes <code>Retry-After</code> in seconds. Keep <code>X-Request-ID</code> when requesting support. Error codes are listed in each endpoint’s guide.</p>

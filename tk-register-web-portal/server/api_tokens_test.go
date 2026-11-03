@@ -243,13 +243,17 @@ func TestExternalAPIValidationAndSharedWebLimit(t *testing.T) {
 	}
 	m.FastForward(61 * time.Second)
 	key := redisPrefix + "vendor-action:push:" + strconv.FormatUint(user.ID, 10)
-	if err := a.redis.Set(context.Background(), key, 10, time.Minute).Err(); err != nil {
+	if err := a.redis.Set(context.Background(), key, 98, time.Minute).Err(); err != nil {
 		t.Fatal(err)
 	}
+	// The 99th web and 100th API attempts reach validation. The next attempt
+	// is rate limited on both interfaces, which share the same per-user minute.
+	requireStatus(t, request(t, a, "POST", "submissions", map[string]any{}, cookie, csrf), 400)
+	requireStatus(t, apiRequest(t, a, "POST", claudeAccountsAPIPath, token.PlaintextToken, "application/json", `null`), 400)
 	w := apiRequest(t, a, "POST", claudeAccountsAPIPath, token.PlaintextToken, "application/json", `{}`)
 	requireStatus(t, w, 429)
-	if w.Header().Get("Retry-After") == "" {
-		t.Fatal("missing Retry-After")
+	if w.Header().Get("Retry-After") != "60" || a.redis.TTL(context.Background(), key).Val() != time.Minute {
+		t.Fatal("submission rate limit window changed")
 	}
 	w = request(t, a, "POST", "submissions", map[string]any{}, cookie, csrf)
 	requireStatus(t, w, 429)

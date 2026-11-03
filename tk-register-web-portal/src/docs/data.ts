@@ -160,7 +160,7 @@ export const lookupErrors: ErrorDefinition[] = [
   ...sharedErrors,
   { status: '404', code: 'ACCOUNT_NOT_FOUND', description: 'No matching owned Claude account. A different owner’s username or account produces the same response.' },
   { status: '405', code: 'METHOD_NOT_ALLOWED', description: 'Use GET for this endpoint.' },
-  { status: '429', code: 'RATE_LIMITED', description: 'The per-user limit of 60 lookup requests per minute has been reached. Wait for Retry-After before trying again.' },
+  { status: '429', code: 'RATE_LIMITED', description: 'The per-user limit of 600 lookup requests per minute has been reached. Wait for Retry-After before trying again.' },
   { status: '503', code: 'UNAVAILABLE', description: 'A required database or Redis service is unavailable. Retry with a delay.' },
 ];
 
@@ -174,7 +174,7 @@ export const submissionErrors: ErrorDefinition[] = [
   { status: '409', code: 'PROTOCOL_VERSION_CHANGED', description: 'The vendor configuration changed while preparing the request. Check Submission history before submitting again.' },
   { status: '413', code: 'REQUEST_TOO_LARGE', description: 'The JSON request body exceeds 3 MiB.' },
   { status: '415', code: 'INVALID_CONTENT_TYPE', description: 'Send Content-Type: application/json.' },
-  { status: '429', code: 'RATE_LIMITED', description: 'The per-user limit of 10 submission requests per minute has been reached. This limit is shared with the web form.' },
+  { status: '429', code: 'RATE_LIMITED', description: 'The per-user limit of 100 submission requests per minute has been reached. This limit is shared with the web form.' },
   { status: '502', code: 'UPSTREAM_CONNECTION_ERROR', description: 'The connection failed and the remote outcome is unconfirmed. A manual retry is allowed; no automatic retry is performed.' },
   { status: '502', code: 'UPSTREAM_RESPONSE_INVALID', description: 'The vendor response was incomplete or exceeded 256 KiB. The remote outcome may be unknown.' },
   { status: '503', code: 'UNAVAILABLE', description: 'A required local service is unavailable. Check Submission history before retrying if the outcome is uncertain.' },
@@ -192,7 +192,7 @@ export const authJSONUpdateErrors: ErrorDefinition[] = [
   { status: '409', code: 'AUTH_JSON_UPDATE_RUNNING / SYNC_RUNNING', description: 'Another update or collection is running. Wait for it to finish before starting a new request.' },
   { status: '409', code: 'AUTH_JSON_NOT_EDITABLE / ACCOUNT_CHANGED', description: 'The supplier does not allow editing in the current state, or the local account changed during the operation. Check the account before trying again.' },
   { status: '415', code: 'INVALID_CONTENT_TYPE', description: 'Send Content-Type: application/json.' },
-  { status: '429', code: 'RATE_LIMITED', description: 'The update limit of 10 requests per minute per user has been reached. Shared with web updates; wait for Retry-After.' },
+  { status: '429', code: 'RATE_LIMITED', description: 'The update limit of 100 requests per minute per user has been reached. Shared with web updates; wait for Retry-After.' },
   { status: '502', code: 'AUTH_JSON_UPDATE_REJECTED', description: 'The supplier explicitly rejected the replacement credentials. The error response does not include its credential-bearing body.' },
   { status: '502', code: 'AUTH_JSON_LOGIN_FAILED / AUTH_JSON_UNAVAILABLE', description: 'Supplier login, connection, or response processing failed. No update was confirmed. Contact an administrator if the issue persists.' },
   { status: '503', code: 'SYNC_NOT_CONFIGURED / UNAVAILABLE', description: 'Supplier website login has not been configured, or a required local service is unavailable.' },

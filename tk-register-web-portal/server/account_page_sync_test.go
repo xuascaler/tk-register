@@ -232,11 +232,22 @@ func TestPageSyncAdminSkipConfigAndRate(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireStatus(t, request(t, a, "POST", "accounts/sync", pageInput(rows[0]), cookie, csrf), 503)
-	// All-skipped batches need no login configuration and remain rate limited.
-	for i := 0; i < 16; i++ {
+	// Four owner attempts above count toward the 200-attempt minute. All-skipped
+	// batches need no login configuration and still consume that allowance.
+	for i := 0; i < 196; i++ {
 		requireStatus(t, request(t, a, "POST", "accounts/sync", pageInput(rows[2]), cookie, csrf), 200)
 	}
-	requireStatus(t, request(t, a, "POST", "accounts/sync", pageInput(rows[2]), cookie, csrf), 429)
+	w = request(t, a, "POST", "accounts/sync", pageInput(rows[2]), cookie, csrf)
+	requireStatus(t, w, 429)
+	key := redisPrefix + "account-sync:page-rate:" + fmt.Sprint(owner.ID)
+	if w.Header().Get("Retry-After") != "60" || a.redis.TTL(context.Background(), key).Val() != time.Minute {
+		t.Fatal("page sync rate limit window changed")
+	}
+	// An admin syncing the same owner's row uses the admin's own allowance.
+	requireStatus(t, request(t, a, "POST", "admin/synced-accounts/sync", pageInput(rows[2]), ac, acsrf), 200)
+	if fake.calls != 1 {
+		t.Fatal("skipped or rate-limited request contacted supplier")
+	}
 }
 
 func TestPageSyncWaitsForLeaseThenCollectsFresh(t *testing.T) {
