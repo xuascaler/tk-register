@@ -153,7 +153,7 @@ All identifiers are JSON strings. All times shown below are examples.
 | `snapshot_date` | `YYYY-MM-DD` string | Collection date in the configured collection timezone. |
 | `collected_at` | RFC3339 string | Actual time at which this snapshot was collected. |
 | `source_updated_at` | RFC3339 string or null | Reliable upstream usage-update time, if supplied. Otherwise `null`. |
-| `account_status` | string or null | Normalized supplier status at collection time, for example `active`, `offline`, `banned`, `pending`, `limited` or `unknown`. |
+| `account_status` | string or null | Normalized supplier status at collection time, for example `active`, `offline`, `banned`, `pending`, `sync_failed`, `limited` or `unknown`. `sync_failed` means the supplier reported an internal account synchronization failure; it is distinct from a failed collection request. |
 | `input_tokens_total` | number or null | Cumulative input-token counter. |
 | `output_tokens_total` | number or null | Cumulative output-token counter. |
 | `cost_total` | number or null | Original cumulative spending in the accompanying `currency`, already normalized from supplier micro-units into currency units. Retained unchanged for compatibility. |

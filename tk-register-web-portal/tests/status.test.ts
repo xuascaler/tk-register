@@ -29,6 +29,7 @@ test('status labels distinguish unchecked, no returned status and unaccepted acc
   assert.equal(statusLabel(submission('1', { status_checked_at: '2026-10-27T00:00:00Z' })), 'Status unavailable');
   assert.equal(statusLabel(submission('1'), { error: 'Connection failed.' }), 'Status unavailable');
   assert.equal(statusLabel(submission('1', { remote_status: 'online' }), { error: 'Connection failed.' }), 'online');
+  assert.equal(statusLabel(submission('1', { remote_status: 'sync_failed' })), 'Upstream sync failed');
   assert.equal(statusLabel(submission('1', { status: 'unknown' })), 'Awaiting confirmation');
   assert.equal(statusLabel(submission('1', { status: 'running' })), 'Awaiting acceptance');
   assert.equal(statusLabel(submission('1', { status: 'failed' })), 'Unavailable');

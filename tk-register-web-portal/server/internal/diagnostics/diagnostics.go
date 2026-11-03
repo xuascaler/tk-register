@@ -145,7 +145,7 @@ func fields(ctx context.Context) traceFields {
 	t := TraceFrom(ctx)
 	return traceFields{
 		TraceID: boundedID(t.TraceID),
-		Source:  allowed(t.Source, "manual_sync", "scheduled_sync", "post_submit_sync", "auth_json_refresh", "auth_json_check", "auth_json_update", "test_login", "detail_sync"),
+		Source:  allowed(t.Source, "manual_sync", "scheduled_sync", "post_submit_sync", "auth_json_refresh", "auth_json_check", "auth_json_update", "account_delete", "test_login", "detail_sync"),
 		Vendor:  allowed(t.Vendor, "tk-register-0"),
 		ActorID: t.ActorID, AccountID: t.AccountID, JobID: t.JobID, Attempt: max(0, t.Attempt),
 	}

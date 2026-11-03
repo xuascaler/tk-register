@@ -65,6 +65,9 @@ type editRecord struct {
 	AccountType json.RawMessage `json:"account_type"`
 	IsLocked    json.RawMessage `json:"is_locked"`
 	Remark      string          `json:"remark"`
+	Region      string          `json:"region"`
+	ProxyType   string          `json:"proxy_type"`
+	ProxyRegion string          `json:"proxy_region"`
 	config      map[string]json.RawMessage
 	info        EditInfo
 }
@@ -274,12 +277,22 @@ func (c *Client) UpdateAuthJSON(ctx context.Context, username, password string, 
 }
 
 func (r editRecord) updateBody(authJSON json.RawMessage) (map[string]any, error) {
+	body, err := r.metadataUpdateBody()
+	if err != nil {
+		return nil, err
+	}
+	body["cpa_auth_json"] = strings.TrimSpace(string(authJSON))
+	return body, nil
+}
+
+// metadataUpdateBody carries only the supplier's CPA edit-form fields. Existing
+// credentials and tags are not reflected into a metadata edit request.
+func (r editRecord) metadataUpdateBody() (map[string]any, error) {
 	body := map[string]any{
 		"provider": "claude", "model": r.Model, "account_type": 2,
 		"account_id": r.info.Account, "remark": r.Remark,
 		"adc_config": "", "api_key": "", "region": "", "aws_region": "",
 		"aws_project_id": "", "aws_auth_type": "arn", "proxy_type": "",
-		"cpa_auth_json": strings.TrimSpace(string(authJSON)),
 	}
 	fields := []string{"plan", "register_time", "plan_start_time", "plan_end_time", "register_location", "balance", "payment_method", "register_device", "recharge_time", "warranty_period"}
 	for i, key := range fields {
@@ -312,23 +325,28 @@ func (r editRecord) updateBody(authJSON json.RawMessage) (map[string]any, error)
 	return body, nil
 }
 
+func requestNotSent(err *Error) *Error {
+	err.RequestNotSent = true
+	return err
+}
+
 // updateRequest deliberately has no retry, even for expired authentication.
 // Failures that could occur after receipt are reported as unconfirmed.
 func (s *session) updateRequest(ctx context.Context, id string, payload map[string]any) error {
 	if ctx.Err() != nil {
-		return safeError(CodeUnavailable)
+		return requestNotSent(safeError(CodeUnavailable))
 	}
 	if s.remaining <= 0 || positiveID(json.RawMessage(id)) != id {
-		return safeError(CodeContractMismatch)
+		return requestNotSent(safeError(CodeContractMismatch))
 	}
 	s.remaining--
 	encoded, err := common.Marshal(payload)
 	if err != nil {
-		return safeError(CodeContractMismatch)
+		return requestNotSent(safeError(CodeContractMismatch))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, Origin+apiPrefix+"/accounts/"+id, strings.NewReader(string(encoded)))
 	if err != nil {
-		return safeError(CodeContractMismatch)
+		return requestNotSent(safeError(CodeContractMismatch))
 	}
 	// Removing GetBody also prevents HTTP transports from replaying the body.
 	req.GetBody = nil
@@ -347,8 +365,8 @@ func (s *session) updateRequest(ctx context.Context, id string, payload map[stri
 		}
 		var dial *net.OpError
 		var dns *net.DNSError
-		if errors.As(err, &dial) && dial.Op == "dial" || errors.As(err, &dns) {
-			return safeError(CodeUnavailable)
+		if response == nil && (errors.As(err, &dial) && dial.Op == "dial" || errors.As(err, &dns)) {
+			return requestNotSent(safeError(CodeUnavailable))
 		}
 		return authError(CodeUpdateUnconfirmed)
 	}

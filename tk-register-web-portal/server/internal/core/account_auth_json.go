@@ -55,7 +55,7 @@ func (s *Store) ConfirmSupplierRecord(ctx context.Context, id uint64, identity, 
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, id).Error; err != nil {
 			return err
 		}
-		if current.IdentityKey != identity || current.CurrentSubmissionID == nil {
+		if !current.AvailableForMutation() || current.IdentityKey != identity || current.CurrentSubmissionID == nil {
 			return ErrAccountIdentityChanged
 		}
 		// MySQL may report zero affected rows when the confirmed ID is already
@@ -90,7 +90,7 @@ func checkAuthJSONOwnership(tx *gorm.DB, target SyncedAccount) error {
 	// Check accepted submissions directly, so another owner's recent accepted
 	// submission is covered even before their synced-account row is materialized.
 	var count int64
-	if err := tx.Model(&Submission{}).Where("vendor_id = ? AND user_id <> ? AND status = ? AND remote_id IS NOT NULL AND remote_id <> ? AND LOWER(TRIM(account)) = ?",
+	if err := tx.Model(&Submission{}).Where("NOT EXISTS (SELECT 1 FROM synced_accounts AS archived WHERE archived.user_id = submissions.user_id AND archived.vendor_id = submissions.vendor_id AND LOWER(TRIM(archived.account)) = LOWER(TRIM(submissions.account)) AND submissions.id <= archived.deleted_through_submission_id)").Where("vendor_id = ? AND user_id <> ? AND status = ? AND remote_id IS NOT NULL AND remote_id <> ? AND LOWER(TRIM(account)) = ?",
 		target.VendorID, target.UserID, "accepted", "", NormalizeEmail(target.Account)).Count(&count).Error; err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func checkAuthJSONOwnership(tx *gorm.DB, target SyncedAccount) error {
 	if target.SupplierRecordID == nil || *target.SupplierRecordID == "" {
 		return nil
 	}
-	if err := tx.Model(&SyncedAccount{}).Where("vendor_id = ? AND user_id <> ? AND current_submission_id IS NOT NULL AND supplier_record_id = ?",
+	if err := tx.Model(&SyncedAccount{}).Where("deleted_at IS NULL AND vendor_id = ? AND user_id <> ? AND current_submission_id IS NOT NULL AND supplier_record_id = ?",
 		target.VendorID, target.UserID, *target.SupplierRecordID).Count(&count).Error; err != nil {
 		return err
 	}
@@ -113,6 +113,16 @@ func checkAuthJSONOwnership(tx *gorm.DB, target SyncedAccount) error {
 // CheckAuthJSONOwnership is also used after resolving the confirmed supplier
 // row ID. It reads local ownership only and never scans the supplier inventory.
 func (s *Store) CheckAuthJSONOwnership(ctx context.Context, target SyncedAccount) error {
+	var current SyncedAccount
+	if err := s.DB.WithContext(ctx).First(&current, target.ID).Error; err != nil {
+		return err
+	}
+	if current.UserID != target.UserID || current.IdentityKey != target.IdentityKey || current.DeletedAt != nil {
+		return ErrAccountIdentityChanged
+	}
+	if current.DeletionStatus != "" {
+		return ErrAccountDeleting
+	}
 	return checkAuthJSONOwnership(s.DB.WithContext(ctx), target)
 }
 
@@ -132,7 +142,7 @@ func (s *Store) BeginAuthJSONUpdateWithSource(ctx context.Context, target Synced
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, target.ID).Error; err != nil {
 			return err
 		}
-		if current.IdentityKey != target.IdentityKey || current.CurrentSubmissionID == nil || current.UserID != target.UserID {
+		if !current.AvailableForMutation() || current.IdentityKey != target.IdentityKey || current.CurrentSubmissionID == nil || current.UserID != target.UserID {
 			return ErrAccountIdentityChanged
 		}
 		if err := checkAuthJSONOwnership(tx, current); err != nil {
@@ -182,7 +192,7 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 		if saved.Status != "pending" {
 			return nil
 		}
-		currentIdentity = account.IdentityKey == saved.IdentityKey && account.CurrentSubmissionID != nil && account.UserID == saved.OwnerID && account.VendorID == saved.VendorID
+		currentIdentity = account.AvailableForMutation() && account.IdentityKey == saved.IdentityKey && account.CurrentSubmissionID != nil && account.UserID == saved.OwnerID && account.VendorID == saved.VendorID
 		if status == "updated" && currentIdentity {
 			var newer int64
 			if err := tx.Model(&AccountAuthJSONAudit{}).Where("account_id = ? AND identity_key = ? AND status = ? AND id > ?", account.ID, saved.IdentityKey, "updated", saved.ID).Count(&newer).Error; err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"goapi-tk-register/server/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type CreateSubmissionInput struct {
@@ -200,6 +201,13 @@ func (v *VendorService) create(ctx context.Context, userID uint64, input CreateS
 	record := Submission{UserID: userID, Source: source, APITokenID: apiTokenID, VendorID: vendorID, ProtocolVersionID: versionID, ClientRequestKey: input.ClientRequestKey, RequestHash: fingerprint, ActiveAccountKey: &accountKey, Account: normalized["account"].(string), Plan: normalized["plan"].(string), ParametersJSON: safeJSON, SecretParametersCiphertext: encrypted, Status: "running"}
 	execution := ProtocolExecution{ProtocolVersionID: versionID, RequestID: uuid.NewString(), Operation: "push", Status: "running", RequestJSON: safeJSON}
 	e = v.Store.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var lockedVendor Vendor
+		if e := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedVendor, vendorID).Error; e != nil {
+			return e
+		}
+		if e := rejectSubmissionDuringDeletion(tx, vendorID, record.Account); e != nil {
+			return e
+		}
 		if e := tx.Create(&record).Error; e != nil {
 			return e
 		}

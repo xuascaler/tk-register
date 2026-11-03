@@ -10,7 +10,7 @@ export function statusLabel(submission: Submission, refresh?: StatusRefresh) {
   if (submission.status === 'running') return 'Awaiting acceptance';
   if (submission.status === 'unknown') return 'Awaiting confirmation';
   if (submission.status !== 'accepted') return 'Unavailable';
-  if (submission.remote_status) return submission.remote_status;
+  if (submission.remote_status) return submission.remote_status === 'sync_failed' ? 'Upstream sync failed' : submission.remote_status;
   return submission.status_checked_at || refresh?.error
     ? 'Status unavailable'
     : 'Not checked';

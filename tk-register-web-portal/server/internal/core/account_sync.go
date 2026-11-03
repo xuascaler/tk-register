@@ -17,31 +17,35 @@ import (
 // SyncedAccount is a stable, owner-scoped identity independent of retries in
 // submission history. IdentityKey marks the currently accepted remote lifetime.
 type SyncedAccount struct {
-	ID                  uint64      `gorm:"primaryKey"`
-	AccountKey          string      `gorm:"size:64;not null;uniqueIndex"`
-	UserID              uint64      `gorm:"not null;index"`
-	User                User        `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT"`
-	VendorID            uint64      `gorm:"not null;index"`
-	Vendor              Vendor      `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT"`
-	Account             string      `gorm:"size:254;not null"`
-	Plan                string      `gorm:"size:64;not null"`
-	CurrentSubmissionID *uint64     `gorm:"index"`
-	CurrentSubmission   *Submission `gorm:"foreignKey:CurrentSubmissionID;constraint:OnDelete:RESTRICT"`
-	LatestSubmissionID  uint64      `gorm:"not null;index"`
-	LatestSubmission    Submission  `gorm:"foreignKey:LatestSubmissionID;constraint:OnDelete:RESTRICT"`
-	LatestSubmittedAt   time.Time   `gorm:"not null;index"`
-	SubmissionStatus    string      `gorm:"size:24;not null"`
-	RemoteID            *string     `gorm:"size:32"`
-	PlatformAccountID   *string     `gorm:"size:32"`
-	IdentityKey         string      `gorm:"size:64;not null"`
-	SupplierRecordID    *string     `gorm:"size:32"`
-	AuthJSONUpdatedAt   *time.Time
-	SnapshotStatus      *string `gorm:"size:80;index"`
-	LastSuccessAt       *time.Time
-	LastAttemptAt       *time.Time
-	LastError           string `gorm:"size:255;not null;default:''"`
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	DeletedAt                  *time.Time  `gorm:"index"`
+	DeletedThroughSubmissionID uint64      `gorm:"not null;default:0"`
+	DeletionStatus             string      `gorm:"size:32;not null;default:''"`
+	DeletionOperationID        *uint64     `gorm:"index"`
+	ID                         uint64      `gorm:"primaryKey"`
+	AccountKey                 string      `gorm:"size:64;not null;uniqueIndex"`
+	UserID                     uint64      `gorm:"not null;index"`
+	User                       User        `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT"`
+	VendorID                   uint64      `gorm:"not null;index"`
+	Vendor                     Vendor      `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT"`
+	Account                    string      `gorm:"size:254;not null"`
+	Plan                       string      `gorm:"size:64;not null"`
+	CurrentSubmissionID        *uint64     `gorm:"index"`
+	CurrentSubmission          *Submission `gorm:"foreignKey:CurrentSubmissionID;constraint:OnDelete:RESTRICT"`
+	LatestSubmissionID         uint64      `gorm:"not null;index"`
+	LatestSubmission           Submission  `gorm:"foreignKey:LatestSubmissionID;constraint:OnDelete:RESTRICT"`
+	LatestSubmittedAt          time.Time   `gorm:"not null;index"`
+	SubmissionStatus           string      `gorm:"size:24;not null"`
+	RemoteID                   *string     `gorm:"size:32"`
+	PlatformAccountID          *string     `gorm:"size:32"`
+	IdentityKey                string      `gorm:"size:64;not null"`
+	SupplierRecordID           *string     `gorm:"size:32"`
+	AuthJSONUpdatedAt          *time.Time
+	SnapshotStatus             *string `gorm:"size:80;index"`
+	LastSuccessAt              *time.Time
+	LastAttemptAt              *time.Time
+	LastError                  string `gorm:"size:255;not null;default:''"`
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 // AccountSnapshotValues preserves absent values as SQL NULL and JSON null.
@@ -96,6 +100,8 @@ type AccountSnapshotDTO struct {
 	AccountSnapshotValues
 }
 type AccountDTO struct {
+	DeletionStatus      string              `json:"deletion_status,omitempty"`
+	DeletionOperationID *string             `json:"deletion_operation_id,omitempty"`
 	ID                  string              `json:"id"`
 	UserID              string              `json:"user_id,omitempty"`
 	UserEmail           string              `json:"user_email,omitempty"`
@@ -125,7 +131,7 @@ type AccountPage struct {
 var ErrAccountIdentityChanged = errors.New("account identity changed during collection")
 
 func (s *Store) migrateAccountSync() error {
-	if err := s.DB.AutoMigrate(&SyncedAccount{}, &AccountSnapshot{}, &AccountSyncState{}, &AccountAuthJSONAudit{}); err != nil {
+	if err := s.DB.AutoMigrate(&SyncedAccount{}, &AccountSnapshot{}, &AccountSyncState{}, &AccountAuthJSONAudit{}, &AccountDeletionOperation{}, &DeletedAccount{}); err != nil {
 		return err
 	}
 	if err := s.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&AccountSyncState{ID: 1, Status: "idle"}).Error; err != nil {
@@ -187,39 +193,50 @@ func ensureSyncedAccountForSubmissionTx(tx *gorm.DB, submission Submission) (Syn
 }
 
 func ensureSyncedAccountTx(tx *gorm.DB, latest Submission) (SyncedAccount, error) {
-	var current Submission
-	err := accountGroup(tx.Model(&Submission{}).Select("id, user_id, vendor_id, account, plan, status, remote_id, platform_account_id, created_at"), latest).Where("status = ? AND remote_id IS NOT NULL AND remote_id <> ?", "accepted", "").Order("created_at DESC, id DESC").First(&current).Error
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	key := accountDigest(idString(latest.UserID), idString(latest.VendorID), strings.ToLower(strings.TrimSpace(latest.Account)))
+	placeholder := SyncedAccount{AccountKey: key, UserID: latest.UserID, VendorID: latest.VendorID, Account: latest.Account, Plan: latest.Plan, LatestSubmissionID: latest.ID, LatestSubmittedAt: latest.CreatedAt, SubmissionStatus: latest.Status, IdentityKey: accountDigest("unconfirmed")}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&placeholder).Error; err != nil {
 		return SyncedAccount{}, err
 	}
-	row := SyncedAccount{AccountKey: accountDigest(idString(latest.UserID), idString(latest.VendorID), strings.ToLower(strings.TrimSpace(latest.Account))), UserID: latest.UserID, VendorID: latest.VendorID, Account: latest.Account, Plan: latest.Plan, LatestSubmissionID: latest.ID, LatestSubmittedAt: latest.CreatedAt, SubmissionStatus: latest.Status, IdentityKey: accountDigest("unconfirmed")}
+	var existing SyncedAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("account_key = ?", key).First(&existing).Error; err != nil {
+		return existing, err
+	}
+	if existing.DeletionStatus != "" && existing.DeletedAt == nil {
+		return existing, nil
+	}
+	// A deleted lifetime is a durable tombstone. Only an explicitly newer
+	// accepted submission can establish a new lifetime; failed retries and old
+	// accepted history must never recreate it on a GET or scheduled collection.
+	currentQuery := accountGroup(tx.Model(&Submission{}).Select("id, user_id, vendor_id, account, plan, status, remote_id, platform_account_id, created_at"), latest).Where("status = ? AND remote_id IS NOT NULL AND remote_id <> ?", "accepted", "")
+	if existing.DeletedThroughSubmissionID != 0 {
+		currentQuery = currentQuery.Where("id > ?", existing.DeletedThroughSubmissionID)
+	}
+	var current Submission
+	err := currentQuery.Order("created_at DESC,id DESC").First(&current).Error
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return existing, err
+	}
+	if existing.DeletedAt != nil && (err != nil || current.ID <= existing.DeletedThroughSubmissionID) {
+		return existing, nil
+	}
+	row := placeholder
 	if err == nil {
 		row.CurrentSubmissionID = &current.ID
 		row.Plan, row.RemoteID, row.PlatformAccountID = current.Plan, current.RemoteID, current.PlatformAccountID
 		row.IdentityKey = remoteIdentity(current)
 	}
-	if err = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
-		return SyncedAccount{}, err
-	}
-	var existing SyncedAccount
-	if err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("account_key = ?", row.AccountKey).First(&existing).Error; err != nil {
-		return SyncedAccount{}, err
-	}
-	// A slower concurrent refresh must not restore an older submission.
 	if existing.LatestSubmittedAt.After(row.LatestSubmittedAt) || (existing.LatestSubmittedAt.Equal(row.LatestSubmittedAt) && existing.LatestSubmissionID > row.LatestSubmissionID) {
 		return existing, nil
 	}
-	// A transaction may have read submissions before waiting for this row lock.
-	// Its latest submission can match while its accepted lifetime is still old
-	// (for example, an earlier running push completed in the meantime).
-	if existing.CurrentSubmissionID != nil && (row.CurrentSubmissionID == nil || *existing.CurrentSubmissionID != *row.CurrentSubmissionID) {
+	if existing.DeletedAt == nil && existing.CurrentSubmissionID != nil && (row.CurrentSubmissionID == nil || *existing.CurrentSubmissionID != *row.CurrentSubmissionID) {
 		var accepted Submission
-		err := tx.Select("id, created_at").First(&accepted, *existing.CurrentSubmissionID).Error
+		err := tx.Select("id,created_at").First(&accepted, *existing.CurrentSubmissionID).Error
 		if errors.Is(err, ErrNotFound) {
-			return existing, nil // The locked account is newer than this read snapshot.
+			return existing, nil
 		}
 		if err != nil {
-			return SyncedAccount{}, err
+			return existing, err
 		}
 		if row.CurrentSubmissionID == nil || accepted.CreatedAt.After(current.CreatedAt) || (accepted.CreatedAt.Equal(current.CreatedAt) && accepted.ID > current.ID) {
 			return existing, nil
@@ -228,19 +245,21 @@ func ensureSyncedAccountTx(tx *gorm.DB, latest Submission) (SyncedAccount, error
 	if existing.LatestSubmissionID == row.LatestSubmissionID && existing.SubmissionStatus != "running" && row.SubmissionStatus == "running" {
 		row.SubmissionStatus = existing.SubmissionStatus
 	}
-	// A newly accepted submission with the same remote ID and plan is
-	// still the same lifetime. A later return to an old ID or plan starts
-	// a fresh lifetime and must not revive its historical observations.
-	if existing.CurrentSubmissionID != nil && row.CurrentSubmissionID != nil && existing.RemoteID != nil && row.RemoteID != nil && *existing.RemoteID == *row.RemoteID && existing.Plan == row.Plan {
+	if existing.DeletedAt == nil && existing.CurrentSubmissionID != nil && row.CurrentSubmissionID != nil && existing.RemoteID != nil && row.RemoteID != nil && *existing.RemoteID == *row.RemoteID && existing.Plan == row.Plan {
 		row.IdentityKey = existing.IdentityKey
 	}
 	updates := map[string]any{"account": row.Account, "plan": row.Plan, "latest_submission_id": row.LatestSubmissionID, "latest_submitted_at": row.LatestSubmittedAt, "submission_status": row.SubmissionStatus, "current_submission_id": row.CurrentSubmissionID, "remote_id": row.RemoteID, "platform_account_id": row.PlatformAccountID, "identity_key": row.IdentityKey}
+	if existing.DeletedAt != nil {
+		updates["deleted_at"] = nil
+		updates["deletion_status"] = ""
+		updates["deletion_operation_id"] = nil
+	}
 	if existing.IdentityKey != row.IdentityKey {
 		updates["snapshot_status"], updates["last_success_at"], updates["last_attempt_at"], updates["last_error"] = nil, nil, nil, ""
 		updates["supplier_record_id"], updates["auth_json_updated_at"] = nil, nil
 	}
-	if err = tx.Model(&existing).Updates(updates).Error; err != nil {
-		return SyncedAccount{}, err
+	if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+		return existing, err
 	}
 	err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&existing, existing.ID).Error
 	return existing, err
@@ -260,7 +279,11 @@ func snapshotDTO(row AccountSnapshot) AccountSnapshotDTO {
 	return out
 }
 func (s *Store) accountDTO(ctx context.Context, row SyncedAccount) (AccountDTO, error) {
-	out := AccountDTO{ID: idString(row.ID), Account: row.Account, Plan: row.Plan, VendorID: idString(row.VendorID), LatestSubmissionID: idString(row.LatestSubmissionID), SubmissionStatus: row.SubmissionStatus, RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt, LastError: row.LastError, SupplierRecordID: row.SupplierRecordID, AuthJSONUpdatedAt: row.AuthJSONUpdatedAt}
+	out := AccountDTO{DeletionStatus: row.DeletionStatus, ID: idString(row.ID), Account: row.Account, Plan: row.Plan, VendorID: idString(row.VendorID), LatestSubmissionID: idString(row.LatestSubmissionID), SubmissionStatus: row.SubmissionStatus, RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt, LastError: row.LastError, SupplierRecordID: row.SupplierRecordID, AuthJSONUpdatedAt: row.AuthJSONUpdatedAt}
+	if row.DeletionOperationID != nil {
+		v := idString(*row.DeletionOperationID)
+		out.DeletionOperationID = &v
+	}
 	if row.CurrentSubmissionID != nil {
 		v := idString(*row.CurrentSubmissionID)
 		out.CurrentSubmissionID = &v
@@ -289,7 +312,7 @@ func validAccountFilter(page int, search, status string) error {
 		return validationErrorf("invalid account list filter")
 	}
 	switch status {
-	case "", "all", "active", "offline", "banned", "unknown", "pending", "limited":
+	case "", "all", "active", "offline", "banned", "unknown", "pending", "limited", "sync_failed":
 	default:
 		return validationErrorf("invalid account status")
 	}
@@ -317,7 +340,7 @@ func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int,
 	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
 		return out, err
 	}
-	q := s.DB.WithContext(ctx).Model(&SyncedAccount{})
+	q := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("deleted_at IS NULL")
 	if !includeOwner {
 		q = q.Where("user_id = ?", userID)
 	}
@@ -361,7 +384,7 @@ func (s *Store) SyncedAccountForUser(ctx context.Context, userID, id uint64) (Ac
 		return AccountDTO{}, err
 	}
 	var row SyncedAccount
-	if err := s.DB.WithContext(ctx).Where("id = ? AND user_id = ?", id, userID).First(&row).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("id = ? AND user_id = ? AND deleted_at IS NULL", id, userID).First(&row).Error; err != nil {
 		return AccountDTO{}, err
 	}
 	return s.accountDTO(ctx, row)
@@ -388,7 +411,7 @@ func (s *Store) LookupSyncedAccountForUser(ctx context.Context, userID uint64, v
 	}
 	key := accountDigest(idString(userID), idString(vendor.ID), account)
 	var row SyncedAccount
-	if err := s.DB.WithContext(ctx).Where("account_key = ? AND user_id = ? AND vendor_id = ?", key, userID, vendor.ID).First(&row).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("account_key = ? AND user_id = ? AND vendor_id = ? AND deleted_at IS NULL", key, userID, vendor.ID).First(&row).Error; err != nil {
 		return AccountDTO{}, err
 	}
 	if !strings.HasPrefix(row.Plan, "claude/") {
@@ -406,7 +429,7 @@ func (s *Store) SyncedAccountForAdmin(ctx context.Context, id uint64) (AccountDT
 		return AccountDTO{}, err
 	}
 	var row SyncedAccount
-	if err := s.DB.WithContext(ctx).First(&row, id).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("deleted_at IS NULL").First(&row, id).Error; err != nil {
 		return AccountDTO{}, err
 	}
 	dto, err := s.accountDTO(ctx, row)
@@ -435,7 +458,7 @@ func (s *Store) AccountSnapshots(ctx context.Context, accountID uint64, days int
 		return out, validationErrorf("select 7, 30, or 90 days")
 	}
 	var account SyncedAccount
-	if err := s.DB.WithContext(ctx).First(&account, accountID).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Where("deleted_at IS NULL").First(&account, accountID).Error; err != nil {
 		return out, err
 	}
 	var rows []AccountSnapshot
@@ -452,7 +475,7 @@ func (s *Store) CollectionTargets(ctx context.Context, userID, accountID uint64)
 	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
 		return nil, err
 	}
-	q := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("current_submission_id IS NOT NULL")
+	q := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("deleted_at IS NULL").Where("current_submission_id IS NOT NULL AND deletion_status = ?", "")
 	q = q.Where("vendor_id IN (?)", s.DB.Model(&Vendor{}).Select("id").Where("enabled = ? AND code = ?", true, "tk-register-0"))
 	if userID != 0 {
 		q = q.Where("user_id = ?", userID)
@@ -514,7 +537,7 @@ func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, exp
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, accountID).Error; err != nil {
 			return err
 		}
-		if account.IdentityKey != expectedIdentity || account.CurrentSubmissionID == nil {
+		if !account.AvailableForMutation() || account.IdentityKey != expectedIdentity || account.CurrentSubmissionID == nil {
 			return ErrAccountIdentityChanged
 		}
 		// Store the cadence with the observation so later configuration changes
@@ -567,7 +590,7 @@ func (s *Store) RecordAccountFailure(ctx context.Context, accountID uint64, expe
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, accountID).Error; err != nil {
 			return err
 		}
-		if account.IdentityKey != expectedIdentity {
+		if !account.AvailableForMutation() || account.IdentityKey != expectedIdentity {
 			return ErrAccountIdentityChanged
 		}
 		if account.LastAttemptAt != nil && account.LastAttemptAt.After(at) {

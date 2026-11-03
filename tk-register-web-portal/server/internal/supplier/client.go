@@ -54,6 +54,9 @@ type Error struct {
 	RetryAt           time.Time
 	Stage             string
 	Deferred          bool
+	// RequestNotSent is set only when a mutation failed before any request
+	// could reach the supplier. It must not be inferred from a read timeout.
+	RequestNotSent bool
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -535,6 +538,8 @@ func canonicalStatus(status string) string {
 		return "banned"
 	case "offline":
 		return "offline"
+	case "sync_failed":
+		return "sync_failed"
 	case "wait_check", "init", "bound", "cooking", "ready", "re_login", "pending_activation":
 		return "pending"
 	default:

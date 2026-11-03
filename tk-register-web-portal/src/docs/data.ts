@@ -135,7 +135,7 @@ export const snapshotFields: FieldDefinition[] = [
   { name: 'snapshot_date', type: 'string', description: 'Collection date in the configured timezone, in YYYY-MM-DD format.' },
   { name: 'collected_at', type: 'string', description: 'Actual collection time as an RFC3339 timestamp.' },
   { name: 'source_updated_at', type: 'string | null', description: 'Reliable upstream update time, when supplied, as an RFC3339 timestamp.' },
-  { name: 'account_status', type: 'string | null', description: 'Supplier status at collection time: for example active, offline, banned, pending, limited, or unknown.' },
+  { name: 'account_status', type: 'string | null', description: 'Supplier status at collection time: for example active, offline, banned, pending, sync_failed, limited, or unknown. sync_failed means the supplier reported an internal account synchronization failure; it is separate from a failed collection request.' },
   { name: 'input_tokens_total', type: 'number | null', description: 'Cumulative input-token counter.' },
   { name: 'output_tokens_total', type: 'number | null', description: 'Cumulative output-token counter.' },
   { name: 'cost_total', type: 'number | null', description: 'Original cumulative spend in the accompanying currency, already normalized from supplier micro-units. Use cost_total_usd for the USD amount.' },

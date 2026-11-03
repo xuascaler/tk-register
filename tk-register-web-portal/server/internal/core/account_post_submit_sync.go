@@ -92,6 +92,9 @@ func enqueuePostSubmissionSyncTx(tx *gorm.DB, submission Submission, at time.Tim
 	if err != nil {
 		return err
 	}
+	if !account.AvailableForMutation() {
+		return nil
+	}
 	if submission.Source != "api" && submission.Source != "web" {
 		return nil
 	}
@@ -100,7 +103,7 @@ func enqueuePostSubmissionSyncTx(tx *gorm.DB, submission Submission, at time.Tim
 }
 
 func enqueueAuthJSONSyncTx(tx *gorm.DB, account SyncedAccount, audit AccountAuthJSONAudit, at time.Time) error {
-	if (audit.Source != "api" && audit.Source != "web") || audit.Status != "updated" || account.CurrentSubmissionID == nil || account.IdentityKey != audit.IdentityKey || account.UserID != audit.OwnerID || account.ID != audit.AccountID {
+	if !account.AvailableForMutation() || (audit.Source != "api" && audit.Source != "web") || audit.Status != "updated" || account.CurrentSubmissionID == nil || account.IdentityKey != audit.IdentityKey || account.UserID != audit.OwnerID || account.ID != audit.AccountID {
 		return ErrPostSubmissionSyncIneligible
 	}
 	job := PostSubmissionSyncJob{SubmissionID: *account.CurrentSubmissionID, AuthJSONAuditID: &audit.ID, AccountID: account.ID, UserID: account.UserID, IdentityKey: account.IdentityKey, Status: "pending", CreatedAt: at.UTC(), NextRunAt: at.UTC().Add(postSubmissionSyncInterval)}
@@ -169,7 +172,7 @@ func (s *Store) PostSubmissionSyncTarget(ctx context.Context, job PostSubmission
 		if err != nil {
 			return err
 		}
-		ineligible = target.ID != job.AccountID || target.UserID != job.UserID || target.VendorID != submission.VendorID || target.IdentityKey != job.IdentityKey || target.CurrentSubmissionID == nil || *target.CurrentSubmissionID != job.SubmissionID || NormalizeEmail(target.Account) != NormalizeEmail(submission.Account) || !strings.HasPrefix(target.Plan, "claude/")
+		ineligible = !target.AvailableForMutation() || target.ID != job.AccountID || target.UserID != job.UserID || target.VendorID != submission.VendorID || target.IdentityKey != job.IdentityKey || target.CurrentSubmissionID == nil || *target.CurrentSubmissionID != job.SubmissionID || NormalizeEmail(target.Account) != NormalizeEmail(submission.Account) || !strings.HasPrefix(target.Plan, "claude/")
 		if ineligible {
 			return nil
 		}

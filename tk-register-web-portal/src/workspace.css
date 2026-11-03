@@ -397,6 +397,7 @@
   color: #99712d;
 }
 .state-failed,
+.state-sync_failed,
 .state-check_fail {
   background: #fff0f0;
   color: #ae4f54;

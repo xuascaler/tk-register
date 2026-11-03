@@ -94,6 +94,14 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		vendorFailure(w, err)
 		return
 	}
+	if target.DeletedAt != nil {
+		fail(w, 404, "ACCOUNT_NOT_FOUND", "The requested account was not found.")
+		return
+	}
+	if !target.AvailableForMutation() {
+		fail(w, 409, "ACCOUNT_DELETING", "This account is being deleted. Please wait.")
+		return
+	}
 	var vendor core.Vendor
 	if err := a.store.DB.WithContext(r.Context()).First(&vendor, target.VendorID).Error; err != nil {
 		internal(w)

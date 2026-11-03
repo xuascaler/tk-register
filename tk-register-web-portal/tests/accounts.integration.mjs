@@ -45,7 +45,7 @@ try {
   await mkdir('test-results', { recursive: true });
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/account-pool/accounts`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Sync']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Actions']);
   assert.equal(await page.locator('.usage-owner-email').first().textContent(), 'owner@example.com');
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'alice@example.com' }).textContent(), /171\.47 \$/);
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /0\.00 \$/);
@@ -87,7 +87,8 @@ try {
   assert.match(await page.locator('.usage-owner-meta').textContent(), /owner@example.com/);
   assert.match(await page.locator('.usage-metrics').textContent(), /171\.47 \$/);
   assert.equal(await page.locator('.usage-chart-unit').textContent(), 'Cumulative spend');
-  assert.match(await page.locator('.usage-chart-point title').textContent(), /171\.47 \$/);
+  await page.locator('.usage-chart').focus();
+  assert.match(await page.locator('.usage-chart-tooltip').textContent(), /171\.47 \$/);
   await page.getByRole('button', { name: 'View data', exact: true }).click();
   assert.match(await page.locator('.usage-data-table').textContent(), /171\.47 \$/);
   await page.getByRole('button', { name: 'Sync now', exact: true }).click();
@@ -108,7 +109,7 @@ try {
   assert.match(page.url(), /account-pool\/accounts\/42$/);
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Sync']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Actions']);
   assert.equal(await page.locator('.usage-owner-email').count(), 0);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).click();
   await page.getByRole('button', { name: 'Sync now', exact: true }).waitFor();

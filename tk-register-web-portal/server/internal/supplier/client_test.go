@@ -373,7 +373,7 @@ func TestSupplierStatusMatchesCanonicalFilters(t *testing.T) {
 		"cooking": "pending", "ready": "pending", "re_login": "pending",
 		"pending_activation": "pending", "login_failed": "unknown",
 		"re_login_failed": "unknown", "cooking_failed": "unknown",
-		"bound_failed": "unknown", "sync_failed": "unknown", "new_future_status": "unknown",
+		"bound_failed": "unknown", "sync_failed": "sync_failed", "new_future_status": "unknown",
 	}
 	for input, want := range cases {
 		a, err := parseAccount(rawAccount{

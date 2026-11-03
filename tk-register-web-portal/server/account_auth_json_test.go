@@ -20,8 +20,10 @@ type mockAuthEditor struct {
 	record                          supplier.Account
 	checkErr, updateErr, refreshErr error
 	checks, updates, refreshes      int
+	writes                          int
 	target                          supplier.Target
 	raw                             json.RawMessage
+	beforeGuard                     func()
 	onUpdate                        func()
 }
 
@@ -34,13 +36,19 @@ func (m *mockAuthEditor) UpdateAuthJSON(ctx context.Context, u, p string, target
 	m.updates++
 	m.target = target
 	m.raw = raw
-	if m.onUpdate != nil {
-		m.onUpdate()
+	if m.beforeGuard != nil {
+		m.beforeGuard()
 	}
 	if target.BeforeUpdate != nil {
 		if err := target.BeforeUpdate(ctx, m.info); err != nil {
 			return m.info, err
 		}
+	}
+	// Match the real adapter: ownership is checked before dispatching the
+	// write. onUpdate simulates changes while that request is already in flight.
+	m.writes++
+	if m.onUpdate != nil {
+		m.onUpdate()
 	}
 	return m.info, m.updateErr
 }
@@ -282,27 +290,32 @@ func TestAuthJSONAdminUnsupportedAndLockGuards(t *testing.T) {
 	requireStatus(t, request(t, a, "GET", authRoute(target.ID), nil, cookie, ""), 409)
 }
 
+func replaceAuthAccountLifetime(t *testing.T, a *app, target core.SyncedAccount) {
+	t.Helper()
+	var sub core.Submission
+	if err := a.store.DB.First(&sub, *target.CurrentSubmissionID).Error; err != nil {
+		t.Fatal(err)
+	}
+	sub.ID = 0
+	sub.ClientRequestKey = "new-identity"
+	sub.CreatedAt = time.Now().UTC()
+	sub.UpdatedAt = sub.CreatedAt
+	remote := "987654321"
+	sub.RemoteID = &remote
+	if err := a.store.DB.Create(&sub).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.store.EnsureSyncedAccounts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAuthJSONIdentityChangeDoesNotModifyNewLifetime(t *testing.T) {
 	a, owner, cookie, csrf, target, fake := setupAuthUpdate(t)
-	fake.onUpdate = func() {
-		var sub core.Submission
-		a.store.DB.First(&sub, *target.CurrentSubmissionID)
-		sub.ID = 0
-		sub.ClientRequestKey = "new-identity"
-		sub.CreatedAt = time.Now().UTC()
-		sub.UpdatedAt = sub.CreatedAt
-		remote := "987654321"
-		sub.RemoteID = &remote
-		if err := a.store.DB.Create(&sub).Error; err != nil {
-			t.Fatal(err)
-		}
-		if err := a.store.EnsureSyncedAccounts(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
+	fake.onUpdate = func() { replaceAuthAccountLifetime(t, a, target) }
 	w := request(t, a, "POST", authRoute(target.ID), authInput(), cookie, csrf)
 	requireStatus(t, w, 200)
-	if data(t, w)["updated"] != true || data(t, w)["refresh_status"] != "failed" || fake.refreshes != 0 {
+	if data(t, w)["updated"] != true || data(t, w)["refresh_status"] != "failed" || fake.refreshes != 0 || fake.writes != 1 {
 		t.Fatal(w.Body.String())
 	}
 	account, _ := a.store.SyncedAccountForUser(context.Background(), owner.ID, target.ID)
@@ -311,5 +324,30 @@ func TestAuthJSONIdentityChangeDoesNotModifyNewLifetime(t *testing.T) {
 	}
 	if authAudits(t, a)[0].Status != "updated" {
 		t.Fatal("lost confirmed remote result")
+	}
+}
+
+func TestAuthJSONIdentityChangeBeforeDispatchPreventsWrite(t *testing.T) {
+	a, owner, cookie, csrf, target, fake := setupAuthUpdate(t)
+	fake.beforeGuard = func() { replaceAuthAccountLifetime(t, a, target) }
+	w := request(t, a, "POST", authRoute(target.ID), authInput(), cookie, csrf)
+	requireStatus(t, w, 502)
+	if fake.writes != 0 || fake.refreshes != 0 {
+		t.Fatal("stale identity reached supplier mutation or collection", fake.writes, fake.refreshes)
+	}
+	account, err := a.store.SyncedAccountForUser(context.Background(), owner.ID, target.ID)
+	if err != nil || account.AuthJSONUpdatedAt != nil || account.SupplierRecordID != nil || account.Snapshot != nil {
+		t.Fatalf("stale request contaminated new identity: %+v %v", account, err)
+	}
+	audits := authAudits(t, a)
+	if len(audits) != 1 || audits[0].Status != "failed" {
+		t.Fatalf("unsent stale update was not recorded as failed: %+v", audits)
+	}
+	var jobs int64
+	if err := a.store.DB.Model(&core.PostSubmissionSyncJob{}).Where("auth_json_audit_id = ?", audits[0].ID).Count(&jobs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 0 {
+		t.Fatal("blocked mutation queued a sync for the new lifetime", jobs)
 	}
 }

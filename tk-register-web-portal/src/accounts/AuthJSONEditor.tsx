@@ -6,6 +6,7 @@ import { ErrorNotice, Loading } from '../ui';
 import { authJSONUpdateError, type AuthJSONEligibility, type AuthJSONUpdateResult } from './auth-json';
 import { formatTime } from './helpers';
 import type { SyncedAccount } from './types';
+import { deletionInProgress } from './delete-account';
 import './auth-json.css';
 
 export function AuthenticationCard({ account, disabled, onEdit, timezone }: {
@@ -14,9 +15,9 @@ export function AuthenticationCard({ account, disabled, onEdit, timezone }: {
   return <section className='account-authentication' aria-label='Authentication'>
     <div className='account-auth-copy'><h2>Authentication</h2><p>Update this account’s Auth JSON when its credentials change.</p>
       {account.auth_json_updated_at && <span className='account-auth-updated'>Last updated {formatTime(account.auth_json_updated_at, timezone)}</span>}
-      {!account.current_submission_id && <span className='account-auth-updated'>Available after the account submission is accepted.</span>}
+      {deletionInProgress(account) ? <span className='account-auth-updated'>Unavailable while this account is being deleted.</span> : !account.current_submission_id && <span className='account-auth-updated'>Available after the account submission is accepted.</span>}
     </div>
-    <button type='button' className='button pale' disabled={disabled || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />Update Auth JSON</button>
+    <button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />Update Auth JSON</button>
   </section>;
 }
 

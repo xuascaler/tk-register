@@ -39,6 +39,7 @@ type app struct {
 	accountCollector                   accountCollector
 	accountPageCollector               accountPageCollector
 	accountAuthEditor                  accountAuthEditor
+	accountExpirer                     accountExpirer
 	supplierClient                     *supplier.Client
 	accountSyncWake                    chan struct{}
 }

@@ -146,6 +146,12 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		vendorFailure(w, err)
 		return true
 	}
+	// Deletion progress must remain readable after ordinary account lookups
+	// start excluding the completed tombstone.
+	if len(parts) == 2 && parts[1] == "delete" {
+		a.accountDeletion(w, r, user, id, adminAccounts)
+		return true
+	}
 	account, err := lookupAccount(id)
 	if err != nil {
 		vendorFailure(w, err)
@@ -160,6 +166,10 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "sync" && r.Method == "POST" {
+		if account.DeletionStatus != "" {
+			fail(w, 409, "ACCOUNT_DELETING", "This account is being deleted. Please wait.")
+			return true
+		}
 		if account.CurrentSubmissionID == nil {
 			fail(w, 409, "ACCOUNT_NOT_ACCEPTED", "Only an accepted account can be synchronized.")
 			return true

@@ -183,6 +183,8 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 			vendors[target.VendorID] = vendor
 		}
 		switch {
+		case !target.AvailableForMutation():
+			out.Results[i].Message = "This account is being deleted. Please wait."
 		case target.CurrentSubmissionID == nil:
 			out.Results[i].Message = "Only accepted accounts can be synchronized."
 		case !vendor.Enabled:

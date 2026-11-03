@@ -17,6 +17,7 @@ export function dateTime(value: string | null | undefined) {
       });
 }
 export function humanize(value: string | null | undefined) {
+  if (value === 'sync_failed') return 'Upstream sync failed';
   return value
     ? value.replaceAll('_', ' ').replace(/^./, (s) => s.toUpperCase())
     : 'Not checked';
