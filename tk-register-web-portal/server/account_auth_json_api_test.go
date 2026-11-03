@@ -60,7 +60,16 @@ func authAPIResult(t *testing.T, w *httptest.ResponseRecorder) struct {
 	return envelope.Data
 }
 
-func TestAuthJSONAPISuccessRefreshAndAuditContract(t *testing.T) {
+func authAPISyncJob(t *testing.T, a *app, auditID uint64) core.PostSubmissionSyncJob {
+	t.Helper()
+	var jobs []core.PostSubmissionSyncJob
+	if err := a.store.DB.Where("auth_json_audit_id = ?", auditID).Find(&jobs).Error; err != nil || len(jobs) != 1 {
+		t.Fatalf("expected one refresh job for Auth JSON audit %d: count=%d error=%v", auditID, len(jobs), err)
+	}
+	return jobs[0]
+}
+
+func TestAuthJSONAPIQueuesRefreshAndAuditContract(t *testing.T) {
 	for _, asString := range []bool{false, true} {
 		t.Run(fmt.Sprintf("JSON-string=%t", asString), func(t *testing.T) {
 			a, owner, _, _, target, fake := setupAuthUpdate(t)
@@ -73,18 +82,18 @@ func TestAuthJSONAPISuccessRefreshAndAuditContract(t *testing.T) {
 			w := apiRequest(t, a, "POST", claudeAccountAuthJSONAPIPath, token.PlaintextToken, "application/json; charset=utf-8", body)
 			requireStatus(t, w, 200)
 			out := authAPIResult(t, w)
-			if !out.Updated || out.AuditID == "" || out.UpdatedAt.IsZero() || out.RefreshStatus != "succeeded" || out.Account == nil || out.RefreshMessage == "" {
+			if !out.Updated || out.AuditID == "" || out.UpdatedAt.IsZero() || out.RefreshStatus != "pending" || out.Account == nil || out.RefreshMessage == "" {
 				t.Fatal(w.Body.String())
 			}
-			if fake.updates != 1 || fake.refreshes != 1 || fake.target.RecordID != "350001" {
-				t.Fatal("expected exactly one write followed by fresh account collection", fake)
+			if fake.updates != 1 || fake.refreshes != 0 {
+				t.Fatal("expected one credential write and no inline account collection", fake)
 			}
 			account := out.Account
 			if account.ID != fmt.Sprint(target.ID) || account.Username != owner.Email || account.Account != target.Account || account.Vendor != "tk-register-0" || account.IntervalHours != 2 {
 				t.Fatalf("unsafe or incorrect public account attribution: %+v", account)
 			}
-			if account.Snapshot == nil || account.Snapshot.CostTotal == nil || *account.Snapshot.CostTotal != 12.5 || account.Snapshot.CostTotalUSD == nil || math.Abs(*account.Snapshot.CostTotalUSD-12.5/7.2) > 1e-12 || account.Snapshot.ExchangeRateCNYPerUSD != 7.2 || account.Snapshot.Currency == nil || *account.Snapshot.Currency != "CNY" {
-				t.Fatalf("fresh usage or currency contract lost: %+v", account.Snapshot)
+			if account.Snapshot != nil || account.LastSuccessAt != nil {
+				t.Fatal("queued update fabricated a completed account sync")
 			}
 			if w.Header().Get("X-Request-ID") == "" || w.Header().Get("X-Auth-JSON-Audit-ID") != out.AuditID || w.Header().Get("Cache-Control") != "no-store" {
 				t.Fatal("missing correlation/private headers")
@@ -101,8 +110,12 @@ func TestAuthJSONAPISuccessRefreshAndAuditContract(t *testing.T) {
 				t.Fatalf("expected one update audit, got %+v", rows)
 			}
 			audit := rows[0]
-			if fmt.Sprint(audit.ID) != out.AuditID || audit.Source != "api" || audit.APITokenID == nil || *audit.APITokenID != tokenID || audit.APITokenRevision == nil || *audit.APITokenRevision != token.Token.Revision || audit.ActorID != owner.ID || audit.OwnerID != owner.ID || audit.AccountID != target.ID || audit.VendorID != target.VendorID || audit.RequestID != w.Header().Get("X-Request-ID") || audit.Status != "updated" || audit.RefreshStatus != "succeeded" || audit.FinishedAt == nil {
+			if fmt.Sprint(audit.ID) != out.AuditID || audit.Source != "api" || audit.APITokenID == nil || *audit.APITokenID != tokenID || audit.APITokenRevision == nil || *audit.APITokenRevision != token.Token.Revision || audit.ActorID != owner.ID || audit.OwnerID != owner.ID || audit.AccountID != target.ID || audit.VendorID != target.VendorID || audit.RequestID != w.Header().Get("X-Request-ID") || audit.Status != "updated" || audit.RefreshStatus != "pending" || audit.FinishedAt == nil {
 				t.Fatalf("incomplete API audit metadata: %+v", audit)
+			}
+			job := authAPISyncJob(t, a, audit.ID)
+			if job.SubmissionID != before.ID || job.SubmissionTriggerID != nil || job.AccountID != target.ID || job.UserID != owner.ID || job.IdentityKey != target.IdentityKey || job.Status != "pending" || job.AttemptCount != 0 || !job.NextRunAt.Equal(out.UpdatedAt.Add(3*time.Second)) {
+				t.Fatalf("successful API update did not queue its delayed refresh: %+v", job)
 			}
 			var after core.Submission
 			a.store.DB.First(&after, before.ID)
@@ -235,7 +248,7 @@ func TestAuthJSONAPIRequestValidationPreventsSupplierWrites(t *testing.T) {
 }
 
 func TestAuthJSONAPIUpdateAndRefreshOutcomesRemainSeparate(t *testing.T) {
-	t.Run("confirmed write but failed refresh", func(t *testing.T) {
+	t.Run("confirmed write returns the saved snapshot while refresh is pending", func(t *testing.T) {
 		a, owner, _, _, target, fake := setupAuthUpdate(t)
 		token := lookupToken(t, a, owner.ID)
 		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
@@ -247,11 +260,11 @@ func TestAuthJSONAPIUpdateAndRefreshOutcomesRemainSeparate(t *testing.T) {
 		w := apiRequest(t, a, "POST", claudeAccountAuthJSONAPIPath, token.PlaintextToken, "application/json", authAPIBody(t, owner.Email, target.Account, false))
 		requireStatus(t, w, 200)
 		out := authAPIResult(t, w)
-		if !out.Updated || out.RefreshStatus != "failed" || out.Account == nil || out.Account.Snapshot == nil || out.Account.LastSuccessAt == nil || !out.Account.LastSuccessAt.Equal(at) || *out.Account.Snapshot.CostTotalUSD != 10 || *out.Account.Snapshot.AccountStatus != "offline" {
+		if !out.Updated || out.RefreshStatus != "pending" || out.Account == nil || out.Account.Snapshot == nil || out.Account.LastSuccessAt == nil || !out.Account.LastSuccessAt.Equal(at) || *out.Account.Snapshot.CostTotalUSD != 10 || *out.Account.Snapshot.AccountStatus != "offline" {
 			t.Fatal("lost successful credential update or last successful snapshot", w.Body.String())
 		}
 		rows := authAudits(t, a)
-		if len(rows) != 1 || rows[0].Status != "updated" || rows[0].RefreshStatus != "failed" || fake.updates != 1 || fake.refreshes != 1 {
+		if len(rows) != 1 || rows[0].Status != "updated" || rows[0].RefreshStatus != "pending" || fake.updates != 1 || fake.refreshes != 0 {
 			t.Fatal(rows, fake)
 		}
 		assertNoSecrets(t, w.Body.String())
@@ -278,6 +291,10 @@ func TestAuthJSONAPIUpdateAndRefreshOutcomesRemainSeparate(t *testing.T) {
 			if fake.updates != 1 || fake.refreshes != 0 {
 				t.Fatal("write was retried or a failed write was refreshed", fake)
 			}
+			var jobs int64
+			if err := a.store.DB.Model(&core.PostSubmissionSyncJob{}).Count(&jobs).Error; err != nil || jobs != 0 {
+				t.Fatal("unconfirmed or failed mutation queued an account sync", jobs, err)
+			}
 			account, err := a.store.SyncedAccountForUser(context.Background(), owner.ID, target.ID)
 			if err != nil || account.AuthJSONUpdatedAt != nil || account.Snapshot != nil {
 				t.Fatal("failure incorrectly marked credentials updated", err)
@@ -285,6 +302,127 @@ func TestAuthJSONAPIUpdateAndRefreshOutcomesRemainSeparate(t *testing.T) {
 			assertNoSecrets(t, w.Body.String())
 		})
 	}
+}
+
+func TestAuthJSONAPIQueuedRefreshRetriesReadsWithoutRepeatingCredentialWrite(t *testing.T) {
+	a, owner, _, _, target, editor := setupAuthUpdate(t)
+	token := lookupToken(t, a, owner.ID)
+	previousAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	cost, currency, state := 72.0, "CNY", "offline"
+	if err := a.store.RecordAccountSnapshot(context.Background(), target.ID, target.IdentityKey, core.AccountSnapshotValues{CostTotal: &cost, Currency: &currency, AccountStatus: &state}, previousAt, "Asia/Shanghai"); err != nil {
+		t.Fatal(err)
+	}
+	collector := &mockPageCollector{}
+	collector.run = func(ctx context.Context, targets []supplier.Target) ([]supplier.AccountResult, error) {
+		if len(targets) != 1 || targets[0].Account != target.Account || targets[0].RecordID != editor.info.RecordID {
+			t.Fatal("queued update did not query its verified supplier account", targets)
+		}
+		if collector.calls <= 3 {
+			return []supplier.AccountResult{{Target: targets[0], Err: errors.New("private-access-token private-account-password")}}, nil
+		}
+		return []supplier.AccountResult{{Target: targets[0], Account: &editor.record}}, nil
+	}
+	a.accountPageCollector = collector
+	w := apiRequest(t, a, "POST", claudeAccountAuthJSONAPIPath, token.PlaintextToken, "application/json", authAPIBody(t, owner.Email, target.Account, false))
+	requireStatus(t, w, 200)
+	out := authAPIResult(t, w)
+	if !out.Updated || out.RefreshStatus != "pending" || out.Account == nil || out.Account.LastSuccessAt == nil || !out.Account.LastSuccessAt.Equal(previousAt) || editor.updates != 1 || editor.refreshes != 0 || collector.calls != 0 {
+		t.Fatal("API waited for collection or lost its last successful observation", w.Body.String())
+	}
+	auditID, err := core.ParseBusinessID(out.AuditID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := authAPISyncJob(t, a, auditID)
+	if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt.Add(-time.Millisecond)); err != nil || collector.calls != 0 {
+		t.Fatal("first query ran before the three-second delay", err)
+	}
+	for attempt := 1; attempt <= 4; attempt++ {
+		before := time.Now().UTC()
+		if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt); err != nil {
+			t.Fatal(err)
+		}
+		job = authAPISyncJob(t, a, auditID)
+		rows := authAudits(t, a)
+		if job.AttemptCount != attempt || collector.calls != attempt || editor.updates != 1 || editor.refreshes != 0 || len(rows) != 1 || rows[0].Status != "updated" {
+			t.Fatalf("retry repeated the write or lost the mutation audit: attempts=%d calls=%d writes=%d inline=%d audits=%+v", job.AttemptCount, collector.calls, editor.updates, editor.refreshes, rows)
+		}
+		lookup := apiRequest(t, a, "GET", lookupURL(owner.Email, target.Account), token.PlaintextToken, "", "")
+		requireStatus(t, lookup, 200)
+		account := lookupData(t, lookup)
+		if attempt < 4 {
+			if job.Status != "pending" || job.FinishedAt != nil || rows[0].RefreshStatus != "pending" || job.NextRunAt.Before(before.Add(3*time.Second)) || job.NextRunAt.After(time.Now().UTC().Add(3*time.Second)) {
+				t.Fatalf("failed read did not remain pending for three seconds: job=%+v audit=%+v", job, rows[0])
+			}
+			if account.LastSuccessAt == nil || !account.LastSuccessAt.Equal(previousAt) || account.Snapshot == nil || account.Snapshot.CostTotalUSD == nil || *account.Snapshot.CostTotalUSD != 10 || account.LastError == nil || job.LastError == "" {
+				t.Fatal("failed attempt overwrote the last successful account snapshot", lookup.Body.String())
+			}
+			if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt.Add(-time.Millisecond)); err != nil || collector.calls != attempt {
+				t.Fatal("retry ran before its scheduled time", err)
+			}
+		} else {
+			if job.Status != "succeeded" || job.FinishedAt == nil || job.LastError != "" || rows[0].RefreshStatus != "succeeded" || account.LastSuccessAt == nil || !account.LastSuccessAt.After(previousAt) || account.LastError != nil {
+				t.Fatalf("successful fourth attempt did not complete the audit and snapshot: job=%+v audit=%+v account=%+v", job, rows[0], account)
+			}
+			if account.Snapshot == nil || account.Snapshot.CostTotal == nil || *account.Snapshot.CostTotal != 12.5 || account.Snapshot.CostTotalUSD == nil || math.Abs(*account.Snapshot.CostTotalUSD-12.5/7.2) > 1e-12 || account.Snapshot.ExchangeRateCNYPerUSD != 7.2 || account.Snapshot.Currency == nil || *account.Snapshot.Currency != "CNY" || account.Snapshot.AccountStatus == nil || *account.Snapshot.AccountStatus != "active" {
+				t.Fatal("saved lookup did not expose the completed sync's usage", lookup.Body.String())
+			}
+		}
+		assertNoSecrets(t, lookup.Body.String()+job.LastError)
+	}
+	if err = a.processPostSubmissionSync(context.Background(), time.Now().UTC().Add(time.Hour)); err != nil || collector.calls != 4 || editor.updates != 1 || editor.refreshes != 0 {
+		t.Fatal("completed job repeated the supplier write or query", err)
+	}
+	var submissions int64
+	if err = a.store.DB.Model(&core.Submission{}).Count(&submissions).Error; err != nil || submissions != 1 {
+		t.Fatal("Auth JSON retries created submission history", submissions, err)
+	}
+}
+
+func TestAuthJSONAPISuccessfulWriteSurvivesLocalFollowupFailures(t *testing.T) {
+	t.Run("queue persistence failure does not repeat the credential write", func(t *testing.T) {
+		a, owner, _, _, target, editor := setupAuthUpdate(t)
+		token := lookupToken(t, a, owner.ID)
+		if err := a.store.DB.Exec("CREATE TRIGGER reject_auth_sync_job BEFORE INSERT ON account_post_submit_sync_jobs BEGIN SELECT RAISE(FAIL, 'forced queue failure'); END").Error; err != nil {
+			t.Fatal(err)
+		}
+		w := apiRequest(t, a, "POST", claudeAccountAuthJSONAPIPath, token.PlaintextToken, "application/json", authAPIBody(t, owner.Email, target.Account, false))
+		requireStatus(t, w, 200)
+		out := authAPIResult(t, w)
+		if !out.Updated || out.RefreshStatus != "failed" || editor.updates != 1 || editor.refreshes != 0 {
+			t.Fatal("failed local persistence repeated or misreported the successful upstream write", w.Body.String())
+		}
+		var jobs int64
+		if err := a.store.DB.Model(&core.PostSubmissionSyncJob{}).Count(&jobs).Error; err != nil || jobs != 0 {
+			t.Fatal("failed transaction left a runnable job", jobs, err)
+		}
+		assertNoSecrets(t, w.Body.String())
+	})
+	t.Run("readback failure preserves an already queued refresh", func(t *testing.T) {
+		a, owner, _, _, target, editor := setupAuthUpdate(t)
+		lookupToken(t, a, owner.ID)
+		var token core.UserAPIToken
+		if err := a.store.DB.Where("user_id = ?", owner.ID).First(&token).Error; err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest("POST", claudeAccountAuthJSONAPIPath, nil)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		w.Header().Set("X-Request-ID", "api-queued-readback-failure")
+		a.runAccountAuthJSON(w, r, owner, target.ID, false, func(uint64) (core.AccountDTO, error) {
+			return core.AccountDTO{}, errors.New("private-account-password")
+		}, authJSONOperation{Token: &token, Input: authInput()["auth_json"]})
+		requireStatus(t, w, 200)
+		out := authAPIResult(t, w)
+		if !out.Updated || out.RefreshStatus != "pending" || out.Account != nil || out.RefreshMessage == "" || editor.updates != 1 || editor.refreshes != 0 {
+			t.Fatal("readback failure hid the queued refresh or successful write", w.Body.String())
+		}
+		rows := authAudits(t, a)
+		if len(rows) != 1 || rows[0].Status != "updated" || rows[0].RefreshStatus != "pending" || authAPISyncJob(t, a, rows[0].ID).Status != "pending" {
+			t.Fatal("readback failure changed the durable refresh result", rows)
+		}
+		assertNoSecrets(t, w.Body.String())
+	})
 }
 
 func TestAuthJSONAPISharesWebLeasesAndRateLimit(t *testing.T) {

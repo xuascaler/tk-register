@@ -62,8 +62,9 @@ func authJSONError(err error) authJSONProblem {
 func authJSONFail(w http.ResponseWriter, p authJSONProblem) { fail(w, p.status, p.code, p.message) }
 
 // Both the cookie-authenticated editor and the personal-token API use the same
-// validation, locks, vendor write, audit and immediate refresh. The API adapter
-// supplies parsed input and a public response projection, never a fake session.
+// validation, locks, vendor write and audit. API success queues a delayed refresh;
+// the browser editor refreshes immediately. The API adapter supplies parsed input
+// and a public response projection, never a fake session.
 type authJSONOperation struct {
 	Token         *core.UserAPIToken
 	Input         any
@@ -186,7 +187,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	}
 	// The lock is keyed by vendor+normalized email, not owner, since two local
 	// histories can refer to the same supplier row. A global collection lease
-	// also prevents a pre-update collection overwriting the immediate refresh.
+	// also prevents a pre-update collection overwriting the credential update.
 	lockKey := redisPrefix + "account-auth-json:lease:" + digest(strconv.FormatUint(target.VendorID, 10)+":"+strings.ToLower(strings.TrimSpace(target.Account)))
 	token, err := randomToken()
 	if err != nil {
@@ -280,7 +281,11 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		return
 	}
 	refreshStatus, refreshMessage := "failed", "Auth JSON updated, but account refresh failed. Your last successful data is retained. Try syncing again."
-	if persistErr == nil && unchanged {
+	if persistErr == nil && unchanged && operation.Token != nil {
+		// Successful API audit persistence atomically queues the delayed read.
+		// Do not wait for it or repeat the credential mutation on refresh failure.
+		refreshStatus, refreshMessage = "pending", "Auth JSON updated. Account refresh is scheduled after three seconds; failed refreshes are retried up to three times."
+	} else if persistErr == nil && unchanged {
 		refreshCtx, refreshCancel := context.WithTimeout(ctx, 15*time.Second)
 		record, refreshErr := editor.CollectAccount(refreshCtx, username, password, supplier.Target{Account: target.Account, RecordID: info.RecordID})
 		refreshCancel()
@@ -313,6 +318,10 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	// because subsequent persistence/readback fails.
 	account, lookupErr := lookup(id)
 	if lookupErr != nil {
+		if refreshStatus == "pending" {
+			ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": "pending", "refresh_message": "Auth JSON updated and account refresh is scheduled. Saved account data could not be loaded; query the account again later.", "account": nil, "updated_at": at})
+			return
+		}
 		ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": "failed", "refresh_message": "Auth JSON updated, but local account data could not be loaded. Reload the page.", "account": nil, "updated_at": at})
 		return
 	}

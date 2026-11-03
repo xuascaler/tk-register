@@ -1,6 +1,6 @@
 # Auth JSON Update API
 
-The Auth JSON Update API replaces the authentication data for an accepted Claude account owned by the caller. It reuses the web editor’s supplier identity checks, update operation, and immediate account refresh. It does not create another submission.
+The Auth JSON Update API replaces the authentication data for an accepted Claude account owned by the caller. It reuses the web editor’s supplier identity checks and update operation. After a confirmed update, it queues account synchronization for three seconds later and returns without waiting for collection. It does not create another submission.
 
 | Property | Value |
 | --- | --- |
@@ -87,22 +87,24 @@ Use a trusted server certificate or supply its CA with `--cacert /path/to/ca.pem
 
 ## Successful response and refresh outcome
 
-HTTP `200` with `data.updated: true` means the supplier confirmed the credential change. It does not imply that the account is active or that account data refreshed successfully. Check `refresh_status` separately.
+HTTP `200` with `data.updated: true` means the supplier confirmed the credential change. The normal API response has `refresh_status: "pending"`: synchronization is queued and has not completed as part of this request. It does not imply that the account is active or that its status, usage, or spend has refreshed.
 
 | Field in `data` | Type | Meaning |
 | --- | --- | --- |
 | `updated` | boolean | Confirmed credential update; `true` in a successful response. |
 | `audit_id` | string | Local update audit ID. Not a submission ID or supplier account ID. |
 | `updated_at` | RFC3339 string | Time the supplier update finished. |
-| `refresh_status` | string | `succeeded` or `failed`. |
+| `refresh_status` | string | Normally `pending` after collection is queued. `failed` if local persistence or an account identity change prevents scheduling after the confirmed write. The API does not wait for a `succeeded` collection result. |
 | `refresh_message` | string | Safe description for humans. Use status fields for program logic. |
-| `account` | object or null | Same account object as [Account lookup](account-lookup-api.md#account-fields). Can contain retained data after refresh failure; null if local readback failed. |
+| `account` | object or null | Same account object as [Account lookup](account-lookup-api.md#account-fields), read from saved data. Its snapshot may predate this update, or be null if no collection has succeeded. The whole `account` is null if local readback fails. |
 
 The `account` object includes saved account identifiers, submission status, collection timestamps, and the snapshot. Snapshot fields include `account_status`, usage windows, cumulative token counters, `cost_total`, `currency`, `cost_total_usd`, and `exchange_rate_cny_per_usd`. USD conversion remains CNY / 7.2. Neither the account object nor the snapshot contains credentials.
 
-After a confirmed write, the server immediately queries this account and stores its refreshed snapshot. This does not wait for the scheduled two-hour interval. A failure at this later stage retains the last successful data and still returns `updated: true`.
+For a queued update, the first targeted collection becomes due three seconds after the confirmed write. If collection fails, the worker waits three seconds after the failure and retries, up to **three additional retries (four attempts total)**. A busy shared synchronization lock defers the job five seconds without consuming an attempt. These delays are minimum scheduling delays, so long requests or busy locks can make completion take longer. The worker only reads the account; it never repeats the credential write.
 
-For example, if the credentials were saved but local account readback failed:
+Success stores the account's status, quota windows, token totals, spend and collection time. Failure retains the last successful snapshot. A supplier status such as banned or offline is not proof that the credential write failed. The two-hour schedule and explicit **Sync** action remain available. The browser Auth JSON editor retains its existing immediate-refresh behavior; this asynchronous response contract applies to the public API.
+
+For example, the queued response below contains a snapshot collected five minutes before the credential update. It is safe saved data, not the result of the queued synchronization:
 
 ```json
 {
@@ -110,19 +112,54 @@ For example, if the credentials were saved but local account readback failed:
   "data": {
     "updated": true,
     "audit_id": "2001",
-    "updated_at": "2026-11-02T03:00:00Z",
-    "refresh_status": "failed",
-    "refresh_message": "Auth JSON updated, but local account data could not be loaded. Reload the page.",
-    "account": null
+    "updated_at": "2026-11-01T02:05:00+08:00",
+    "refresh_status": "pending",
+    "refresh_message": "Auth JSON updated. Account refresh is scheduled after three seconds; failed refreshes are retried up to three times.",
+    "account": {
+      "id": "1001",
+      "username": "member@example.com",
+      "account": "claude.user@example.com",
+      "vendor": "tk-register-0",
+      "plan": "claude/cc-max-20x",
+      "remote_id": "300001",
+      "platform_account_id": "15001",
+      "submission_status": "accepted",
+      "snapshot": {
+        "id": "5001",
+        "account_id": "1001",
+        "platform_account_id": "15001",
+        "snapshot_date": "2026-11-01",
+        "collected_at": "2026-11-01T02:00:00+08:00",
+        "source_updated_at": null,
+        "account_status": "offline",
+        "input_tokens_total": 120000,
+        "output_tokens_total": 240000,
+        "cost_total": 123.45,
+        "currency": "CNY",
+        "cost_total_usd": 17.145833333333332,
+        "exchange_rate_cny_per_usd": 7.2,
+        "usage_5h_percent": 15,
+        "reset_5h_at": "2026-11-01T06:00:00+08:00",
+        "usage_7d_percent": 42,
+        "reset_7d_at": "2026-11-07T00:00:00+08:00",
+        "data_source": "website"
+      },
+      "last_success_at": "2026-11-01T02:00:00+08:00",
+      "last_attempt_at": "2026-11-01T02:00:00+08:00",
+      "last_error": null,
+      "interval_hours": 2
+    }
   }
 }
 ```
 
-Do not repeat the credential write because refresh failed. Use the existing **Sync** action to retry account collection. Use the returned `last_success_at` and `snapshot.collected_at` when showing retained data; a normal account lookup reads saved data and does not start collection.
+If local readback fails after the job was queued, the response still has `updated: true`, `refresh_status: "pending"`, and `account: null`; the queued collection is not canceled. A failed queue transaction or changed account identity instead returns `updated: true` with `refresh_status: "failed"` and an explanation. That failure does not undo the supplier's confirmed credential change.
+
+The response's `refresh_status` does not change after HTTP completion. Use [Account lookup](account-lookup-api.md) later to read the latest saved result and its `last_success_at`, `snapshot.collected_at`, `last_attempt_at` and `last_error`. Lookup never starts a supplier query. Do not repeat the credential write to obtain fresh data. If automatic collection has exhausted its retries, the existing **Sync** action can request another collection.
 
 ## Audit records
 
-After authentication, validation, and lock acquisition, the server creates an `account_auth_json_audits` record before calling the supplier. The record starts as `pending`, then becomes `updated`, `rejected`, `failed`, or `unknown`. A confirmed update records a separate refresh outcome: `pending`, `succeeded`, or `failed`.
+After authentication, validation, and lock acquisition, the server creates an `account_auth_json_audits` record before calling the supplier. The record starts as `pending`, then becomes `updated`, `rejected`, `failed`, or `unknown`. A confirmed and locally recorded update has a separate refresh outcome: `pending` while its job is queued, running or waiting for a retry; `succeeded` when a new collection is saved; or `failed` if retries are exhausted or the target is no longer eligible. Failed collection does not change the write outcome from `updated`.
 
 API updates record `source=api`, the actor and owner, vendor, stable account ID, account identity, confirmed supplier row ID, request ID, API token ID and revision, timestamps, and outcome. Web updates use `source=web`. Token revision is retained because regeneration can reuse the same token database row. No new submission is created, historical submissions remain unchanged, and neither the replacement Auth JSON nor any token plaintext is stored in this audit.
 
@@ -159,6 +196,6 @@ Errors use a safe TK Register envelope, including errors returned by the supplie
 | 503 | `SYNC_NOT_CONFIGURED`, `UNAVAILABLE` | Website login is not configured or a required local service is unavailable. |
 | 504 | `AUTH_JSON_UPDATE_UNCONFIRMED` | Write result is uncertain; audit status is `unknown`. |
 
-The write is never retried automatically. A timeout or connection loss after transmission can mean the supplier changed the credentials without returning confirmation. Inspect the account before a manual retry. Each later update that begins execution creates its own audit record; the earlier uncertain record is retained.
+The write is never retried automatically. A timeout or connection loss after transmission can mean the supplier changed the credentials without returning confirmation. Inspect the account before a manual retry. Each later update that begins execution creates its own audit record; the earlier uncertain record is retained. Rejected, failed or unconfirmed writes do not queue post-update collection. The retry policy above applies only to account reads after a confirmed and locally recorded update.
 
 The update rate limit is independent of the account submission and lookup limits, but shared with web Auth JSON writes by the same user. Changing tokens does not reset it. `429` responses include both `Retry-After` and a JSON `retry_after` value in seconds.

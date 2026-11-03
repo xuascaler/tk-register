@@ -12,11 +12,12 @@ import (
 	"gorm.io/gorm"
 )
 
-const postSubmissionSyncUnavailable = "This submission is no longer eligible for automatic account sync."
+const postSubmissionSyncUnavailable = "This account operation is no longer eligible for automatic account sync."
 
 // processPostSubmissionSync handles at most one due job. The lease is acquired
 // before claiming so competing sync work only postpones a pending job; it never
-// consumes the job's one supplier query.
+// consumes a query attempt. The persisted job controls the retry budget for both
+// successful API submissions and API Auth JSON updates.
 func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) error {
 	deadline := time.Now().Add(55 * time.Second)
 	ctx, cancel := context.WithDeadline(parent, deadline)
@@ -116,7 +117,7 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 	} else if err != nil {
 		message = "Account data could not be saved. Previously collected data is retained."
 		// Invalid snapshot data must leave the previous observation intact while
-		// still recording this single failed attempt. A failed confirmation or
+		// still recording this failed attempt. A failed confirmation or
 		// snapshot transaction has already rolled back before this write.
 		failureErr := a.store.DB.WithContext(persist).Transaction(func(tx *gorm.DB) error {
 			store := *a.store
@@ -159,7 +160,7 @@ func (a *app) runPostSubmissionSync(ctx context.Context) {
 		if err := a.processPostSubmissionSync(ctx, time.Now().UTC()); err != nil && ctx.Err() == nil {
 			// Database and upstream errors can contain private configuration. Only a
 			// fixed diagnostic reaches logs; jobs retain fixed user-facing messages.
-			log.Print("Post-submission account sync could not complete; check the saved job status")
+			log.Print("Automatic account sync could not complete; check the saved job status")
 		}
 	}
 	check()

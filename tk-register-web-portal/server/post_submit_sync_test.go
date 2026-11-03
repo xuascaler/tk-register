@@ -27,7 +27,7 @@ func setupPostSubmissionSync(t *testing.T) (*app, core.SyncedAccount, core.PostS
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	job := core.PostSubmissionSyncJob{SubmissionID: *target.CurrentSubmissionID, AccountID: target.ID, UserID: target.UserID, IdentityKey: target.IdentityKey, Status: "pending", NextRunAt: now, CreatedAt: now.Add(-3 * time.Second)}
+	job := core.PostSubmissionSyncJob{SubmissionID: *target.CurrentSubmissionID, SubmissionTriggerID: target.CurrentSubmissionID, AccountID: target.ID, UserID: target.UserID, IdentityKey: target.IdentityKey, Status: "pending", NextRunAt: now, CreatedAt: now.Add(-3 * time.Second)}
 	if err := a.store.DB.Create(&job).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestPostSubmissionSyncBusyDefersWithoutAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved := readPostSubmissionJob(t, a, job.ID)
-	if saved.Status != "pending" || saved.StartedAt != nil || saved.FinishedAt != nil || !saved.NextRunAt.Equal(now.Add(5*time.Second)) || fake.calls != 0 {
+	if saved.Status != "pending" || saved.AttemptCount != 0 || saved.StartedAt != nil || saved.FinishedAt != nil || !saved.NextRunAt.Equal(now.Add(5*time.Second)) || fake.calls != 0 {
 		t.Fatalf("busy job consumed an attempt: status=%s started=%v finished=%v next=%v calls=%d", saved.Status, saved.StartedAt, saved.FinishedAt, saved.NextRunAt, fake.calls)
 	}
 	account, err := a.store.SyncedAccountForUser(context.Background(), target.UserID, target.ID)
@@ -176,16 +176,31 @@ func TestPostSubmissionSyncFailuresRetainLastSnapshot(t *testing.T) {
 				}
 				return []supplier.AccountResult{record}, nil
 			}
-			if err := a.processPostSubmissionSync(context.Background(), now); err != nil {
-				t.Fatal(err)
+			for attempt := 1; attempt <= 4; attempt++ {
+				before := time.Now().UTC()
+				if err := a.processPostSubmissionSync(context.Background(), readPostSubmissionJob(t, a, job.ID).NextRunAt); err != nil {
+					t.Fatal(err)
+				}
+				saved := readPostSubmissionJob(t, a, job.ID)
+				if saved.AttemptCount != attempt || fake.calls != attempt {
+					t.Fatalf("retry budget mismatch: attempts=%d calls=%d expected=%d", saved.AttemptCount, fake.calls, attempt)
+				}
+				if attempt < 4 {
+					if saved.Status != "pending" || saved.FinishedAt != nil || saved.NextRunAt.Before(before.Add(3*time.Second)) || saved.NextRunAt.After(time.Now().UTC().Add(3*time.Second)) {
+						t.Fatalf("retry was not persisted for three seconds later: status=%s next=%v", saved.Status, saved.NextRunAt)
+					}
+					if err := a.processPostSubmissionSync(context.Background(), saved.NextRunAt.Add(-time.Millisecond)); err != nil || fake.calls != attempt {
+						t.Fatal("retry ran before its due time", err)
+					}
+				}
 			}
 			if err := a.processPostSubmissionSync(context.Background(), now.Add(time.Hour)); err != nil {
 				t.Fatal(err)
 			}
 			saved := readPostSubmissionJob(t, a, job.ID)
 			account, err := a.store.SyncedAccountForUser(context.Background(), target.UserID, target.ID)
-			if err != nil || saved.Status != "failed" || saved.LastError == "" || fake.calls != 1 || account.LastAttemptAt == nil || !account.LastAttemptAt.After(at) || !account.LastSuccessAt.Equal(at) || account.Snapshot == nil || *account.Snapshot.CostTotal != cost {
-				t.Fatalf("failed attempt changed saved observation or retried: error=%v status=%s calls=%d snapshot=%t attempt=%v success=%v", err, saved.Status, fake.calls, account.Snapshot != nil, account.LastAttemptAt, account.LastSuccessAt)
+			if err != nil || saved.Status != "failed" || saved.FinishedAt == nil || saved.LastError == "" || fake.calls != 4 || account.LastAttemptAt == nil || !account.LastAttemptAt.After(at) || !account.LastSuccessAt.Equal(at) || account.Snapshot == nil || *account.Snapshot.CostTotal != cost {
+				t.Fatalf("exhausted retries changed saved observation or exceeded cap: error=%v status=%s calls=%d snapshot=%t attempt=%v success=%v", err, saved.Status, fake.calls, account.Snapshot != nil, account.LastAttemptAt, account.LastSuccessAt)
 			}
 			assertNoSecrets(t, saved.LastError+account.LastError)
 			if scenario == "pinned" && (account.SupplierRecordID == nil || *account.SupplierRecordID != "450123") {
@@ -243,7 +258,7 @@ func TestPostSubmissionSyncChecksEligibilityBeforeAndAfterQuery(t *testing.T) {
 			}
 			wantStatus, wantCalls := "skipped", 0
 			if scenario == "missing-login" {
-				wantStatus = "failed"
+				wantStatus = "pending"
 			}
 			if strings.HasSuffix(scenario, "after") {
 				wantCalls = 1
@@ -260,18 +275,21 @@ func TestPostSubmissionSyncChecksEligibilityBeforeAndAfterQuery(t *testing.T) {
 	}
 }
 
-func TestPostSubmissionSyncRecoversStaleRunningWithoutQuery(t *testing.T) {
+func TestPostSubmissionSyncRecoversStaleRunningWithRemainingBudget(t *testing.T) {
 	a, _, job, fake, now := setupPostSubmissionSync(t)
 	started := now.Add(-3 * time.Minute)
-	if err := a.store.DB.Model(&job).Updates(map[string]any{"status": "running", "started_at": started}).Error; err != nil {
+	if err := a.store.DB.Model(&job).Updates(map[string]any{"status": "running", "started_at": started, "attempt_count": 1}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := a.processPostSubmissionSync(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	saved := readPostSubmissionJob(t, a, job.ID)
-	if saved.Status != "failed" || saved.FinishedAt == nil || saved.LastError == "" || fake.calls != 0 {
-		t.Fatalf("stale running job was retried: status=%s finished=%v calls=%d", saved.Status, saved.FinishedAt, fake.calls)
+	if saved.Status != "pending" || saved.AttemptCount != 1 || saved.FinishedAt != nil || saved.LastError == "" || fake.calls != 0 || !saved.NextRunAt.Equal(now.Add(3*time.Second)) {
+		t.Fatalf("interrupted read lost its bounded retry: status=%s attempts=%d next=%v calls=%d", saved.Status, saved.AttemptCount, saved.NextRunAt, fake.calls)
+	}
+	if err := a.processPostSubmissionSync(context.Background(), saved.NextRunAt); err != nil || fake.calls != 1 || readPostSubmissionJob(t, a, job.ID).Status != "succeeded" || readPostSubmissionJob(t, a, job.ID).AttemptCount != 2 {
+		t.Fatal("recovered read did not consume the next attempt", err)
 	}
 }
 
@@ -298,8 +316,8 @@ func TestPostSubmissionSyncShutdownCancelsAndJoins(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("worker did not join after cancellation")
 	}
-	if saved := readPostSubmissionJob(t, a, job.ID); saved.Status != "failed" || saved.FinishedAt == nil || fake.calls != 1 {
-		t.Fatalf("cancelled attempted job was left eligible for retry: status=%s finished=%v calls=%d", saved.Status, saved.FinishedAt, fake.calls)
+	if saved := readPostSubmissionJob(t, a, job.ID); saved.Status != "pending" || saved.FinishedAt != nil || saved.AttemptCount != 1 || fake.calls != 1 {
+		t.Fatalf("cancelled read did not preserve its bounded retry: status=%s attempts=%d calls=%d", saved.Status, saved.AttemptCount, fake.calls)
 	}
 	if a.redis.Exists(context.Background(), accountSyncLeaseKey).Val() != 0 {
 		t.Fatal("cancelled worker leaked shared lease")

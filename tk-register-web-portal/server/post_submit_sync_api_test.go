@@ -25,12 +25,16 @@ func TestPostSubmissionSyncAPIToSavedLookup(t *testing.T) {
 		pushes++
 		return remoteResponse(http.StatusCreated, `{"id":450001,"alias":"claude-温州润晨-test"}`), nil
 	})
-	fake := &mockPageCollector{run: func(ctx context.Context, targets []supplier.Target) ([]supplier.AccountResult, error) {
+	fake := &mockPageCollector{}
+	fake.run = func(ctx context.Context, targets []supplier.Target) ([]supplier.AccountResult, error) {
 		if len(targets) != 1 || targets[0].Account != "supplier-account@example.com" {
 			t.Fatalf("wrong automatic sync target: %+v", targets)
 		}
+		if fake.calls < 3 {
+			return nil, &supplier.Error{Code: supplier.CodeUnavailable}
+		}
 		return []supplier.AccountResult{pageRecord(targets[0])}, nil
-	}}
+	}
 	a.accountPageCollector = fake
 	body, err := json.Marshal(submissionParameters())
 	if err != nil {
@@ -57,8 +61,14 @@ func TestPostSubmissionSyncAPIToSavedLookup(t *testing.T) {
 	if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt.Add(-time.Millisecond)); err != nil || fake.calls != 0 {
 		t.Fatal("automatic sync ran before the three-second delay", err)
 	}
-	if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt); err != nil {
-		t.Fatal(err)
+	for attempt := 1; attempt <= 3; attempt++ {
+		next := readPostSubmissionJob(t, a, job.ID)
+		if err = a.processPostSubmissionSync(context.Background(), next.NextRunAt); err != nil {
+			t.Fatal(err)
+		}
+		if attempt < 3 && readPostSubmissionJob(t, a, job.ID).Status != "pending" {
+			t.Fatal("transient supplier failure did not schedule a retry")
+		}
 	}
 	after := apiRequest(t, a, "GET", path, token.PlaintextToken, "", "")
 	requireStatus(t, after, 200)
@@ -66,10 +76,10 @@ func TestPostSubmissionSyncAPIToSavedLookup(t *testing.T) {
 	if data.Snapshot == nil || data.Snapshot.AccountStatus == nil || *data.Snapshot.AccountStatus != "active" || data.Snapshot.CostTotal == nil || *data.Snapshot.CostTotal != 123.45 || data.Snapshot.CostTotalUSD == nil || data.Snapshot.Usage7dPercent == nil || *data.Snapshot.Usage7dPercent != 42 || data.LastSuccessAt == nil {
 		t.Fatalf("lookup did not receive the existing account snapshot fields: %+v", data)
 	}
-	if readPostSubmissionJob(t, a, job.ID).Status != "succeeded" {
+	if readPostSubmissionJob(t, a, job.ID).Status != "succeeded" || readPostSubmissionJob(t, a, job.ID).AttemptCount != 3 {
 		t.Fatal("automatic job did not finish")
 	}
-	if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt.Add(time.Minute)); err != nil || fake.calls != 1 || pushes != 1 {
+	if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt.Add(time.Minute)); err != nil || fake.calls != 3 || pushes != 1 {
 		t.Fatal("automatic sync repeated or resubmitted the account", err)
 	}
 }

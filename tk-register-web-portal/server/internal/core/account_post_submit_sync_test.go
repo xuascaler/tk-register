@@ -57,7 +57,7 @@ func TestPostSubmissionAcceptedAPIEnqueuesExactlyOnceAfterThreeSeconds(t *testin
 	if err = service.Store.DB.Where("submission_id = ?", submissionID).First(&execution).Error; err != nil {
 		t.Fatal(err)
 	}
-	if execution.FinishedAt == nil || !job.CreatedAt.Equal(*execution.FinishedAt) || !job.NextRunAt.Equal(execution.FinishedAt.Add(3*time.Second)) || job.Status != "pending" || job.StartedAt != nil || job.UserID != owner.ID {
+	if execution.FinishedAt == nil || !job.CreatedAt.Equal(*execution.FinishedAt) || !job.NextRunAt.Equal(execution.FinishedAt.Add(3*time.Second)) || job.Status != "pending" || job.StartedAt != nil || job.UserID != owner.ID || job.AttemptCount != 0 || job.SubmissionTriggerID == nil || *job.SubmissionTriggerID != submissionID || job.AuthJSONAuditID != nil {
 		t.Fatal("wrong durable scheduling metadata", job)
 	}
 	account, err := service.Store.PostSubmissionSyncTarget(ctx, job)
@@ -226,7 +226,7 @@ func TestPostSubmissionClaimDeferralAndTerminalOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	deferred := loadPostSubmissionJob(t, store, submission.ID)
-	if deferred.Status != "pending" || deferred.StartedAt != nil || deferred.FinishedAt != nil || deferred.LastError != "" || !deferred.NextRunAt.Equal(job.NextRunAt.Add(5*time.Second)) {
+	if deferred.Status != "pending" || deferred.StartedAt != nil || deferred.FinishedAt != nil || deferred.LastError != "" || deferred.AttemptCount != 0 || !deferred.NextRunAt.Equal(job.NextRunAt.Add(5*time.Second)) {
 		t.Fatal("busy lease consumed attempt or used wrong delay", deferred)
 	}
 	if claimed, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, deferred.NextRunAt.Add(-time.Nanosecond)); err != nil || claimed {
@@ -260,7 +260,7 @@ func TestPostSubmissionClaimDeferralAndTerminalOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	finished := loadPostSubmissionJob(t, store, submission.ID)
-	if finished.Status != "succeeded" || finished.LastError != "" || !finished.NextRunAt.Equal(deferred.NextRunAt) || finished.FinishedAt == nil {
+	if finished.Status != "succeeded" || finished.LastError != "" || !finished.NextRunAt.Equal(deferred.NextRunAt) || finished.FinishedAt == nil || finished.AttemptCount != 1 {
 		t.Fatal("terminal result mutated or running job deferred", finished)
 	}
 	if claimed, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, base.Add(time.Hour)); err != nil || claimed {
@@ -342,7 +342,7 @@ func TestPostSubmissionTargetPreservesOwnerAndRejectsSupersededIdentity(t *testi
 	}
 }
 
-func TestPostSubmissionRestartPreservesPendingWithoutHistoricalBackfillOrRunningRetry(t *testing.T) {
+func TestPostSubmissionRestartPreservesPendingWithoutHistoricalBackfill(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "post-submit-restart.sqlite")
 	store, err := Open("sqlite", path, testKey)
 	if err != nil {
@@ -395,13 +395,13 @@ func TestPostSubmissionRestartPreservesPendingWithoutHistoricalBackfillOrRunning
 	if err := store.DB.Order("id ASC").Find(&saved).Error; err != nil || len(saved) != 3 {
 		t.Fatal("migration created historical jobs or lost pending work", len(saved), err)
 	}
-	if saved[0].Status != "pending" || saved[0].StartedAt != nil || !saved[0].NextRunAt.Equal(jobs[0].NextRunAt) || saved[1].Status != "failed" || saved[1].FinishedAt == nil || saved[1].LastError == "" || saved[2].Status != "running" {
-		t.Fatal("restart replayed interrupted work or lost pending schedule", saved)
+	if saved[0].Status != "pending" || saved[0].StartedAt != nil || !saved[0].NextRunAt.Equal(jobs[0].NextRunAt) || saved[1].Status != "pending" || saved[1].FinishedAt != nil || saved[1].LastError == "" || saved[1].AttemptCount != 1 || !saved[1].NextRunAt.Equal(base.Add(127*time.Second)) || saved[2].Status != "running" {
+		t.Fatal("restart lost schedule, retry budget, or interrupted-read delay", saved)
 	}
 	if next, err := store.NextPostSubmissionSyncJob(ctx, base.Add(time.Hour)); err != nil || next == nil || next.ID != jobs[0].ID {
 		t.Fatal("pending work did not survive restart", next, err)
 	}
-	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, jobs[1].ID, base.Add(time.Hour)); err != nil || ok {
-		t.Fatal("recovered interrupted attempt was retried", ok, err)
+	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, jobs[1].ID, base.Add(127*time.Second)); err != nil || !ok {
+		t.Fatal("recovered read could not consume its remaining retry budget", ok, err)
 	}
 }

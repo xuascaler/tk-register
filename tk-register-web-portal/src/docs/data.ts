@@ -42,10 +42,10 @@ export const endpoints = {
     title: 'Update Auth JSON',
     method: 'POST',
     path: `${accountsPath}/auth-json`,
-    description: 'Replace an owned Claude account’s authentication data, then refresh its status and usage.',
+    description: 'Replace an owned Claude account’s authentication data and queue a status and usage refresh.',
     scope: 'claude:auth-json:update',
     limit: '10 requests / minute',
-    note: 'Existing tokens gain update access automatically; you can keep using the same token. Updating credentials immediately attempts to refresh the account, but does not guarantee an active status.',
+    note: 'Existing tokens remain usable. A confirmed update queues Sync after three seconds, with up to three retries on collection failure. The API does not wait for refresh or guarantee an active status.',
   },
 } as const;
 
@@ -81,9 +81,9 @@ export const authJSONUpdateResponseFields: FieldDefinition[] = [
   { name: 'updated', type: 'boolean', description: 'True only after the supplier confirms the credential update. Independent of the account’s active/inactive state.' },
   { name: 'audit_id', type: 'string', description: 'Local Auth JSON update audit record ID. It is not a submission ID or a supplier account ID.' },
   { name: 'updated_at', type: 'string', description: 'RFC3339 time when the supplier update completed.' },
-  { name: 'refresh_status', type: 'string', description: 'succeeded if account data was refreshed and saved; failed if refresh or local readback failed after the confirmed update.' },
+  { name: 'refresh_status', type: 'string', description: 'Normally pending after Sync is queued. Failed if local persistence or a changed account identity prevents scheduling. The API does not wait for a succeeded collection result.' },
   { name: 'refresh_message', type: 'string', description: 'Safe human-readable explanation of the refresh outcome. Use refresh_status for program logic.' },
-  { name: 'account', type: 'object | null', description: 'The same safe account object returned by Account lookup. On refresh failure it can contain retained data; null if local readback failed. Check collection timestamps before treating it as fresh.' },
+  { name: 'account', type: 'object | null', description: 'The saved account object returned by Account lookup. Its snapshot may predate this update or be null if never collected. The whole object is null if local readback fails, without canceling a queued refresh. Check collection timestamps for freshness.' },
 ];
 
 export const optionalSubmissionFields: FieldDefinition[] = [
@@ -299,9 +299,12 @@ export const authJSONUpdateResponse = {
   data: {
     updated: true,
     audit_id: '2001',
-    updated_at: '2026-11-01T01:59:59+08:00',
-    refresh_status: 'succeeded',
-    refresh_message: 'Auth JSON updated and account data refreshed.',
-    account: lookupResponse.data,
+    updated_at: '2026-11-01T02:05:00+08:00',
+    refresh_status: 'pending',
+    refresh_message: 'Auth JSON updated. Account refresh is scheduled after three seconds; failed refreshes are retried up to three times.',
+    account: {
+      ...lookupResponse.data,
+      snapshot: { ...lookupResponse.data.snapshot, account_status: 'offline' },
+    },
   },
 };

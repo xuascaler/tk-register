@@ -164,7 +164,7 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 	if status != "updated" && status != "rejected" && status != "unknown" && status != "failed" {
 		return false, validationErrorf("invalid auth update outcome")
 	}
-	if recordID != "" && !validSupplierRecordID(recordID) {
+	if (recordID != "" || status == "updated") && !validSupplierRecordID(recordID) {
 		return false, validationErrorf("invalid supplier account ID")
 	}
 	currentIdentity := false
@@ -173,16 +173,46 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, audit.AccountID).Error; err != nil {
 			return err
 		}
-		currentIdentity = account.IdentityKey == audit.IdentityKey && account.CurrentSubmissionID != nil
+		// Read trusted source/identity fields and serialize duplicate completions.
+		// A completed audit must never overwrite metadata from a newer update.
+		var saved AccountAuthJSONAudit
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND account_id = ?", audit.ID, account.ID).First(&saved).Error; err != nil {
+			return err
+		}
+		if saved.Status != "pending" {
+			return nil
+		}
+		currentIdentity = account.IdentityKey == saved.IdentityKey && account.CurrentSubmissionID != nil && account.UserID == saved.OwnerID && account.VendorID == saved.VendorID
+		if status == "updated" && currentIdentity {
+			var newer int64
+			if err := tx.Model(&AccountAuthJSONAudit{}).Where("account_id = ? AND identity_key = ? AND status = ? AND id > ?", account.ID, saved.IdentityKey, "updated", saved.ID).Count(&newer).Error; err != nil {
+				return err
+			}
+			currentIdentity = newer == 0
+		}
 		refresh := ""
 		if status == "updated" {
 			refresh = "pending"
+			if !currentIdentity {
+				refresh = "failed"
+			}
 		}
-		if err := tx.Model(&AccountAuthJSONAudit{}).Where("id = ? AND status = ?", audit.ID, "pending").Updates(map[string]any{"status": status, "supplier_record_id": recordID, "error_code": code, "finished_at": at.UTC(), "refresh_status": refresh}).Error; err != nil {
-			return err
+		result := tx.Model(&AccountAuthJSONAudit{}).Where("id = ? AND status = ?", saved.ID, "pending").Updates(map[string]any{"status": status, "supplier_record_id": recordID, "error_code": code, "finished_at": at.UTC(), "refresh_status": refresh})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			currentIdentity = false
+			return nil
 		}
 		if status == "updated" && currentIdentity {
-			return tx.Model(&account).Updates(map[string]any{"supplier_record_id": recordID, "auth_json_updated_at": at.UTC()}).Error
+			if err := tx.Model(&account).Updates(map[string]any{"supplier_record_id": recordID, "auth_json_updated_at": at.UTC()}).Error; err != nil {
+				return err
+			}
+			if saved.Source == "api" {
+				saved.Status, saved.SupplierRecordID = status, recordID
+				return enqueueAuthJSONSyncTx(tx, account, saved, at)
+			}
 		}
 		return nil
 	})
