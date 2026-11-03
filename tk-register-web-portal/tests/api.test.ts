@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { APIError, request, setCSRFToken } from '../src/api.ts';
+import { APIError, request, retryAfterSeconds, setCSRFToken } from '../src/api.ts';
 
 test('authenticated mutations send same-origin cookies and an in-memory CSRF token', async () => {
   const original = globalThis.fetch;
@@ -32,6 +32,20 @@ test('authenticated mutations send same-origin cookies and an in-memory CSRF tok
     globalThis.fetch = original;
     setCSRFToken('');
   }
+});
+
+test('supplier cooldown errors retain the operation stage and bounded retry duration', async t => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
+    success: false, code: 'SUPPLIER_RATE_LIMITED', message: 'Account queries are limited. Try again in 20 seconds.',
+    retry_after: 20, retry_stage: 'accounts',
+  }), { status: 429, headers: { 'Retry-After': '-1' } }));
+  await assert.rejects(request('/accounts/7/sync', { method: 'POST', body: {} }), error =>
+    error instanceof APIError && error.retryAfter === 20 && error.retryStage === 'accounts');
+  for (const value of [undefined, null, '', 'Infinity', '1e3', '0.5', -1, 604801, true, [], {}, NaN]) {
+    assert.equal(retryAfterSeconds(value), 0);
+  }
+  assert.equal(retryAfterSeconds('284'), 284);
+  assert.equal(retryAfterSeconds(604800), 604800);
 });
 test('rate limits expose server retry duration and invalid responses are actionable', async () => {
   const original = globalThis.fetch;

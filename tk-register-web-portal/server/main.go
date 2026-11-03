@@ -19,6 +19,7 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"goapi-tk-register/server/internal/core"
+	"goapi-tk-register/server/internal/supplier"
 )
 
 func env(key, fallback string) string {
@@ -116,7 +117,11 @@ func run() error {
 	if e != nil {
 		return errors.New("TK Register could not connect to Redis")
 	}
-	app := &app{store: store, redis: redisClient, mail: &core.Mailer{Store: store}, secret: key, adminEmail: admin, origin: origin, secure: secure, assets: env("TK_REGISTER_ASSETS", "/opt/tk-register-web-portal")}
+	supplierClient, e := supplier.NewCachedClient(redisClient, key)
+	if e != nil {
+		return errors.New("TK Register could not initialize supplier sessions")
+	}
+	app := &app{supplierClient: supplierClient, store: store, redis: redisClient, mail: &core.Mailer{Store: store}, secret: key, adminEmail: admin, origin: origin, secure: secure, assets: env("TK_REGISTER_ASSETS", "/opt/tk-register-web-portal")}
 	listener, e := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if e != nil {
 		return fmt.Errorf("TK Register could not listen on port %d", port)

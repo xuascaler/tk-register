@@ -28,7 +28,7 @@ type AccountResult struct {
 	Err     error
 }
 
-// CollectTargets reads only the supplied current-page accounts, using one login,
+// CollectTargets reads only the supplied current-page accounts, reusing a session,
 // at most three concurrent filtered searches, and at most one shared re-login.
 // Each target has an independent outcome; initial login failure is batch-level.
 func (c *Client) CollectTargets(ctx context.Context, username, password string, targets []Target) ([]AccountResult, error) {
@@ -44,11 +44,11 @@ func (c *Client) CollectTargets(ctx context.Context, username, password string, 
 	s := c.newSession()
 	defer s.http.CloseIdleConnections()
 	s.classifyReadErrors = true
-	if err := s.login(ctx, username, password); err != nil {
+	if err := s.authenticate(ctx, username, password, false); err != nil {
 		return nil, err
 	}
-	batch := &targetBatch{ctx: ctx, http: s.http, username: username, password: password, token: s.token}
-	// Initial login already used two HTTP requests. The remaining budget permits
+	batch := &targetBatch{ctx: ctx, http: s.http, username: username, password: password, token: s.token, cache: s.cache, cacheKey: s.cacheKey, cacheValue: s.cacheValue}
+	// A cache miss uses two initial login requests. The remaining budget permits
 	// forty searches, one two-request re-login, and up to three old-token retries.
 	batch.remaining.Store(maxBatchSearchRequests + maxBatchWorkers + 2)
 	batch.searches.Store(maxBatchSearchRequests)
@@ -113,20 +113,22 @@ func (c *Client) CollectTargets(ctx context.Context, username, password string, 
 // has a private session wrapper, so legacy request()/login() fields are never
 // shared across workers. Locks are never held during network I/O or pacing.
 type targetBatch struct {
-	ctx                 context.Context
-	http                *http.Client
-	username, password  string
-	remaining, searches atomic.Int32
-	auth                sync.Mutex
-	token               string
-	generation          uint64
-	reauthenticated     bool
-	refreshing          chan struct{}
-	authError           error
-	reauthWork          sync.WaitGroup
-	paceInit            sync.Once
-	pace                chan struct{}
-	nextRead            time.Time
+	cache                *sessionCache
+	cacheKey, cacheValue string
+	ctx                  context.Context
+	http                 *http.Client
+	username, password   string
+	remaining, searches  atomic.Int32
+	auth                 sync.Mutex
+	token                string
+	generation           uint64
+	reauthenticated      bool
+	refreshing           chan struct{}
+	authError            error
+	reauthWork           sync.WaitGroup
+	paceInit             sync.Once
+	pace                 chan struct{}
+	nextRead             time.Time
 }
 
 func takeBudget(b *atomic.Int32, n int32) bool {
@@ -174,7 +176,7 @@ func (b *targetBatch) waitRead(ctx context.Context) error {
 	b.nextRead = time.Now().Add(minBatchReadInterval)
 	return nil
 }
-func (b *targetBatch) get(ctx context.Context, path, token string) (int, []byte, error) {
+func (b *targetBatch) get(ctx context.Context, path, token, cacheKey, cacheValue string) (int, []byte, error) {
 	if ctx.Err() != nil {
 		return 0, nil, collectionTransportError(ctx, ctx.Err())
 	}
@@ -184,7 +186,7 @@ func (b *targetBatch) get(ctx context.Context, path, token string) (int, []byte,
 	if err := b.waitRead(ctx); err != nil {
 		return 0, nil, err
 	}
-	local := &session{http: b.http, token: token, remaining: 1, classifyReadErrors: true}
+	local := &session{http: b.http, token: token, remaining: 1, classifyReadErrors: true, cache: b.cache, cacheKey: cacheKey, cacheValue: cacheValue}
 	return local.request(ctx, http.MethodGet, path, nil)
 }
 func (b *targetBatch) read(ctx context.Context, _, _, path string) (int, []byte, error) {
@@ -195,7 +197,7 @@ func (b *targetBatch) read(ctx context.Context, _, _, path string) (int, []byte,
 		return 0, nil, collectionTransportError(ctx, ctx.Err())
 	}
 	b.auth.Lock()
-	token, generation, authErr := b.token, b.generation, b.authError
+	token, generation, authErr, cacheKey, cacheValue := b.token, b.generation, b.authError, b.cacheKey, b.cacheValue
 	b.auth.Unlock()
 	if authErr != nil {
 		return 0, nil, authErr
@@ -203,7 +205,7 @@ func (b *targetBatch) read(ctx context.Context, _, _, path string) (int, []byte,
 	if !takeBudget(&b.searches, 1) {
 		return 0, nil, safeError(CodeUnavailable)
 	}
-	status, body, err := b.get(ctx, path, token)
+	status, body, err := b.get(ctx, path, token, cacheKey, cacheValue)
 	if err != nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
 		return status, body, err
 	}
@@ -211,7 +213,10 @@ func (b *targetBatch) read(ctx context.Context, _, _, path string) (int, []byte,
 	if err != nil {
 		return 0, nil, err
 	}
-	status, body, err = b.get(ctx, path, token)
+	b.auth.Lock()
+	cacheKey, cacheValue = b.cacheKey, b.cacheValue
+	b.auth.Unlock()
+	status, body, err = b.get(ctx, path, token, cacheKey, cacheValue)
 	if err == nil && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
 		b.auth.Lock()
 		b.authError = safeError(CodeSessionExpired)
@@ -262,12 +267,15 @@ func (b *targetBatch) relogin(done chan struct{}) {
 	defer b.reauthWork.Done()
 	ctx, cancel := context.WithTimeout(b.ctx, maxTargetDuration)
 	defer cancel()
-	local := &session{http: b.http, remaining: 2, classifyReadErrors: true}
+	b.auth.Lock()
+	oldToken, oldKey, oldValue := b.token, b.cacheKey, b.cacheValue
+	b.auth.Unlock()
+	local := &session{http: b.http, remaining: 2, classifyReadErrors: true, cache: b.cache, cacheKey: oldKey, cacheValue: oldValue, token: oldToken}
 	var err error
 	if !takeBudget(&b.remaining, 2) {
 		err = safeError(CodeUnavailable)
 	} else {
-		err = local.login(ctx, b.username, b.password)
+		err = local.reauthenticate(ctx, b.username, b.password)
 	}
 	b.auth.Lock()
 	defer b.auth.Unlock()
@@ -275,6 +283,7 @@ func (b *targetBatch) relogin(done chan struct{}) {
 		b.authError = err
 	} else {
 		b.token = local.token
+		b.cacheKey, b.cacheValue = local.cacheKey, local.cacheValue
 		b.generation++
 	}
 	b.refreshing = nil
@@ -313,7 +322,7 @@ func (s *session) targetRead(ctx context.Context, username, password, path strin
 		return 0, nil, s.readAuthError
 	}
 	s.readReauthenticated = true
-	if err = s.login(ctx, username, password); err != nil {
+	if err = s.reauthenticate(ctx, username, password); err != nil {
 		s.readAuthError = err
 		return 0, nil, err
 	}

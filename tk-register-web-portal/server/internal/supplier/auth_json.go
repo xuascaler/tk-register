@@ -217,7 +217,7 @@ func (r *editRecord) checkEligibility() error {
 func (c *Client) CheckAuthJSON(ctx context.Context, username, password string, target Target) (EditInfo, error) {
 	s := c.newSession()
 	defer s.http.CloseIdleConnections()
-	if err := s.login(ctx, username, password); err != nil {
+	if err := s.authenticate(ctx, username, password, false); err != nil {
 		return EditInfo{}, err
 	}
 	row, err := s.findAccount(ctx, username, password, target)
@@ -228,7 +228,7 @@ func (c *Client) CheckAuthJSON(ctx context.Context, username, password string, t
 func (c *Client) CollectAccount(ctx context.Context, username, password string, target Target) (Account, error) {
 	s := c.newSession()
 	defer s.http.CloseIdleConnections()
-	if err := s.login(ctx, username, password); err != nil {
+	if err := s.authenticate(ctx, username, password, false); err != nil {
 		return Account{}, err
 	}
 	row, err := s.findTargetAccount(ctx, username, password, target, false)
@@ -245,7 +245,7 @@ func (c *Client) UpdateAuthJSON(ctx context.Context, username, password string, 
 	}
 	s := c.newSession()
 	defer s.http.CloseIdleConnections()
-	if err := s.login(ctx, username, password); err != nil {
+	if err := s.authenticate(ctx, username, password, false); err != nil {
 		return EditInfo{}, err
 	}
 	// Read again when saving: never trust preflight state or initial submission metadata.
@@ -353,6 +353,9 @@ func (s *session) updateRequest(ctx context.Context, id string, payload map[stri
 		return authError(CodeUpdateUnconfirmed)
 	}
 	defer response.Body.Close()
+	if s.cache != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+		_ = s.invalidateCurrent(ctx) // Never replay a write after invalidating its expired session.
+	}
 	if response.StatusCode >= 400 && response.StatusCode < 500 {
 		return authError(CodeUpdateRejected)
 	}

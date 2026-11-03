@@ -23,6 +23,9 @@ func (a *app) collector() accountCollector {
 	if a.accountCollector != nil {
 		return a.accountCollector
 	}
+	if a.supplierClient != nil {
+		return a.supplierClient
+	}
 	return supplier.NewClient()
 }
 
@@ -206,6 +209,9 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 			collectionUserID = 0
 		}
 		err = a.collectAccounts(ctx, collectionUserID, id, false)
+		if supplierWaitFailure(w, err) {
+			return true
+		}
 		if errors.Is(err, errSyncBusy) {
 			fail(w, 409, "SYNC_RUNNING", "A collection is already running. Please try again shortly.")
 			return true
@@ -271,6 +277,10 @@ func (a *app) adminAccountSync(w http.ResponseWriter, r *http.Request, route str
 		if in.WebsitePassword != nil {
 			changes["account_sync_website_password"] = *in.WebsitePassword
 		}
+		if err := a.invalidateSupplierCredentials(r.Context(), changes); err != nil {
+			internal(w)
+			return
+		}
 		if err := a.store.PatchSettings(r.Context(), changes, actorID); err != nil {
 			if core.IsValidationError(err) {
 				fail(w, 400, "INVALID_SETTINGS", err.Error())
@@ -330,6 +340,9 @@ func (a *app) adminAccountSync(w http.ResponseWriter, r *http.Request, route str
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		if err = a.collector().TestLogin(ctx, in.WebsiteUsername, in.WebsitePassword); err != nil {
+			if supplierWaitFailure(w, err) {
+				return
+			}
 			fail(w, 502, "WEBSITE_LOGIN_FAILED", publicCollectionError(err))
 			return
 		}
@@ -340,6 +353,9 @@ func (a *app) adminAccountSync(w http.ResponseWriter, r *http.Request, route str
 }
 
 func publicCollectionError(err error) string {
+	if seconds, _, _, _ := supplier.RetryDetails(err); seconds > 0 {
+		return supplierWaitMessage(err)
+	}
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
 		return upstream.Error()
@@ -463,8 +479,8 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		summary.Outcome, summary.ErrorKind = "skipped", ""
 		return a.finishCollection(scheduled, "")
 	}
-	// Collect creates a fresh authenticated session for each call. No token is
-	// shared with a previous scheduled run or stored in Redis/SQL.
+	// Collect reuses the shared supplier session when valid; account data is
+	// always read afresh. Query and login cooldowns remain separate.
 	records, collectionErr := a.collector().Collect(ctx, username, password)
 	if collectionErr != nil {
 		summary.ErrorKind = syncDiagnosticError(collectionErr)
@@ -531,7 +547,14 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	if message == "" {
 		summary.Outcome, summary.ErrorKind = "succeeded", ""
 	}
-	return a.finishCollection(scheduled, message)
+	if err := a.finishCollection(scheduled, message); err != nil {
+		return err
+	}
+	// Preserve the saved failure but expose a supplier cooldown to direct callers.
+	if seconds, _, _, _ := supplier.RetryDetails(collectionErr); seconds > 0 {
+		return collectionErr
+	}
+	return nil
 }
 
 func (a *app) finishCollection(scheduled bool, message string) error {

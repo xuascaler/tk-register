@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowUpRight, ChevronLeft, ChevronRight, Clock3, RefreshCw, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { errorMessage, request } from '../api';
+import { APIError, errorMessage, request, retryAfterSeconds, retryStage, type RetryStage } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import Select from '../submissions/Select';
 import { AdminBadge } from '../admin/shared';
@@ -8,7 +8,7 @@ import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statu
 import type { AccountDetails, AccountPage, AccountSnapshot, SyncedAccount } from './types';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
 import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
-import { loadAccountPage, mergeSyncedAccount, syncAccountRow, type AccountRowSyncResult } from './row-sync';
+import { loadAccountPage, mergeSyncedAccount, syncAccountRow, syncRetryLabel, type AccountRowSyncResult } from './row-sync';
 
 function Status({ account }: { account: SyncedAccount }) {
   return <span className={`usage-status ${statusTone(account.snapshot?.account_status)}`}>{statusLabel(account.snapshot?.account_status)}</span>;
@@ -119,7 +119,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
           <td data-label='Last updated'><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>
             <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>Updating account…</span> : !eligible ? <span className='usage-small'>Awaiting acceptance</span> : failure ? <details className='usage-sync-error'><summary>{rateLimited ? 'Rate limited' : 'Sync failed'}</summary><p>{failure}</p><span>{account.snapshot ? 'Showing the last successful data.' : 'No data has been collected yet.'}</span></details> : refresh?.status === 'skipped' ? <details className='usage-sync-error'><summary>Not updated</summary><p>{refresh.message}</p></details> : refresh?.status === 'updated' ? <span className='usage-row-success'>Updated</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</div>
           </td>
-          <td className='usage-sync-cell'><button className='button pale usage-sync-button' type='button' aria-label={`Sync ${account.account}`} disabled={loading || loadedScope !== scope || syncingID !== null || !eligible || retryIn > 0} onClick={() => void sync(account)}><RefreshCw className={busy ? 'usage-spinning' : ''} aria-hidden='true' />{busy ? 'Syncing' : 'Sync'}</button>{retryIn > 0 && <span className='usage-sync-cooldown'>Retry in {retryIn}s</span>}</td>
+          <td className='usage-sync-cell'><button className='button pale usage-sync-button' type='button' aria-label={`Sync ${account.account}`} disabled={loading || loadedScope !== scope || syncingID !== null || !eligible || retryIn > 0} onClick={() => void sync(account)}><RefreshCw className={busy ? 'usage-spinning' : ''} aria-hidden='true' />{busy ? 'Syncing' : 'Sync'}</button>{retryIn > 0 && <span className='usage-sync-cooldown'>{syncRetryLabel(retryIn, refresh?.retryStage)}</span>}</td>
         </tr>; })}</tbody>
       </table></div>
       {!data?.items.length && <div className='usage-empty'><h2>{query || status ? 'No matching accounts' : 'No accounts yet'}</h2><p>{query || status ? 'Try another email or account status.' : admin ? 'Submitted accounts from all users will appear here with their latest available data.' : 'Your submitted accounts will appear here with their latest available data.'}</p></div>}
@@ -172,12 +172,15 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   const [syncing, setSyncing] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [refreshWarning, setRefreshWarning] = useState('');
+  const [syncRetry, setSyncRetry] = useState<{ until: number; stage?: RetryStage } | null>(null);
+  const [syncNow, setSyncNow] = useState(Date.now);
+  const syncRetryIn = Math.max(0, Math.ceil(((syncRetry?.until || 0) - syncNow) / 1000));
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [attempt, setAttempt] = useState(0);
   const pending = useRef<AbortController | null>(null);
   useEffect(() => {
-    setEditorOpen(false); setRefreshWarning(''); setNotice(''); setSyncing(false);
+    setEditorOpen(false); setRefreshWarning(''); setNotice(''); setSyncing(false); setSyncRetry(null);
     return () => pending.current?.abort();
   }, [id, endpoint]);
   useEffect(() => {
@@ -188,17 +191,33 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [id, days, attempt, endpoint]);
+  useEffect(() => {
+    if (!syncRetry || syncRetry.until <= Date.now()) return;
+    setSyncNow(Date.now());
+    const timer = window.setInterval(() => {
+      const now = Date.now(); setSyncNow(now);
+      if (now >= syncRetry.until) window.clearInterval(timer);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [syncRetry]);
   async function sync() {
-    if (syncing) return;
+    if (syncing || (syncRetry?.until || 0) > Date.now()) return;
     const controller = new AbortController(); pending.current = controller;
-    setSyncing(true); setError(''); setNotice(''); setRefreshWarning('');
+    setSyncing(true); setError(''); setNotice(''); setRefreshWarning(''); setSyncRetry(null);
     try {
       const result = await request<{ account: SyncedAccount }>(`${endpoint}/${encodeURIComponent(id)}/sync`, { method: 'POST', body: {}, signal: controller.signal });
       if (!controller.signal.aborted) {
         if (result.account.last_error) setError(result.account.last_error);
         else setNotice('Account data updated.');
       }
-    } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        setError(errorMessage(cause));
+        if (cause instanceof APIError && retryAfterSeconds(cause.retryAfter)) {
+          setSyncRetry({ until: Date.now() + cause.retryAfter * 1000, stage: cause.retryStage });
+        }
+      }
+    }
     finally {
       if (!controller.signal.aborted) {
         try { const result = await request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal }); if (!controller.signal.aborted) setData(result); } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
@@ -207,7 +226,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
     }
   }
   async function credentialsSaved(result: AuthJSONUpdateResult) {
-    setEditorOpen(false); setError('');
+    setEditorOpen(false); setError(''); setSyncRetry(null);
     // The returned account may represent a newer lifetime. Trust its timestamp
     // instead of attaching the completed operation's timestamp to that identity.
     setData(current => current && { ...current, account: result.account || current.account });
@@ -215,6 +234,8 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       setNotice(authJSONResultMessage(result)); setRefreshWarning('');
     } else {
       setNotice(''); setRefreshWarning(authJSONResultMessage(result));
+      const retryAfter = retryAfterSeconds(result.refresh_retry_after);
+      if (retryAfter) setSyncRetry({ until: Date.now() + retryAfter * 1000, stage: retryStage(result.refresh_retry_stage) });
     }
     // The mutation is already confirmed. A separate read failure must not be
     // presented as a failed credential update or discard the returned account.
@@ -232,11 +253,12 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   return <section className='usage-detail'>
     <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />{admin ? 'Account pool / Accounts' : 'Accounts'}</button>
     {!account || !data ? <><ErrorNotice>{error}</ErrorNotice>{loading ? <Loading label='Loading account…' /> : <button className='button pale' onClick={() => setAttempt(v => v + 1)}>Try again</button>}</> : <>
-      <div className='title-row usage-detail-title'><div><h1>{account.account}</h1><p className='subtitle'>{account.plan} <span aria-hidden='true'>·</span> {account.vendor_name}</p></div><div className='usage-detail-actions'><Status account={account} /><button className='button pale' disabled={syncing || loading || !account.current_submission_id} onClick={sync}><RefreshCw className={syncing ? 'usage-spinning' : ''} aria-hidden='true' />{syncing ? 'Updating…' : 'Sync now'}</button></div></div>
+      <div className='title-row usage-detail-title'><div><h1>{account.account}</h1><p className='subtitle'>{account.plan} <span aria-hidden='true'>·</span> {account.vendor_name}</p></div><div className='usage-detail-actions'><Status account={account} /><button className='button pale' disabled={syncing || loading || syncRetryIn > 0 || !account.current_submission_id} onClick={sync}><RefreshCw className={syncing ? 'usage-spinning' : ''} aria-hidden='true' />{syncing ? 'Updating…' : 'Sync now'}</button></div></div>
       <div className='usage-meta'>{admin && <span className='usage-owner-meta'>User <strong>{account.user_email || '—'}</strong></span>}<span>Account ID <strong>{account.platform_account_id || account.remote_id || '—'}</strong></span><span>Last updated <strong>{formatTime(account.last_success_at, data.timezone)}</strong></span>{account.latest_submission_id && <button className='usage-text-button' onClick={() => onSubmission(account.current_submission_id || account.latest_submission_id)}>View submission<ArrowUpRight aria-hidden='true' /></button>}</div>
       <ErrorNotice>{error}</ErrorNotice>
       {notice && <p className='notice success' role='status'>{notice}</p>}
       {refreshWarning && <p className='notice account-auth-refresh-warning' role='status'>{refreshWarning}</p>}
+      {syncRetryIn > 0 && <p className='usage-small' role='status'>{syncRetryLabel(syncRetryIn, syncRetry?.stage)}. Saved account data is retained.</p>}
       {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><details><summary>View details</summary><p>{account.last_error}</p><span>Attempted {formatTime(account.last_attempt_at, data.timezone)}</span></details></div>}
       <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} />
       <div className='usage-metrics'>

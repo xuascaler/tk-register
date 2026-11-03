@@ -42,13 +42,18 @@ const (
 	CodeContractMismatch   = "supplier_contract_mismatch"
 	CodeTimeout            = "supplier_timeout"
 	CodeRateLimited        = "supplier_rate_limited"
+	CodeSessionBusy        = "supplier_session_busy"
 )
 
 // Error contains only fixed, public-safe messages. Upstream response bodies,
 // credentials, tokens, and transport errors are never included in its text.
 type Error struct {
-	Code    string
-	Message string
+	Code              string
+	Message           string
+	RetryAfterSeconds int
+	RetryAt           time.Time
+	Stage             string
+	Deferred          bool
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -85,7 +90,10 @@ type Account struct {
 	SourceUpdatedAt   *time.Time
 }
 
-type Client struct{ transport http.RoundTripper }
+type Client struct {
+	transport http.RoundTripper
+	cache     *sessionCache
+}
 
 func NewClient() *Client {
 	return &Client{transport: &http.Transport{
@@ -102,19 +110,22 @@ func NewClient() *Client {
 	}}
 }
 
-// Each call owns a separate short-lived session. Login tokens are neither saved
-// on Client nor reused between periodic runs, including TestLogin calls.
+// Each call owns separate HTTP/retry budgets; production clients share encrypted
+// authentication through Redis. TestLogin always verifies the supplied credentials.
 type session struct {
-	http                *http.Client
-	token               string
-	publicKey           string
-	remaining           int
-	readReauthenticated bool
-	readAuthError       error
-	targetReadLimit     int
-	targetReads         int
-	targetReadDelegate  func(context.Context, string, string, string) (int, []byte, error)
-	classifyReadErrors  bool
+	cache                *sessionCache
+	cacheKey, cacheValue string
+	expiresAt            time.Time
+	http                 *http.Client
+	token                string
+	publicKey            string
+	remaining            int
+	readReauthenticated  bool
+	readAuthError        error
+	targetReadLimit      int
+	targetReads          int
+	targetReadDelegate   func(context.Context, string, string, string) (int, []byte, error)
+	classifyReadErrors   bool
 }
 
 func (c *Client) newSession() *session {
@@ -123,6 +134,7 @@ func (c *Client) newSession() *session {
 		transport = NewClient().transport
 	}
 	return &session{
+		cache: c.cache,
 		http: &http.Client{
 			Transport: transport,
 			Timeout:   30 * time.Second,
@@ -137,16 +149,16 @@ func (c *Client) newSession() *session {
 func (c *Client) TestLogin(ctx context.Context, username, password string) error {
 	s := c.newSession()
 	defer s.http.CloseIdleConnections()
-	return s.login(ctx, username, password)
+	return s.authenticate(ctx, username, password, true)
 }
 
-// Collect logs in afresh, then reads the website account list. A single expired
+// Collect obtains a reusable session, then reads the website account list. A single expired
 // session can trigger one fresh login and one retry of the failed read. There
 // are no retries of login failures or any mutating vendor endpoints.
 func (c *Client) Collect(ctx context.Context, username, password string) ([]Account, error) {
 	s := c.newSession()
 	defer s.http.CloseIdleConnections()
-	if err := s.login(ctx, username, password); err != nil {
+	if err := s.authenticate(ctx, username, password, false); err != nil {
 		return nil, err
 	}
 	accounts := make([]Account, 0)
@@ -167,7 +179,7 @@ func (c *Client) Collect(ctx context.Context, username, password string) ([]Acco
 				return nil, safeError(CodeSessionExpired)
 			}
 			reauthenticated = true
-			if err = s.login(ctx, username, password); err != nil {
+			if err = s.reauthenticate(ctx, username, password); err != nil {
 				return nil, err
 			}
 			status, body, err = s.request(ctx, http.MethodGet, path, nil)
@@ -215,6 +227,12 @@ func (c *Client) Collect(ctx context.Context, username, password string) ([]Acco
 }
 
 func (s *session) request(ctx context.Context, method, path string, payload any) (int, []byte, error) {
+	queryRequest := method == http.MethodGet && strings.SplitN(path, "?", 2)[0] == apiPrefix+"/accounts"
+	if s.cache != nil && queryRequest {
+		if err := s.cache.cooldown(ctx, "accounts"); err != nil {
+			return 0, nil, err
+		}
+	}
 	if s.remaining <= 0 || !strings.HasPrefix(path, apiPrefix+"/") {
 		return 0, nil, safeError(CodeContractMismatch)
 	}
@@ -271,6 +289,18 @@ func (s *session) request(ctx context.Context, method, path string, payload any)
 		event.ErrorKind = "authentication"
 	case response.StatusCode < 200 || response.StatusCode >= 300:
 		event.ErrorKind = "http"
+	}
+	if s.cache != nil && response.StatusCode == http.StatusTooManyRequests {
+		stage := "login"
+		if queryRequest {
+			stage = "accounts"
+		}
+		return 0, nil, s.cache.recordCooldown(ctx, stage, cooldownRetryAfter(response.Header.Get("Retry-After"), time.Now()))
+	}
+	if s.cache != nil && queryRequest && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+		if err := s.invalidateCurrent(ctx); err != nil {
+			return 0, nil, err
+		}
 	}
 	if s.classifyReadErrors && response.StatusCode == http.StatusTooManyRequests {
 		return 0, nil, safeError(CodeRateLimited)
@@ -428,13 +458,15 @@ func (s *session) login(ctx context.Context, username, password string) error {
 		return err
 	}
 	var result struct {
-		Token string `json:"token"`
+		Token     string          `json:"token"`
+		ExpiresIn json.RawMessage `json:"expires_in"`
 	}
 	if common.Unmarshal(body, &result) != nil || result.Token == "" || len(result.Token) > 16384 || strings.ContainsAny(result.Token, "\r\n \t") {
 		return safeError(CodeContractMismatch)
 	}
 	s.token = result.Token
 	s.publicKey = pubkey.PublicKey
+	s.expiresAt = sessionExpiry(result.ExpiresIn, time.Now())
 	return nil
 }
 

@@ -18,6 +18,7 @@ import (
 	"goapi-tk-register/server/common"
 	"goapi-tk-register/server/internal/core"
 	"goapi-tk-register/server/internal/diagnostics"
+	"goapi-tk-register/server/internal/supplier"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -38,6 +39,7 @@ type app struct {
 	accountCollector                   accountCollector
 	accountPageCollector               accountPageCollector
 	accountAuthEditor                  accountAuthEditor
+	supplierClient                     *supplier.Client
 }
 type envelope struct {
 	Success    bool   `json:"success"`
@@ -45,6 +47,7 @@ type envelope struct {
 	Message    string `json:"message,omitempty"`
 	Code       string `json:"code,omitempty"`
 	RetryAfter int    `json:"retry_after,omitempty"`
+	RetryStage string `json:"retry_stage,omitempty"`
 }
 
 func respond(w http.ResponseWriter, status int, v envelope) {
@@ -321,6 +324,10 @@ func (a *app) settings(w http.ResponseWriter, r *http.Request) {
 			Settings map[string]string `json:"settings"`
 		}
 		if !decode(w, r, &in) {
+			return
+		}
+		if e := a.invalidateSupplierCredentials(r.Context(), in.Settings); e != nil {
+			internal(w)
 			return
 		}
 		if e := a.store.PatchSettings(r.Context(), in.Settings, u.ID); e != nil {

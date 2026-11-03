@@ -193,6 +193,7 @@ export const authJSONUpdateErrors: ErrorDefinition[] = [
   { status: '409', code: 'AUTH_JSON_NOT_EDITABLE / ACCOUNT_CHANGED', description: 'The supplier does not allow editing in the current state, or the local account changed during the operation. Check the account before trying again.' },
   { status: '415', code: 'INVALID_CONTENT_TYPE', description: 'Send Content-Type: application/json.' },
   { status: '429', code: 'RATE_LIMITED', description: 'The update limit of 100 requests per minute per user has been reached. Shared with web updates; wait for Retry-After.' },
+  { status: '429', code: 'SUPPLIER_RATE_LIMITED', description: 'A supplier cooldown or another login in progress prevented the write from starting. Wait for Retry-After. retry_stage identifies login, accounts, or login_lock.' },
   { status: '502', code: 'AUTH_JSON_UPDATE_REJECTED', description: 'The supplier explicitly rejected the replacement credentials. The error response does not include its credential-bearing body.' },
   { status: '502', code: 'AUTH_JSON_LOGIN_FAILED / AUTH_JSON_UNAVAILABLE', description: 'Supplier login, connection, or response processing failed. No update was confirmed. Contact an administrator if the issue persists.' },
   { status: '503', code: 'SYNC_NOT_CONFIGURED / UNAVAILABLE', description: 'Supplier website login has not been configured, or a required local service is unavailable.' },

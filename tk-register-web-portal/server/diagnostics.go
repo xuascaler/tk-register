@@ -61,7 +61,7 @@ func syncDiagnosticError(err error) string {
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
 		switch upstream.Code {
-		case supplier.CodeRateLimited:
+		case supplier.CodeRateLimited, supplier.CodeSessionBusy:
 			return "rate_limited"
 		case supplier.CodeTimeout:
 			return "timeout"

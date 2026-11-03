@@ -48,12 +48,28 @@ export function setCSRFToken(value: string) {
   csrfToken = value;
 }
 
+export type RetryStage = 'login' | 'accounts' | 'login_lock';
+
+// Retry durations are server-provided seconds, bounded like supplier deadlines.
+// Ignore malformed values rather than creating an indefinite disabled control.
+export function retryAfterSeconds(value: unknown): number {
+  if (typeof value !== 'number' && typeof value !== 'string') return 0;
+  if (typeof value === 'string' && !/^\d+$/.test(value.trim())) return 0;
+  const seconds = Number(value);
+  return Number.isSafeInteger(seconds) && seconds > 0 && seconds <= 604800 ? seconds : 0;
+}
+
+export function retryStage(value: unknown): RetryStage | undefined {
+  return value === 'login' || value === 'accounts' || value === 'login_lock' ? value : undefined;
+}
+
 export class APIError extends Error {
   constructor(
     message: string,
     public status: number,
     public code = '',
     public retryAfter = 0,
+    public retryStage?: RetryStage,
   ) {
     super(message);
     this.name = 'APIError';
@@ -89,18 +105,15 @@ export async function request<T>(
   }
   const payload = await response.json().catch(() => null);
   if (!response.ok || payload?.success === false) {
-    const retryAfter =
-      Number(
-        response.headers.get('Retry-After') ||
-          payload?.retry_after ||
-          payload?.data?.retry_after,
-      ) || 0;
+    const retryAfter = retryAfterSeconds(response.headers.get('Retry-After')) ||
+      retryAfterSeconds(payload?.retry_after) || retryAfterSeconds(payload?.data?.retry_after);
     const error = new APIError(
       payload?.message ||
         'The request could not be completed. Please try again.',
       response.status,
       payload?.code || '',
       retryAfter,
+      retryStage(payload?.retry_stage ?? payload?.data?.retry_stage),
     );
     if (response.status === 401 && csrfToken) {
       csrfToken = '';

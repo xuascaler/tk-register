@@ -21,13 +21,18 @@ func (a *app) pageCollector() accountPageCollector {
 	if a.accountPageCollector != nil {
 		return a.accountPageCollector
 	}
+	if a.supplierClient != nil {
+		return a.supplierClient
+	}
 	return supplier.NewClient()
 }
 
 type pageSyncResult struct {
-	AccountID string `json:"account_id"`
-	Status    string `json:"status"`
-	Message   string `json:"message,omitempty"`
+	AccountID  string `json:"account_id"`
+	Status     string `json:"status"`
+	Message    string `json:"message,omitempty"`
+	RetryAfter int    `json:"retry_after,omitempty"`
+	RetryStage string `json:"retry_stage,omitempty"`
 }
 type pageSyncResponse struct {
 	Accounts     []core.AccountDTO `json:"accounts"`
@@ -50,13 +55,16 @@ func supplierAccountSnapshot(record *supplier.Account) core.AccountSnapshotValue
 }
 
 func pageCollectionError(err error) string {
+	if seconds, _, _, _ := supplier.RetryDetails(err); seconds > 0 {
+		return supplierWaitMessage(err)
+	}
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
 		switch upstream.Code {
 		case supplier.CodeTimeout:
 			return "The supplier website timed out. Previously collected data is retained."
 		case supplier.CodeRateLimited:
-			return "The supplier website is limiting requests. Please try again shortly. Previously collected data is retained."
+			return supplierWaitMessage(err)
 		case supplier.CodeAccountNotFound:
 			return "This account was not found on the supplier website. Previously collected data is retained."
 		case supplier.CodeAccountAmbiguous:
@@ -286,6 +294,7 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 				continue
 			}
 			out.Results[i].Status = "failed"
+			out.Results[i].RetryAfter, _, out.Results[i].RetryStage, _ = supplier.RetryDetails(rowErr)
 			if errors.Is(rowErr, core.ErrAccountIdentityChanged) {
 				message = "This account changed during synchronization. Reload the page before trying again."
 			} else {

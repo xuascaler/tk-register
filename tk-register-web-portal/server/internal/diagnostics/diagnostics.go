@@ -256,3 +256,18 @@ func LogSync(ctx context.Context, e SyncEvent) {
 		WaitSeconds      int    `json:"wait_seconds,omitempty"`
 	}{fields(ctx), event, outcome, stage, errorKind(e.ErrorKind), max(int64(0), e.DurationMS), RequestCount(ctx), max(0, e.UpdatedCount), max(0, e.FailedCount), max(0, e.SkippedCount), max(0, e.Limit), max(0, e.WindowSeconds), max(0, e.WaitSeconds)})
 }
+
+// LogSession records fixed operational state names only. Tokens, usernames,
+// cache keys and credentials are never accepted as fields.
+func LogSession(ctx context.Context, event, stage string, waitSeconds int) {
+	event = allowed(event, "cache_hit", "cache_miss", "cache_expired", "session_saved", "session_refresh", "session_invalidated", "login_lock_wait", "cooldown_wait", "cooldown_started", "credentials_changed", "test_login", "cache_unavailable")
+	if !allRequests() && event != "cooldown_wait" && event != "cooldown_started" && event != "cache_unavailable" {
+		return
+	}
+	emit(ctx, "TK_SUPPLIER_SESSION", struct {
+		traceFields
+		Event       string `json:"event"`
+		Stage       string `json:"stage"`
+		WaitSeconds int    `json:"wait_seconds,omitempty"`
+	}{fields(ctx), event, allowed(stage, "login", "accounts", "login_lock"), max(0, waitSeconds)})
+}

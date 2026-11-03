@@ -123,8 +123,10 @@ func (s *Store) DeferPostSubmissionSyncJob(ctx context.Context, id uint64, now t
 
 // Claim is conditional so concurrent workers cannot consume the same job.
 // A running job cannot be claimed twice, and terminal jobs are never reopened.
+// Millisecond precision matches MySQL DATETIME(3), so a deferred worker can
+// compare the same persisted claim timestamp without nanosecond mismatches.
 func (s *Store) ClaimPostSubmissionSyncJob(ctx context.Context, id uint64, now time.Time) (bool, error) {
-	result := s.DB.WithContext(ctx).Model(&PostSubmissionSyncJob{}).Where("id = ? AND status = ? AND next_run_at <= ? AND attempt_count < ?", id, "pending", now.UTC(), postSubmissionSyncMaxAttempts).Updates(map[string]any{"status": "running", "started_at": now.UTC(), "finished_at": nil, "last_error": "", "attempt_count": gorm.Expr("attempt_count + 1")})
+	result := s.DB.WithContext(ctx).Model(&PostSubmissionSyncJob{}).Where("id = ? AND status = ? AND next_run_at <= ? AND attempt_count < ?", id, "pending", now.UTC(), postSubmissionSyncMaxAttempts).Updates(map[string]any{"status": "running", "started_at": now.UTC().Truncate(time.Millisecond), "finished_at": nil, "last_error": "", "attempt_count": gorm.Expr("attempt_count + 1")})
 	return result.RowsAffected == 1, result.Error
 }
 
@@ -218,6 +220,12 @@ func (s *Store) PostSubmissionSyncTarget(ctx context.Context, job PostSubmission
 // supplier response or credential. A failed read is delayed three seconds while
 // its remaining retry budget allows it. This never retries a supplier mutation.
 func (s *Store) FinishPostSubmissionSyncJob(ctx context.Context, id uint64, status, message string, at time.Time) error {
+	return s.FinishPostSubmissionSyncJobAfter(ctx, id, status, message, at, time.Time{})
+}
+
+// A supplier cooldown can postpone a retry beyond the normal three seconds.
+// The failed HTTP attempt still consumes one of the existing four attempts.
+func (s *Store) FinishPostSubmissionSyncJobAfter(ctx context.Context, id uint64, status, message string, at, retryAt time.Time) error {
 	if status != "succeeded" && status != "failed" && status != "skipped" {
 		return validationErrorf("invalid post-submission sync outcome")
 	}
@@ -239,17 +247,24 @@ func (s *Store) FinishPostSubmissionSyncJob(ctx context.Context, id uint64, stat
 		if err != nil {
 			return err
 		}
-		return finishPostSubmissionSyncTx(tx, job, status, message, at)
+		return finishPostSubmissionSyncTx(tx, job, status, message, at, retryAt)
 	})
 }
 
-func finishPostSubmissionSyncTx(tx *gorm.DB, job PostSubmissionSyncJob, status, message string, at time.Time) error {
+func finishPostSubmissionSyncTx(tx *gorm.DB, job PostSubmissionSyncJob, status, message string, at time.Time, retryAt ...time.Time) error {
 	updates := map[string]any{"status": status, "finished_at": at.UTC(), "last_error": message}
 	refreshStatus := "failed"
 	if status == "succeeded" {
 		refreshStatus = "succeeded"
 	} else if status == "failed" && job.AttemptCount < postSubmissionSyncMaxAttempts {
-		updates["status"], updates["finished_at"], updates["next_run_at"] = "pending", nil, at.UTC().Add(3*time.Second)
+		next := at.UTC().Add(3 * time.Second)
+		if len(retryAt) > 0 && retryAt[0].After(next) {
+			next = retryAt[0].UTC()
+			if upper := at.UTC().Add(7 * 24 * time.Hour); next.After(upper) {
+				next = upper
+			}
+		}
+		updates["status"], updates["finished_at"], updates["next_run_at"] = "pending", nil, next
 		refreshStatus = "pending"
 	}
 	if err := tx.Model(&PostSubmissionSyncJob{}).Where("id = ? AND status = ?", job.ID, "running").Updates(updates).Error; err != nil {
@@ -276,4 +291,30 @@ func (s *Store) RecoverPostSubmissionSyncJobs(ctx context.Context, now time.Time
 		}
 		return nil
 	})
+}
+
+// DeferClaimedPostSubmissionSyncJob refunds a claim only when it is still the
+// exact running attempt that encountered a local wait, regardless of whether
+// session preparation already made a successful HTTP request. The
+// account and auth-update audit remain unchanged; the next due attempt rechecks
+// ownership and supersession. Terminal or subsequently reclaimed jobs cannot
+// be reopened by a late worker.
+func (s *Store) DeferClaimedPostSubmissionSyncJob(ctx context.Context, id uint64, attempt int, startedAt, nextRunAt, now time.Time, message string) error {
+	if attempt < 1 || startedAt.IsZero() || now.IsZero() {
+		return validationErrorf("invalid deferred sync attempt")
+	}
+	next := nextRunAt.UTC()
+	if !next.After(now) {
+		next = now.UTC().Add(time.Second)
+	}
+	if upper := now.UTC().Add(7 * 24 * time.Hour); next.After(upper) {
+		next = upper
+	}
+	message = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ", "\x00", "").Replace(message))
+	if message == "" || len(message) > 255 {
+		message = "Automatic account sync is waiting for the supplier."
+	}
+	return s.DB.WithContext(ctx).Model(&PostSubmissionSyncJob{}).
+		Where("id = ? AND status = ? AND attempt_count = ? AND started_at = ?", id, "running", attempt, startedAt.UTC().Truncate(time.Millisecond)).
+		Updates(map[string]any{"status": "pending", "attempt_count": attempt - 1, "started_at": nil, "finished_at": nil, "next_run_at": next, "last_error": message}).Error
 }

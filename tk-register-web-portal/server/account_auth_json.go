@@ -25,6 +25,9 @@ func (a *app) authEditor() accountAuthEditor {
 	if a.accountAuthEditor != nil {
 		return a.accountAuthEditor
 	}
+	if a.supplierClient != nil {
+		return a.supplierClient
+	}
 	return supplier.NewClient()
 }
 
@@ -151,6 +154,9 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		defer cancel()
 		info, err := editor.CheckAuthJSON(ctx, username, password, selection)
 		if err != nil {
+			if supplierWaitFailure(w, err) {
+				return
+			}
 			authJSONFail(w, authJSONError(err))
 			return
 		}
@@ -273,6 +279,9 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	problem := authJSONProblem{}
 	if updateErr != nil {
 		problem = authJSONError(updateErr)
+		if seconds, _, _, _ := supplier.RetryDetails(updateErr); seconds > 0 {
+			problem = authJSONProblem{429, "SUPPLIER_RATE_LIMITED", supplierWaitMessage(updateErr)}
+		}
 		code = problem.code
 		status = "failed"
 		if code == "AUTH_JSON_UPDATE_UNCONFIRMED" {
@@ -285,9 +294,13 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	unchanged, persistErr := a.store.FinishAuthJSONUpdate(saveCtx, audit, status, info.RecordID, code, at)
 	saveCancel()
 	if updateErr != nil {
+		if supplierWaitFailure(w, updateErr) {
+			return
+		}
 		authJSONFail(w, problem)
 		return
 	}
+	refreshRetryAfter, refreshRetryStage := 0, ""
 	refreshStatus, refreshMessage := "failed", "Auth JSON updated, but account refresh failed. Your last successful data is retained. Try syncing again."
 	if persistErr == nil && unchanged && operation.Token != nil {
 		// Successful API audit persistence atomically queues the delayed read.
@@ -313,6 +326,10 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		if refreshErr == nil {
 			refreshStatus, refreshMessage = "succeeded", "Auth JSON updated and account data refreshed."
 		} else {
+			refreshRetryAfter, _, refreshRetryStage, _ = supplier.RetryDetails(refreshErr)
+			if refreshRetryAfter > 0 {
+				refreshMessage = "Auth JSON updated. " + supplierWaitMessage(refreshErr)
+			}
 			_ = a.store.RecordAccountFailure(persistCtx, target.ID, target.IdentityKey, "Auth JSON was updated, but the account could not be refreshed. Previously collected data is retained.", now)
 		}
 		_ = a.store.FinishAuthJSONRefresh(persistCtx, audit.ID, refreshStatus == "succeeded")
@@ -338,5 +355,5 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	if operation.FormatAccount != nil {
 		result = operation.FormatAccount(account)
 	}
-	ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": refreshStatus, "refresh_message": refreshMessage, "account": result, "updated_at": at})
+	ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": refreshStatus, "refresh_message": refreshMessage, "refresh_retry_after": refreshRetryAfter, "refresh_retry_stage": refreshRetryStage, "account": result, "updated_at": at})
 }

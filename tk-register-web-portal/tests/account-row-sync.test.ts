@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setCSRFToken } from '../src/api.ts';
-import { loadAccountPage, syncAccountRow, mergeSyncedAccount, type AccountListEndpoint } from '../src/accounts/row-sync.ts';
+import { loadAccountPage, syncAccountRow, syncRetryLabel, mergeSyncedAccount, type AccountListEndpoint } from '../src/accounts/row-sync.ts';
 import type { AccountPage, SyncedAccount } from '../src/accounts/types.ts';
 
 const savedAt = '2026-11-01T00:00:00Z';
@@ -113,4 +113,43 @@ test('a sync result cannot insert an account into a different page', () => {
   const current = page();
   const merged = mergeSyncedAccount(current, { account: account('99', collectedAt), status: 'updated' });
   assert.deepEqual(merged, current);
+});
+
+test('HTTP 200 per-account cooldown retains data and exposes only the affected row retry metadata', async t => {
+  const saved = account('7');
+  for (const stage of ['login', 'accounts', 'login_lock'] as const) {
+    let calls = 0;
+    const mock = t.mock.method(globalThis, 'fetch', async () => {
+      calls++;
+      return response({ accounts: [{ ...saved, last_error: 'Supplier temporarily unavailable.' }], results: [
+        { account_id: '8', status: 'failed', retry_after: 999, retry_stage: 'accounts' },
+        { account_id: '7', status: 'failed', message: 'Please wait before trying again.', retry_after: 284, retry_stage: stage },
+      ] });
+    });
+    const result = await syncAccountRow('/accounts', saved, new AbortController().signal);
+    assert.equal(result.status, 'failed'); assert.equal(result.account, saved);
+    assert.equal(result.retryAfter, 284); assert.equal(result.retryStage, stage);
+    assert.equal(calls, 1, 'Waiting must not automatically replay a manual Sync');
+    mock.mock.restore();
+  }
+  assert.equal(syncRetryLabel(284, 'login'), 'Login retry in 284s');
+  assert.equal(syncRetryLabel(60, 'accounts'), 'Query retry in 60s');
+  assert.equal(syncRetryLabel(2, 'login_lock'), 'Retry in 2s');
+});
+
+test('invalid cooldown metadata cannot disable an account indefinitely or label a successful sync as waiting', async t => {
+  const saved = account('7');
+  for (const retry of [-1, 'NaN', Infinity, 604801, true, [], {}, 0.5]) {
+    const mock = t.mock.method(globalThis, 'fetch', async () => response({ accounts: [], results: [
+      { account_id: '7', status: 'failed', retry_after: retry, retry_stage: 'untrusted' },
+    ] }));
+    const result = await syncAccountRow('/accounts', saved, new AbortController().signal);
+    assert.equal(result.retryAfter, undefined); assert.equal(result.retryStage, undefined);
+    mock.mock.restore();
+  }
+  t.mock.method(globalThis, 'fetch', async () => response({ accounts: [account('7', collectedAt)], results: [
+    { account_id: '7', status: 'updated', retry_after: 284, retry_stage: 'login' },
+  ] }));
+  const result = await syncAccountRow('/accounts', saved, new AbortController().signal);
+  assert.equal(result.status, 'updated'); assert.equal(result.retryAfter, undefined);
 });

@@ -191,6 +191,7 @@ Errors use a safe TK Register envelope, including errors returned by the supplie
 | 409 | `AUTH_JSON_NOT_EDITABLE`, `ACCOUNT_CHANGED` | Supplier disallows editing or account identity changed. |
 | 415 | `INVALID_CONTENT_TYPE` | Use application/json. |
 | 429 | `RATE_LIMITED` | Wait for the `Retry-After` header in seconds. |
+| 429 | `SUPPLIER_RATE_LIMITED` | A supplier login or account-query cooldown, or another login in progress, prevented the write from starting. Wait for `Retry-After`; `retry_stage` identifies `login`, `accounts`, or `login_lock`. |
 | 502 | `AUTH_JSON_UPDATE_REJECTED` | Supplier explicitly rejected the update. |
 | 502 | `AUTH_JSON_LOGIN_FAILED`, `AUTH_JSON_UNAVAILABLE` | Supplier login, connection, or response processing failed; no update confirmed. |
 | 503 | `SYNC_NOT_CONFIGURED`, `UNAVAILABLE` | Website login is not configured or a required local service is unavailable. |
@@ -199,3 +200,5 @@ Errors use a safe TK Register envelope, including errors returned by the supplie
 The write is never retried automatically. A timeout or connection loss after transmission can mean the supplier changed the credentials without returning confirmation. Inspect the account before a manual retry. Each later update that begins execution creates its own audit record; the earlier uncertain record is retained. Rejected, failed or unconfirmed writes do not queue post-update collection. The retry policy above applies only to account reads after a confirmed and locally recorded update.
 
 The update rate limit is independent of the account submission and lookup limits, but shared with web Auth JSON writes by the same user. Changing tokens does not reset it. `429` responses include both `Retry-After` and a JSON `retry_after` value in seconds.
+
+Supplier waits are separate from this per-user limit. `SUPPLIER_RATE_LIMITED` is returned before sending the Auth JSON write, with `retry_stage` indicating which operation must wait. A login cooldown does not prevent account reads that can use a still-valid cached supplier session. A query cooldown keeps that session cached and does not trigger another login. The API does not automatically replay credential writes.

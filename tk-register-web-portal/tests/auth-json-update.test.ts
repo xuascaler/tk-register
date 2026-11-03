@@ -34,6 +34,12 @@ test('known validation and eligibility rejections retain their actionable safe e
   assert.deepEqual(authJSONUpdateError(error), { uncertain: false, message: 'This account is active.' });
 });
 
+test('a login cooldown before a credential write is a known rejection rather than an uncertain update', () => {
+  const message = 'Supplier login is limited. Try again in 284 seconds.';
+  const error = new APIError(message, 429, 'SUPPLIER_RATE_LIMITED', 284, 'login');
+  assert.deepEqual(authJSONUpdateError(error), { uncertain: false, message });
+});
+
 test('refresh failure after an accepted update preserves the credential success in the message', () => {
   const result = { updated: true, refresh_status: 'failed', refresh_message: 'The supplier could not be reached.' } as AuthJSONUpdateResult;
   assert.match(authJSONResultMessage(result), /^Auth JSON updated, but account refresh failed\./);

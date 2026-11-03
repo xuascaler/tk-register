@@ -61,6 +61,7 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 	summary, finishDiagnostic := beginSyncDiagnostic(ctx)
 	defer finishDiagnostic()
 
+	var retryAt time.Time
 	status, message := "failed", "Automatic account sync could not complete. Previously collected data is retained."
 	finish := func() error {
 		persist, stop := pagePersistenceContext(deadline, 5*time.Second)
@@ -74,7 +75,7 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 		default:
 			summary.FailedCount = 1
 		}
-		err := a.store.FinishPostSubmissionSyncJob(persist, job.ID, status, message, time.Now().UTC())
+		err := a.store.FinishPostSubmissionSyncJobAfter(persist, job.ID, status, message, time.Now().UTC(), retryAt)
 		if err != nil {
 			summary.Outcome, summary.ErrorKind = "failed", "persistence"
 		}
@@ -108,12 +109,29 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 	if target.SupplierRecordID != nil {
 		selection.RecordID = *target.SupplierRecordID
 	}
-	// Each CollectTargets call creates a fresh session using the currently saved
-	// website credentials. No account submission or full inventory call occurs.
+	// CollectTargets reuses the shared session for the current saved credentials.
+	// No account submission or full inventory call occurs.
 	collection, stopCollection := context.WithTimeout(ctx, 40*time.Second)
 	records, collectionErr := a.pageCollector().CollectTargets(collection, username, password, []supplier.Target{selection})
 	stopCollection()
 	record, rowErr := postSubmissionSyncResult(target, selection, records, collectionErr)
+	retrySeconds, retryDeadline, _, deferred := supplier.RetryDetails(rowErr)
+	if retrySeconds > 0 {
+		retryAt = retryDeadline
+		if retryAt.IsZero() {
+			retryAt = time.Now().UTC().Add(time.Duration(retrySeconds) * time.Second)
+		}
+	}
+	if deferred && retrySeconds > 0 {
+		summary.Outcome, summary.ErrorKind, summary.WaitSeconds = "rejected", "rate_limited", retrySeconds
+		persist, stop := pagePersistenceContext(deadline, 5*time.Second)
+		defer stop()
+		err := a.store.DeferClaimedPostSubmissionSyncJob(persist, job.ID, job.AttemptCount+1, now, retryAt, time.Now().UTC(), supplierWaitMessage(rowErr))
+		if err != nil {
+			summary.Outcome, summary.ErrorKind = "failed", "persistence"
+		}
+		return err
+	}
 	if rowErr != nil {
 		summary.ErrorKind = syncDiagnosticError(rowErr)
 		message = pageCollectionError(rowErr)

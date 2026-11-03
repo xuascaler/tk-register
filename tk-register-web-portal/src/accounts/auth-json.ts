@@ -1,4 +1,4 @@
-import { APIError, errorMessage } from '../api';
+import { APIError, errorMessage, type RetryStage } from '../api';
 import type { SyncedAccount } from './types';
 
 export type AuthJSONEligibility = {
@@ -16,6 +16,8 @@ export type AuthJSONUpdateResult = {
   refresh_message: string;
   account: SyncedAccount | null;
   updated_at: string;
+  refresh_retry_after?: number;
+  refresh_retry_stage?: RetryStage;
 };
 
 // A lost browser response does not prove the upstream mutation failed. Never

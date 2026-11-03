@@ -1,4 +1,4 @@
-import { APIError, errorMessage, request } from '../api';
+import { APIError, errorMessage, request, retryAfterSeconds, retryStage, type RetryStage } from '../api';
 import type { AccountPage, SyncedAccount } from './types';
 
 export type AccountListEndpoint = '/accounts' | '/admin/synced-accounts';
@@ -7,11 +7,17 @@ export type AccountRowSyncResult = {
   status: 'updated' | 'failed' | 'skipped';
   message?: string;
   retryAfter?: number;
+  retryStage?: RetryStage;
 };
 type SyncResponse = {
   accounts: SyncedAccount[];
-  results: { account_id: string; status: 'updated' | 'failed' | 'skipped'; message?: string }[];
+  results: { account_id: string; status: 'updated' | 'failed' | 'skipped'; message?: string; retry_after?: number; retry_stage?: RetryStage }[];
 };
+
+export function syncRetryLabel(seconds: number, stage?: RetryStage): string {
+  const action = stage === 'login' ? 'Login retry' : stage === 'accounts' ? 'Query retry' : 'Retry';
+  return `${action} in ${seconds}s`;
+}
 
 // Opening or changing the list reads saved data only. Supplier reads are explicit.
 export function loadAccountPage(endpoint: AccountListEndpoint, params: URLSearchParams, signal: AbortSignal) {
@@ -46,13 +52,16 @@ export async function syncAccountRow(
       account: previous,
       status: result.status === 'skipped' ? 'skipped' : 'failed',
       message: result.message || account?.last_error || 'The account could not be updated. Showing saved data.',
+      retryAfter: retryAfterSeconds(result.retry_after) || undefined,
+      retryStage: retryStage(result.retry_stage),
     };
   } catch (cause) {
     signal.throwIfAborted();
     if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
     return {
       account: previous, status: 'failed', message: errorMessage(cause),
-      retryAfter: cause instanceof APIError ? cause.retryAfter : undefined,
+      retryAfter: cause instanceof APIError ? retryAfterSeconds(cause.retryAfter) || undefined : undefined,
+      retryStage: cause instanceof APIError ? cause.retryStage : undefined,
     };
   }
 }
