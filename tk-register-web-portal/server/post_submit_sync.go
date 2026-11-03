@@ -17,8 +17,8 @@ const postSubmissionSyncUnavailable = "This account operation is no longer eligi
 
 // processPostSubmissionSync handles at most one due job. The lease is acquired
 // before claiming so competing sync work only postpones a pending job; it never
-// consumes a query attempt. The persisted job controls the retry budget for both
-// successful API submissions and API Auth JSON updates.
+// consumes a query attempt. The persisted job controls five observations after
+// successful submissions and Auth JSON updates, from either the web or API.
 func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) error {
 	deadline := time.Now().Add(55 * time.Second)
 	ctx, cancel := context.WithDeadline(parent, deadline)

@@ -120,7 +120,7 @@ export default function SubmissionDetails({
       }),
       request<{ vendors: Vendor[] }>('/vendors', { signal: abort.signal }),
     ])
-      .then(async ([data, vendors]) => {
+      .then(([data, vendors]) => {
         if (abort.signal.aborted) return;
         setDetail(data);
         const currentVendor =
@@ -128,27 +128,8 @@ export default function SubmissionDetails({
           null;
         setVendor(currentVendor);
         setRange(billRange(7, currentVendor?.timezone || 'UTC'));
-        const statusTarget = endpointPrefix === '/admin/submissions' ? data.current_submission : data.submission;
-        if (statusTarget && canCheckStatus(statusTarget)) {
-          setBusy(statusTarget.id === data.submission.id ? 'metrics' : 'current-status');
-          setCurrentRefresh({ checking: true });
-          try {
-            const result = await request<Detail & Partial<AdminDetail>>(
-              `${endpointPrefix}/${encodeURIComponent(statusTarget.id)}/status`,
-              { method: 'POST', body: { force: false }, signal: abort.signal },
-            );
-            if (!abort.signal.aborted) {
-              setDetail(statusTarget.id === data.submission.id ? result : { ...data, current_submission: result.submission });
-              setCurrentRefresh({ error: executionError(result) });
-              if (statusTarget.id === data.submission.id) setStatusError(executionError(result));
-            }
-          } catch (cause) {
-            if (!abort.signal.aborted) {
-              setCurrentRefresh({ error: errorMessage(cause) });
-              if (statusTarget.id === data.submission.id) setStatusError(errorMessage(cause));
-            }
-          }
-        }
+        // Successful submissions schedule their own bounded background syncs.
+        // Opening saved history must not add an immediate supplier query.
       })
       .catch((cause) => {
         if (!abort.signal.aborted) setError(errorMessage(cause));

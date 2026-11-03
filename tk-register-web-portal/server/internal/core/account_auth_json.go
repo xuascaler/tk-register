@@ -209,10 +209,8 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 			if err := tx.Model(&account).Updates(map[string]any{"supplier_record_id": recordID, "auth_json_updated_at": at.UTC()}).Error; err != nil {
 				return err
 			}
-			if saved.Source == "api" {
-				saved.Status, saved.SupplierRecordID = status, recordID
-				return enqueueAuthJSONSyncTx(tx, account, saved, at)
-			}
+			saved.Status, saved.SupplierRecordID = status, recordID
+			return enqueueAuthJSONSyncTx(tx, account, saved, at)
 		}
 		return nil
 	})

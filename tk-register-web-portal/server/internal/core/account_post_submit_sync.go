@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// PostSubmissionSyncJob schedules a read after an accepted API push or a
-// confirmed API Auth JSON update, with up to three retries of that read.
+// PostSubmissionSyncJob schedules five reads after an accepted web/API push or
+// confirmed web/API Auth JSON update, even when an earlier read succeeds.
 // It stores identity and timing metadata only, never account credentials or
 // upstream response bodies. Migration deliberately does not backfill old pushes.
 type PostSubmissionSyncJob struct {
@@ -30,6 +30,8 @@ type PostSubmissionSyncJob struct {
 	IdentityKey         string                `gorm:"size:64;not null"`
 	Status              string                `gorm:"size:24;not null;index:idx_post_submit_sync_due,priority:1"`
 	AttemptCount        int                   `gorm:"not null;default:0"`
+	SuccessCount        int                   `gorm:"not null;default:0"`
+	FailureCount        int                   `gorm:"not null;default:0"`
 	NextRunAt           time.Time             `gorm:"not null;index:idx_post_submit_sync_due,priority:2"`
 	CreatedAt           time.Time             `gorm:"not null"`
 	StartedAt           *time.Time
@@ -41,7 +43,10 @@ func (PostSubmissionSyncJob) TableName() string { return "account_post_submit_sy
 
 var ErrPostSubmissionSyncIneligible = errors.New("post-submission sync target is no longer eligible")
 
-const postSubmissionSyncMaxAttempts = 4
+const (
+	postSubmissionSyncMaxAttempts = 5
+	postSubmissionSyncInterval    = 10 * time.Second
+)
 
 // Add the replacement uniqueness constraint before removing the old one. Each
 // step is repeatable because MySQL schema changes are not transactional. Existing
@@ -81,25 +86,24 @@ func enqueuePostSubmissionSyncTx(tx *gorm.DB, submission Submission, at time.Tim
 	if submission.Status != "accepted" || submission.RemoteID == nil || strings.TrimSpace(*submission.RemoteID) == "" {
 		return nil
 	}
-	// Every successful push, including web submissions, changes the accepted
-	// lifetime under the same account row lock used by result persistence. Only
-	// API submissions schedule work; web submissions perform no supplier read.
+	// Every successful web/API push changes the accepted lifetime and enqueues
+	// its reads under the same account row lock used by result persistence.
 	account, err := ensureSyncedAccountForSubmissionTx(tx, submission)
 	if err != nil {
 		return err
 	}
-	if submission.Source != "api" {
+	if submission.Source != "api" && submission.Source != "web" {
 		return nil
 	}
-	job := PostSubmissionSyncJob{SubmissionID: submission.ID, SubmissionTriggerID: &submission.ID, AccountID: account.ID, UserID: submission.UserID, IdentityKey: account.IdentityKey, Status: "pending", CreatedAt: at.UTC(), NextRunAt: at.UTC().Add(3 * time.Second)}
+	job := PostSubmissionSyncJob{SubmissionID: submission.ID, SubmissionTriggerID: &submission.ID, AccountID: account.ID, UserID: submission.UserID, IdentityKey: account.IdentityKey, Status: "pending", CreatedAt: at.UTC(), NextRunAt: at.UTC().Add(postSubmissionSyncInterval)}
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&job).Error
 }
 
 func enqueueAuthJSONSyncTx(tx *gorm.DB, account SyncedAccount, audit AccountAuthJSONAudit, at time.Time) error {
-	if audit.Source != "api" || audit.Status != "updated" || account.CurrentSubmissionID == nil || account.IdentityKey != audit.IdentityKey || account.UserID != audit.OwnerID || account.ID != audit.AccountID {
+	if (audit.Source != "api" && audit.Source != "web") || audit.Status != "updated" || account.CurrentSubmissionID == nil || account.IdentityKey != audit.IdentityKey || account.UserID != audit.OwnerID || account.ID != audit.AccountID {
 		return ErrPostSubmissionSyncIneligible
 	}
-	job := PostSubmissionSyncJob{SubmissionID: *account.CurrentSubmissionID, AuthJSONAuditID: &audit.ID, AccountID: account.ID, UserID: account.UserID, IdentityKey: account.IdentityKey, Status: "pending", CreatedAt: at.UTC(), NextRunAt: at.UTC().Add(3 * time.Second)}
+	job := PostSubmissionSyncJob{SubmissionID: *account.CurrentSubmissionID, AuthJSONAuditID: &audit.ID, AccountID: account.ID, UserID: account.UserID, IdentityKey: account.IdentityKey, Status: "pending", CreatedAt: at.UTC(), NextRunAt: at.UTC().Add(postSubmissionSyncInterval)}
 	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&job).Error
 }
 
@@ -131,7 +135,7 @@ func (s *Store) ClaimPostSubmissionSyncJob(ctx context.Context, id uint64, now t
 }
 
 // PostSubmissionSyncTarget rechecks the trusted owner, accepted submission, and
-// optional successful API update before a supplier read or result save. A Store
+// optional successful web/API update before a supplier read or result save. A Store
 // bound to an outer transaction retains the account row lock through the save.
 func (s *Store) PostSubmissionSyncTarget(ctx context.Context, job PostSubmissionSyncJob) (SyncedAccount, error) {
 	var target SyncedAccount
@@ -170,7 +174,7 @@ func (s *Store) PostSubmissionSyncTarget(ctx context.Context, job PostSubmission
 			return nil
 		}
 		if job.AuthJSONAuditID == nil {
-			ineligible = submission.Source != "api" || job.SubmissionTriggerID == nil || *job.SubmissionTriggerID != job.SubmissionID
+			ineligible = (submission.Source != "api" && submission.Source != "web") || job.SubmissionTriggerID == nil || *job.SubmissionTriggerID != job.SubmissionID
 			return nil
 		}
 		if job.SubmissionTriggerID != nil {
@@ -178,7 +182,7 @@ func (s *Store) PostSubmissionSyncTarget(ctx context.Context, job PostSubmission
 			return nil
 		}
 		var audit AccountAuthJSONAudit
-		err = tx.Where("id = ? AND account_id = ? AND owner_id = ? AND vendor_id = ? AND identity_key = ? AND source = ? AND status = ?", *job.AuthJSONAuditID, target.ID, target.UserID, target.VendorID, target.IdentityKey, "api", "updated").First(&audit).Error
+		err = tx.Where("id = ? AND account_id = ? AND owner_id = ? AND vendor_id = ? AND identity_key = ? AND source IN ? AND status = ?", *job.AuthJSONAuditID, target.ID, target.UserID, target.VendorID, target.IdentityKey, []string{"api", "web"}, "updated").First(&audit).Error
 		if errors.Is(err, ErrNotFound) {
 			ineligible = true
 			return nil
@@ -186,7 +190,9 @@ func (s *Store) PostSubmissionSyncTarget(ctx context.Context, job PostSubmission
 		if err != nil {
 			return err
 		}
-		if audit.ActorID != target.UserID || target.SupplierRecordID == nil || !validSupplierRecordID(audit.SupplierRecordID) || *target.SupplierRecordID != audit.SupplierRecordID {
+		// A website administrator may update an owner's account. Authorization
+		// was checked before the confirmed write; API tokens remain owner-scoped.
+		if (audit.Source == "api" && audit.ActorID != target.UserID) || target.SupplierRecordID == nil || !validSupplierRecordID(audit.SupplierRecordID) || *target.SupplierRecordID != audit.SupplierRecordID {
 			ineligible = true
 			return nil
 		}
@@ -217,14 +223,14 @@ func (s *Store) PostSubmissionSyncTarget(ctx context.Context, job PostSubmission
 }
 
 // message must be a safe application-defined status line, never an exception,
-// supplier response or credential. A failed read is delayed three seconds while
-// its remaining retry budget allows it. This never retries a supplier mutation.
+// supplier response or credential. Every completed read is followed by another
+// after ten seconds until five rounds complete. This never repeats a mutation.
 func (s *Store) FinishPostSubmissionSyncJob(ctx context.Context, id uint64, status, message string, at time.Time) error {
 	return s.FinishPostSubmissionSyncJobAfter(ctx, id, status, message, at, time.Time{})
 }
 
-// A supplier cooldown can postpone a retry beyond the normal three seconds.
-// The failed HTTP attempt still consumes one of the existing four attempts.
+// A supplier cooldown can postpone a round beyond the normal ten seconds.
+// The failed HTTP attempt still consumes one of the five rounds.
 func (s *Store) FinishPostSubmissionSyncJobAfter(ctx context.Context, id uint64, status, message string, at, retryAt time.Time) error {
 	if status != "succeeded" && status != "failed" && status != "skipped" {
 		return validationErrorf("invalid post-submission sync outcome")
@@ -255,9 +261,13 @@ func finishPostSubmissionSyncTx(tx *gorm.DB, job PostSubmissionSyncJob, status, 
 	updates := map[string]any{"status": status, "finished_at": at.UTC(), "last_error": message}
 	refreshStatus := "failed"
 	if status == "succeeded" {
+		updates["success_count"] = gorm.Expr("success_count + 1")
 		refreshStatus = "succeeded"
-	} else if status == "failed" && job.AttemptCount < postSubmissionSyncMaxAttempts {
-		next := at.UTC().Add(3 * time.Second)
+	} else if status == "failed" {
+		updates["failure_count"] = gorm.Expr("failure_count + 1")
+	}
+	if (status == "succeeded" || status == "failed") && job.AttemptCount < postSubmissionSyncMaxAttempts {
+		next := at.UTC().Add(postSubmissionSyncInterval)
 		if len(retryAt) > 0 && retryAt[0].After(next) {
 			next = retryAt[0].UTC()
 			if upper := at.UTC().Add(7 * 24 * time.Hour); next.After(upper) {
@@ -276,7 +286,7 @@ func finishPostSubmissionSyncTx(tx *gorm.DB, job PostSubmissionSyncJob, status, 
 	return nil
 }
 
-// Interrupted work only repeats a read, within the same four-attempt budget.
+// Interrupted work only repeats a read, within the same five-round budget.
 // Pending jobs and terminal outcomes survive restarts unchanged.
 func (s *Store) RecoverPostSubmissionSyncJobs(ctx context.Context, now time.Time) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

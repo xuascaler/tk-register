@@ -114,7 +114,7 @@ func TestAuthJSONAPIQueuesRefreshAndAuditContract(t *testing.T) {
 				t.Fatalf("incomplete API audit metadata: %+v", audit)
 			}
 			job := authAPISyncJob(t, a, audit.ID)
-			if job.SubmissionID != before.ID || job.SubmissionTriggerID != nil || job.AccountID != target.ID || job.UserID != owner.ID || job.IdentityKey != target.IdentityKey || job.Status != "pending" || job.AttemptCount != 0 || !job.NextRunAt.Equal(out.UpdatedAt.Add(3*time.Second)) {
+			if job.SubmissionID != before.ID || job.SubmissionTriggerID != nil || job.AccountID != target.ID || job.UserID != owner.ID || job.IdentityKey != target.IdentityKey || job.Status != "pending" || job.AttemptCount != 0 || !job.NextRunAt.Equal(out.UpdatedAt.Add(10*time.Second)) {
 				t.Fatalf("successful API update did not queue its delayed refresh: %+v", job)
 			}
 			var after core.Submission
@@ -304,7 +304,7 @@ func TestAuthJSONAPIUpdateAndRefreshOutcomesRemainSeparate(t *testing.T) {
 	}
 }
 
-func TestAuthJSONAPIQueuedRefreshRetriesReadsWithoutRepeatingCredentialWrite(t *testing.T) {
+func TestAuthJSONAPIQueuedRefreshRunsFiveTimesWithoutRepeatingCredentialWrite(t *testing.T) {
 	a, owner, _, _, target, editor := setupAuthUpdate(t)
 	token := lookupToken(t, a, owner.ID)
 	previousAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
@@ -317,7 +317,9 @@ func TestAuthJSONAPIQueuedRefreshRetriesReadsWithoutRepeatingCredentialWrite(t *
 		if len(targets) != 1 || targets[0].Account != target.Account || targets[0].RecordID != editor.info.RecordID {
 			t.Fatal("queued update did not query its verified supplier account", targets)
 		}
-		if collector.calls <= 3 {
+		// Failure, success, failure, success, success: an early success must not
+		// finish the sequence, and a later failure must preserve that snapshot.
+		if collector.calls == 1 || collector.calls == 3 {
 			return []supplier.AccountResult{{Target: targets[0], Err: errors.New("private-access-token private-account-password")}}, nil
 		}
 		return []supplier.AccountResult{{Target: targets[0], Account: &editor.record}}, nil
@@ -335,9 +337,9 @@ func TestAuthJSONAPIQueuedRefreshRetriesReadsWithoutRepeatingCredentialWrite(t *
 	}
 	job := authAPISyncJob(t, a, auditID)
 	if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt.Add(-time.Millisecond)); err != nil || collector.calls != 0 {
-		t.Fatal("first query ran before the three-second delay", err)
+		t.Fatal("first query ran before the ten-second delay", err)
 	}
-	for attempt := 1; attempt <= 4; attempt++ {
+	for attempt := 1; attempt <= 5; attempt++ {
 		before := time.Now().UTC()
 		if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt); err != nil {
 			t.Fatal(err)
@@ -345,37 +347,41 @@ func TestAuthJSONAPIQueuedRefreshRetriesReadsWithoutRepeatingCredentialWrite(t *
 		job = authAPISyncJob(t, a, auditID)
 		rows := authAudits(t, a)
 		if job.AttemptCount != attempt || collector.calls != attempt || editor.updates != 1 || editor.refreshes != 0 || len(rows) != 1 || rows[0].Status != "updated" {
-			t.Fatalf("retry repeated the write or lost the mutation audit: attempts=%d calls=%d writes=%d inline=%d audits=%+v", job.AttemptCount, collector.calls, editor.updates, editor.refreshes, rows)
+			t.Fatalf("sync repeated the write or lost the mutation audit: attempts=%d calls=%d writes=%d inline=%d audits=%+v", job.AttemptCount, collector.calls, editor.updates, editor.refreshes, rows)
 		}
 		lookup := apiRequest(t, a, "GET", lookupURL(owner.Email, target.Account), token.PlaintextToken, "", "")
 		requireStatus(t, lookup, 200)
 		account := lookupData(t, lookup)
-		if attempt < 4 {
-			if job.Status != "pending" || job.FinishedAt != nil || rows[0].RefreshStatus != "pending" || job.NextRunAt.Before(before.Add(3*time.Second)) || job.NextRunAt.After(time.Now().UTC().Add(3*time.Second)) {
-				t.Fatalf("failed read did not remain pending for three seconds: job=%+v audit=%+v", job, rows[0])
-			}
-			if account.LastSuccessAt == nil || !account.LastSuccessAt.Equal(previousAt) || account.Snapshot == nil || account.Snapshot.CostTotalUSD == nil || *account.Snapshot.CostTotalUSD != 10 || account.LastError == nil || job.LastError == "" {
-				t.Fatal("failed attempt overwrote the last successful account snapshot", lookup.Body.String())
+		if attempt < 5 {
+			if job.Status != "pending" || job.FinishedAt != nil || rows[0].RefreshStatus != "pending" || job.NextRunAt.Before(before.Add(10*time.Second)) || job.NextRunAt.After(time.Now().UTC().Add(10*time.Second)) {
+				t.Fatalf("sequence stopped early or scheduled before ten seconds: job=%+v audit=%+v", job, rows[0])
 			}
 			if err = a.processPostSubmissionSync(context.Background(), job.NextRunAt.Add(-time.Millisecond)); err != nil || collector.calls != attempt {
-				t.Fatal("retry ran before its scheduled time", err)
+				t.Fatal("sync ran before its scheduled time", err)
+			}
+		} else if job.Status != "succeeded" || job.FinishedAt == nil || job.LastError != "" || rows[0].RefreshStatus != "succeeded" {
+			t.Fatalf("fifth sync did not complete the sequence: job=%+v audit=%+v", job, rows[0])
+		}
+		if attempt == 1 {
+			if account.LastSuccessAt == nil || !account.LastSuccessAt.Equal(previousAt) || account.Snapshot == nil || account.Snapshot.CostTotalUSD == nil || *account.Snapshot.CostTotalUSD != 10 || account.LastError == nil || job.LastError == "" {
+				t.Fatal("failed sync overwrote the last successful snapshot", lookup.Body.String())
 			}
 		} else {
-			if job.Status != "succeeded" || job.FinishedAt == nil || job.LastError != "" || rows[0].RefreshStatus != "succeeded" || account.LastSuccessAt == nil || !account.LastSuccessAt.After(previousAt) || account.LastError != nil {
-				t.Fatalf("successful fourth attempt did not complete the audit and snapshot: job=%+v audit=%+v account=%+v", job, rows[0], account)
+			if account.LastSuccessAt == nil || !account.LastSuccessAt.After(previousAt) || account.Snapshot == nil || account.Snapshot.CostTotal == nil || *account.Snapshot.CostTotal != 12.5 || account.Snapshot.CostTotalUSD == nil || math.Abs(*account.Snapshot.CostTotalUSD-12.5/7.2) > 1e-12 || account.Snapshot.AccountStatus == nil || *account.Snapshot.AccountStatus != "active" {
+				t.Fatal("last successful background snapshot missing", lookup.Body.String())
 			}
-			if account.Snapshot == nil || account.Snapshot.CostTotal == nil || *account.Snapshot.CostTotal != 12.5 || account.Snapshot.CostTotalUSD == nil || math.Abs(*account.Snapshot.CostTotalUSD-12.5/7.2) > 1e-12 || account.Snapshot.ExchangeRateCNYPerUSD != 7.2 || account.Snapshot.Currency == nil || *account.Snapshot.Currency != "CNY" || account.Snapshot.AccountStatus == nil || *account.Snapshot.AccountStatus != "active" {
-				t.Fatal("saved lookup did not expose the completed sync's usage", lookup.Body.String())
+			if (attempt == 3) != (account.LastError != nil) {
+				t.Fatal("last failed query or recovery was not reflected", lookup.Body.String())
 			}
 		}
 		assertNoSecrets(t, lookup.Body.String()+job.LastError)
 	}
-	if err = a.processPostSubmissionSync(context.Background(), time.Now().UTC().Add(time.Hour)); err != nil || collector.calls != 4 || editor.updates != 1 || editor.refreshes != 0 {
+	if err = a.processPostSubmissionSync(context.Background(), time.Now().UTC().Add(time.Hour)); err != nil || collector.calls != 5 || editor.updates != 1 || editor.refreshes != 0 {
 		t.Fatal("completed job repeated the supplier write or query", err)
 	}
 	var submissions int64
 	if err = a.store.DB.Model(&core.Submission{}).Count(&submissions).Error; err != nil || submissions != 1 {
-		t.Fatal("Auth JSON retries created submission history", submissions, err)
+		t.Fatal("Auth JSON syncs created submission history", submissions, err)
 	}
 }
 

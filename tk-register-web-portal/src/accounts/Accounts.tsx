@@ -199,7 +199,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
     // The returned account may represent a newer lifetime. Trust its timestamp
     // instead of attaching the completed operation's timestamp to that identity.
     setData(current => current && { ...current, account: result.account || current.account });
-    if (result.refresh_status === 'succeeded') {
+    if (result.refresh_status === 'succeeded' || result.refresh_status === 'pending') {
       setNotice(authJSONResultMessage(result)); setRefreshWarning('');
     } else {
       setNotice(''); setRefreshWarning(authJSONResultMessage(result));

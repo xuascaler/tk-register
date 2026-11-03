@@ -65,9 +65,9 @@ func authJSONError(err error) authJSONProblem {
 func authJSONFail(w http.ResponseWriter, p authJSONProblem) { fail(w, p.status, p.code, p.message) }
 
 // Both the cookie-authenticated editor and the personal-token API use the same
-// validation, locks, vendor write and audit. API success queues a delayed refresh;
-// the browser editor refreshes immediately. The API adapter supplies parsed input
-// and a public response projection, never a fake session.
+// validation, locks, vendor write, audit and delayed account refresh. The API
+// adapter supplies parsed input and a public response projection, never a fake
+// session. Both responses read saved account data without an inline collection.
 type authJSONOperation struct {
 	Token         *core.UserAPIToken
 	Input         any
@@ -302,38 +302,11 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	}
 	refreshRetryAfter, refreshRetryStage := 0, ""
 	refreshStatus, refreshMessage := "failed", "Auth JSON updated, but account refresh failed. Your last successful data is retained. Try syncing again."
-	if persistErr == nil && unchanged && operation.Token != nil {
-		// Successful API audit persistence atomically queues the delayed read.
-		// Do not wait for it or repeat the credential mutation on refresh failure.
-		refreshStatus, refreshMessage = "pending", "Auth JSON updated. Account refresh is scheduled after three seconds; failed refreshes are retried up to three times."
-	} else if persistErr == nil && unchanged {
-		refreshCtx, refreshCancel := context.WithTimeout(ctx, 15*time.Second)
-		refreshCtx = accountSyncTrace(refreshCtx, "auth_json_refresh", user.ID, target.ID)
-		record, refreshErr := editor.CollectAccount(refreshCtx, username, password, supplier.Target{Account: target.Account, RecordID: info.RecordID})
-		refreshCancel()
-		if refreshErr == nil && (!strings.EqualFold(strings.TrimSpace(record.Account), strings.TrimSpace(target.Account)) || record.ID != info.RecordID) {
-			refreshErr = errors.New("identity mismatch")
-		}
-		persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		now := time.Now().UTC()
-		if refreshErr == nil {
-			snapshot := core.AccountSnapshotValues{AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
-			if record.PlatformAccountID != "" {
-				snapshot.PlatformAccountID = &record.PlatformAccountID
-			}
-			refreshErr = a.store.RecordAccountSnapshot(persistCtx, target.ID, target.IdentityKey, snapshot, now, values.String("account_sync_timezone"))
-		}
-		if refreshErr == nil {
-			refreshStatus, refreshMessage = "succeeded", "Auth JSON updated and account data refreshed."
-		} else {
-			refreshRetryAfter, _, refreshRetryStage, _ = supplier.RetryDetails(refreshErr)
-			if refreshRetryAfter > 0 {
-				refreshMessage = "Auth JSON updated. " + supplierWaitMessage(refreshErr)
-			}
-			_ = a.store.RecordAccountFailure(persistCtx, target.ID, target.IdentityKey, "Auth JSON was updated, but the account could not be refreshed. Previously collected data is retained.", now)
-		}
-		_ = a.store.FinishAuthJSONRefresh(persistCtx, audit.ID, refreshStatus == "succeeded")
-		persistCancel()
+	if persistErr == nil && unchanged {
+		// Successful audit persistence atomically queues five delayed reads for
+		// both API and browser updates. The response uses saved account data;
+		// refreshing never repeats the credential mutation.
+		refreshStatus, refreshMessage = "pending", "Auth JSON updated. Five account syncs are scheduled, starting after 10 seconds and waiting 10 seconds between completed syncs."
 	} else if !unchanged && persistErr == nil {
 		refreshMessage = "Auth JSON updated, but this local account changed during the request. Reload the page to view its current data."
 		recordCtx, recordCancel := context.WithTimeout(context.Background(), 3*time.Second)

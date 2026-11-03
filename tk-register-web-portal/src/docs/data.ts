@@ -26,8 +26,8 @@ export const endpoints = {
     path: accountsPath,
     description: 'Submit a Claude account to the vendor and save its submission history.',
     scope: 'claude:submit',
-    limit: '10 requests / minute',
-    note: 'The account belongs to the token’s user. Validation follows the web submission form. A complete vendor response is passed through without a new JSON envelope.',
+    limit: '100 requests / minute',
+    note: 'The account belongs to the token’s user. Validation follows the web form. A complete vendor response is passed through without a new JSON envelope. Acceptance queues five background collections, starting after ten seconds and spaced ten seconds after each completed round, regardless of success or failure.',
   },
   'account-lookup': {
     title: 'Look up an account',
@@ -35,8 +35,8 @@ export const endpoints = {
     path: `${accountsPath}/lookup`,
     description: 'Read saved account status, usage windows, token totals, and cumulative spend.',
     scope: 'accounts:read',
-    limit: '60 requests / minute',
-    note: 'Reads saved data. Collection runs every 2 hours by default when enabled; administrators can change the interval. This request does not start a new collection.',
+    limit: '600 requests / minute',
+    note: 'Reads saved data. Collection runs every 300 seconds by default when enabled; administrators can change the interval in seconds. This request does not start a new collection.',
   },
   'update-auth-json': {
     title: 'Update Auth JSON',
@@ -44,8 +44,8 @@ export const endpoints = {
     path: `${accountsPath}/auth-json`,
     description: 'Replace an owned Claude account’s authentication data and queue a status and usage refresh.',
     scope: 'claude:auth-json:update',
-    limit: '10 requests / minute',
-    note: 'Existing tokens remain usable. A confirmed update queues Sync after three seconds, with up to three retries on collection failure. The API does not wait for refresh or guarantee an active status.',
+    limit: '100 requests / minute',
+    note: 'Existing tokens remain usable. A confirmed update queues five background collections, starting after ten seconds and continuing ten seconds after each completed round, regardless of success or failure. Locks or supplier cooldowns can delay execution. The response uses saved account data and does not wait for refresh or guarantee an active status.',
   },
 } as const;
 
@@ -302,7 +302,7 @@ export const authJSONUpdateResponse = {
     audit_id: '2001',
     updated_at: '2026-11-01T02:05:00+08:00',
     refresh_status: 'pending',
-    refresh_message: 'Auth JSON updated. Account refresh is scheduled after three seconds; failed refreshes are retried up to three times.',
+    refresh_message: 'Auth JSON updated. Five account refreshes are scheduled, starting after ten seconds and continuing ten seconds after each refresh completes.',
     account: {
       ...lookupResponse.data,
       snapshot: { ...lookupResponse.data.snapshot, account_status: 'offline' },

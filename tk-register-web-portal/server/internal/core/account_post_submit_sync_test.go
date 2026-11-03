@@ -35,7 +35,7 @@ func enqueuePostSubmissionFixture(t *testing.T, store *Store, submission Submiss
 	return loadPostSubmissionJob(t, store, submission.ID)
 }
 
-func TestPostSubmissionAcceptedAPIEnqueuesExactlyOnceAfterThreeSeconds(t *testing.T) {
+func TestPostSubmissionAcceptedAPIEnqueuesExactlyOnceAfterTenSeconds(t *testing.T) {
 	service, owner, tokenID, params := apiExecutionFixture(t)
 	ctx := context.Background()
 	calls := 0
@@ -57,7 +57,7 @@ func TestPostSubmissionAcceptedAPIEnqueuesExactlyOnceAfterThreeSeconds(t *testin
 	if err = service.Store.DB.Where("submission_id = ?", submissionID).First(&execution).Error; err != nil {
 		t.Fatal(err)
 	}
-	if execution.FinishedAt == nil || !job.CreatedAt.Equal(*execution.FinishedAt) || !job.NextRunAt.Equal(execution.FinishedAt.Add(3*time.Second)) || job.Status != "pending" || job.StartedAt != nil || job.UserID != owner.ID || job.AttemptCount != 0 || job.SubmissionTriggerID == nil || *job.SubmissionTriggerID != submissionID || job.AuthJSONAuditID != nil {
+	if execution.FinishedAt == nil || !job.CreatedAt.Equal(*execution.FinishedAt) || !job.NextRunAt.Equal(execution.FinishedAt.Add(10*time.Second)) || job.Status != "pending" || job.StartedAt != nil || job.UserID != owner.ID || job.AttemptCount != 0 || job.SubmissionTriggerID == nil || *job.SubmissionTriggerID != submissionID || job.AuthJSONAuditID != nil {
 		t.Fatal("wrong durable scheduling metadata", job)
 	}
 	account, err := service.Store.PostSubmissionSyncTarget(ctx, job)
@@ -65,10 +65,10 @@ func TestPostSubmissionAcceptedAPIEnqueuesExactlyOnceAfterThreeSeconds(t *testin
 		t.Fatal("account was not materialized atomically for the owner", account, err)
 	}
 	if due, err := service.Store.NextPostSubmissionSyncJob(ctx, job.NextRunAt.Add(-time.Nanosecond)); err != nil || due != nil {
-		t.Fatal("job ran before its three second delay", due, err)
+		t.Fatal("job ran before its ten second delay", due, err)
 	}
 	if due, err := service.Store.NextPostSubmissionSyncJob(ctx, job.NextRunAt); err != nil || due == nil || due.ID != job.ID {
-		t.Fatal("job was not due at three seconds", due, err)
+		t.Fatal("job was not due at ten seconds", due, err)
 	}
 	var submission Submission
 	if err = service.Store.DB.First(&submission, submissionID).Error; err != nil {
@@ -93,12 +93,11 @@ func TestPostSubmissionAcceptedAPIEnqueuesExactlyOnceAfterThreeSeconds(t *testin
 	}
 }
 
-func TestPostSubmissionOnlyAcceptedAPIPushEnqueues(t *testing.T) {
+func TestPostSubmissionUnconfirmedPushDoesNotEnqueue(t *testing.T) {
 	for _, tc := range []struct {
 		name, source, body string
 		status             int
 	}{
-		{"web accepted", "web", `{"id":13152}`, 201},
 		{"API rejected", "api", `{"error":"invalid parameters"}`, 400},
 		{"API ambiguous", "api", `{"error":"unavailable"}`, 503},
 		{"API unrecognized success", "api", `{"accepted":true}`, 200},
@@ -157,7 +156,7 @@ func TestPostSubmissionEnqueueFailureRollsBackAcceptanceAndAccount(t *testing.T)
 	}
 }
 
-func TestPostSubmissionWebAcceptanceMaterializesWithoutEnqueue(t *testing.T) {
+func TestPostSubmissionWebAcceptanceMaterializesAndEnqueues(t *testing.T) {
 	service, owner, _, params := apiExecutionFixture(t)
 	ctx := context.Background()
 	vendor, version, err := service.currentVersion(ctx, 1, "submit_account")
@@ -172,7 +171,7 @@ func TestPostSubmissionWebAcceptanceMaterializesWithoutEnqueue(t *testing.T) {
 		calls++
 		return apiRemoteResponse(201, `{"id":13152}`), nil
 	})
-	detail, err := service.Create(ctx, owner.ID, CreateSubmissionInput{VendorID: idString(vendor.ID), ProtocolVersionID: idString(version.ID), ClientRequestKey: "web-materialized-no-job-0001", Parameters: params})
+	detail, err := service.Create(ctx, owner.ID, CreateSubmissionInput{VendorID: idString(vendor.ID), ProtocolVersionID: idString(version.ID), ClientRequestKey: "web-materialized-job-0001", Parameters: params})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +181,18 @@ func TestPostSubmissionWebAcceptanceMaterializesWithoutEnqueue(t *testing.T) {
 		t.Fatal("web acceptance did not atomically advance the stable account", account, err)
 	}
 	var count int64
-	if err := service.Store.DB.Model(&PostSubmissionSyncJob{}).Count(&count).Error; err != nil || count != 1 || calls != 1 {
-		t.Fatal("web acceptance enqueued work or called supplier twice", count, calls, err)
+	if err := service.Store.DB.Model(&PostSubmissionSyncJob{}).Count(&count).Error; err != nil || count != 2 || calls != 1 {
+		t.Fatal("web acceptance missed its job or called supplier twice", count, calls, err)
 	}
 	if _, err := service.Store.PostSubmissionSyncTarget(ctx, oldJob); !errors.Is(err, ErrPostSubmissionSyncIneligible) {
 		t.Fatal("old API job remained eligible after committed web acceptance", err)
+	}
+	newJob := loadPostSubmissionJob(t, service.Store, newID)
+	if newJob.AccountID != account.ID || newJob.Status != "pending" || !newJob.NextRunAt.Equal(newJob.CreatedAt.Add(10*time.Second)) || newJob.AttemptCount != 0 {
+		t.Fatal("web acceptance did not schedule its first read after ten seconds", newJob)
+	}
+	if _, err := service.Store.PostSubmissionSyncTarget(ctx, newJob); err != nil {
+		t.Fatal("web submission's new sequence was not eligible", err)
 	}
 }
 
@@ -260,8 +266,20 @@ func TestPostSubmissionClaimDeferralAndTerminalOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	finished := loadPostSubmissionJob(t, store, submission.ID)
-	if finished.Status != "succeeded" || finished.LastError != "" || !finished.NextRunAt.Equal(deferred.NextRunAt) || finished.FinishedAt == nil || finished.AttemptCount != 1 {
-		t.Fatal("terminal result mutated or running job deferred", finished)
+	if finished.Status != "pending" || finished.LastError != "" || !finished.NextRunAt.Equal(deferred.NextRunAt.Add(11*time.Second)) || finished.FinishedAt != nil || finished.AttemptCount != 1 || finished.SuccessCount != 1 || finished.FailureCount != 0 {
+		t.Fatal("success ended the sequence or duplicate completion mutated it", finished)
+	}
+	for round := 2; round <= 5; round++ {
+		if claimed, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, finished.NextRunAt); err != nil || !claimed {
+			t.Fatal("successful sequence did not continue", round, claimed, err)
+		}
+		if err := store.FinishPostSubmissionSyncJob(ctx, job.ID, "succeeded", "", finished.NextRunAt.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		finished = loadPostSubmissionJob(t, store, submission.ID)
+	}
+	if finished.Status != "succeeded" || finished.AttemptCount != 5 || finished.SuccessCount != 5 || finished.FailureCount != 0 || finished.FinishedAt == nil {
+		t.Fatal("five successful rounds did not finish exactly once", finished)
 	}
 	if claimed, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, base.Add(time.Hour)); err != nil || claimed {
 		t.Fatal("terminal job retried", claimed, err)
@@ -374,7 +392,7 @@ func TestPostSubmissionRestartPreservesPendingWithoutHistoricalBackfill(t *testi
 		}
 		jobs = append(jobs, enqueuePostSubmissionFixture(t, store, submission, base))
 	}
-	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, jobs[1].ID, base.Add(3*time.Second)); err != nil || !ok {
+	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, jobs[1].ID, base.Add(10*time.Second)); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, jobs[2].ID, base.Add(time.Minute)); err != nil || !ok {
@@ -388,20 +406,20 @@ func TestPostSubmissionRestartPreservesPendingWithoutHistoricalBackfill(t *testi
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err := store.RecoverPostSubmissionSyncJobs(ctx, base.Add(124*time.Second)); err != nil {
+	if err := store.RecoverPostSubmissionSyncJobs(ctx, base.Add(131*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	var saved []PostSubmissionSyncJob
 	if err := store.DB.Order("id ASC").Find(&saved).Error; err != nil || len(saved) != 3 {
 		t.Fatal("migration created historical jobs or lost pending work", len(saved), err)
 	}
-	if saved[0].Status != "pending" || saved[0].StartedAt != nil || !saved[0].NextRunAt.Equal(jobs[0].NextRunAt) || saved[1].Status != "pending" || saved[1].FinishedAt != nil || saved[1].LastError == "" || saved[1].AttemptCount != 1 || !saved[1].NextRunAt.Equal(base.Add(127*time.Second)) || saved[2].Status != "running" {
+	if saved[0].Status != "pending" || saved[0].StartedAt != nil || !saved[0].NextRunAt.Equal(jobs[0].NextRunAt) || saved[1].Status != "pending" || saved[1].FinishedAt != nil || saved[1].LastError == "" || saved[1].AttemptCount != 1 || !saved[1].NextRunAt.Equal(base.Add(141*time.Second)) || saved[2].Status != "running" {
 		t.Fatal("restart lost schedule, retry budget, or interrupted-read delay", saved)
 	}
 	if next, err := store.NextPostSubmissionSyncJob(ctx, base.Add(time.Hour)); err != nil || next == nil || next.ID != jobs[0].ID {
 		t.Fatal("pending work did not survive restart", next, err)
 	}
-	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, jobs[1].ID, base.Add(127*time.Second)); err != nil || !ok {
+	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, jobs[1].ID, base.Add(141*time.Second)); err != nil || !ok {
 		t.Fatal("recovered read could not consume its remaining retry budget", ok, err)
 	}
 }

@@ -1,6 +1,6 @@
 # Auth JSON Update API
 
-The Auth JSON Update API replaces the authentication data for an accepted Claude account owned by the caller. It reuses the web editor’s supplier identity checks and update operation. After a confirmed update, it queues account synchronization for three seconds later and returns without waiting for collection. It does not create another submission.
+The Auth JSON Update API replaces the authentication data for an accepted Claude account owned by the caller. It reuses the web editor’s supplier identity checks and update operation. After a confirmed update, it queues five account-collection rounds, starting ten seconds later, and returns without waiting for collection. It does not create another submission.
 
 | Property | Value |
 | --- | --- |
@@ -100,9 +100,9 @@ HTTP `200` with `data.updated: true` means the supplier confirmed the credential
 
 The `account` object includes saved account identifiers, submission status, collection timestamps, and the snapshot. Snapshot fields include `account_status`, usage windows, cumulative token counters, `cost_total`, `currency`, `cost_total_usd`, and `exchange_rate_cny_per_usd`. USD conversion remains CNY / 7.2. Neither the account object nor the snapshot contains credentials.
 
-For a queued update, the first targeted collection becomes due three seconds after the confirmed write. If collection fails, the worker waits three seconds after the failure and retries, up to **three additional retries (four attempts total)**. A busy shared synchronization lock defers the job five seconds without consuming an attempt. These delays are minimum scheduling delays, so long requests or busy locks can make completion take longer. The worker only reads the account; it never repeats the credential write.
+For a queued update, the first targeted collection becomes due ten seconds after the confirmed write. The worker executes **five collection rounds regardless of success or failure**, waiting ten seconds after each completed round before the next. Success does not end the job early, and there are no extra retries beyond these five rounds. A busy shared synchronization lock defers the job five seconds without consuming a round. Locally detected supplier cooldowns and login-lock waits also defer without consuming a round; an actual failed supplier request counts, and a returned retry deadline can delay the next round beyond ten seconds. These are minimum delays, so request duration, queueing and cooldowns extend the total duration. The worker only reads the account; it never repeats the credential write.
 
-Success stores the account's status, quota windows, token totals, spend and collection time. Failure retains the last successful snapshot. A supplier status such as banned or offline is not proof that the credential write failed. The configurable schedule and explicit **Sync** action remain available. The browser Auth JSON editor retains its existing immediate-refresh behavior; this asynchronous response contract applies to the public API.
+Success stores the account's status, quota windows, token totals, spend and collection time. Failure retains the last successful snapshot. A supplier status such as banned or offline is not proof that the credential write failed. The configurable schedule and explicit **Sync** action remain available and do not count toward these five rounds. The browser Auth JSON editor uses the same delayed five-round behavior. API response fields remain unchanged: `account` is read from the database, never from an immediate post-write supplier query.
 
 For example, the queued response below contains a snapshot collected five minutes before the credential update. It is safe saved data, not the result of the queued synchronization:
 
@@ -114,7 +114,7 @@ For example, the queued response below contains a snapshot collected five minute
     "audit_id": "2001",
     "updated_at": "2026-11-01T02:05:00+08:00",
     "refresh_status": "pending",
-    "refresh_message": "Auth JSON updated. Account refresh is scheduled after three seconds; failed refreshes are retried up to three times.",
+    "refresh_message": "Auth JSON updated. Five account refreshes are scheduled, starting after ten seconds and continuing ten seconds after each refresh completes.",
     "account": {
       "id": "1001",
       "username": "member@example.com",
@@ -155,11 +155,11 @@ For example, the queued response below contains a snapshot collected five minute
 
 If local readback fails after the job was queued, the response still has `updated: true`, `refresh_status: "pending"`, and `account: null`; the queued collection is not canceled. A failed queue transaction or changed account identity instead returns `updated: true` with `refresh_status: "failed"` and an explanation. That failure does not undo the supplier's confirmed credential change.
 
-The response's `refresh_status` does not change after HTTP completion. Use [Account lookup](account-lookup-api.md) later to read the latest saved result and its `last_success_at`, `snapshot.collected_at`, `last_attempt_at` and `last_error`. Lookup never starts a supplier query. Do not repeat the credential write to obtain fresh data. If automatic collection has exhausted its retries, the existing **Sync** action can request another collection.
+The response's `refresh_status` does not change after HTTP completion. Use [Account lookup](account-lookup-api.md) later to read the latest saved result and its `last_success_at`, `snapshot.collected_at`, `last_attempt_at` and `last_error`. Lookup never starts a supplier query. Do not repeat the credential write to obtain fresh data. After the five rounds finish, the existing **Sync** action can request another collection.
 
 ## Audit records
 
-After authentication, validation, and lock acquisition, the server creates an `account_auth_json_audits` record before calling the supplier. The record starts as `pending`, then becomes `updated`, `rejected`, `failed`, or `unknown`. A confirmed and locally recorded update has a separate refresh outcome: `pending` while its job is queued, running or waiting for a retry; `succeeded` when a new collection is saved; or `failed` if retries are exhausted or the target is no longer eligible. Failed collection does not change the write outcome from `updated`.
+After authentication, validation, and lock acquisition, the server creates an `account_auth_json_audits` record before calling the supplier. The record starts as `pending`, then becomes `updated`, `rejected`, `failed`, or `unknown`. A confirmed and locally recorded update has a separate refresh outcome: `pending` while any of its five rounds remain; `succeeded` if the fifth round saves a collection; or `failed` if the fifth round fails or the target is no longer eligible. Earlier successful snapshots remain available even if a later round fails. Failed collection does not change the write outcome from `updated`.
 
 API updates record `source=api`, the actor and owner, vendor, stable account ID, account identity, confirmed supplier row ID, request ID, API token ID and revision, timestamps, and outcome. Web updates use `source=web`. Token revision is retained because regeneration can reuse the same token database row. No new submission is created, historical submissions remain unchanged, and neither the replacement Auth JSON nor any token plaintext is stored in this audit.
 
@@ -197,7 +197,7 @@ Errors use a safe TK Register envelope, including errors returned by the supplie
 | 503 | `SYNC_NOT_CONFIGURED`, `UNAVAILABLE` | Website login is not configured or a required local service is unavailable. |
 | 504 | `AUTH_JSON_UPDATE_UNCONFIRMED` | Write result is uncertain; audit status is `unknown`. |
 
-The write is never retried automatically. A timeout or connection loss after transmission can mean the supplier changed the credentials without returning confirmation. Inspect the account before a manual retry. Each later update that begins execution creates its own audit record; the earlier uncertain record is retained. Rejected, failed or unconfirmed writes do not queue post-update collection. The retry policy above applies only to account reads after a confirmed and locally recorded update.
+The write is never retried automatically. A timeout or connection loss after transmission can mean the supplier changed the credentials without returning confirmation. Inspect the account before a manual retry. Each later update that begins execution creates its own audit record; the earlier uncertain record is retained. Rejected, failed or unconfirmed writes do not queue post-update collection. The five-round policy above applies only to account reads after a confirmed and locally recorded update.
 
 The update rate limit is independent of the account submission and lookup limits, but shared with web Auth JSON writes by the same user. Changing tokens does not reset it. `429` responses include both `Retry-After` and a JSON `retry_after` value in seconds.
 

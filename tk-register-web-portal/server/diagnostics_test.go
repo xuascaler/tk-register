@@ -133,7 +133,7 @@ func TestSyncDiagnosticsBackgroundLockAndAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	events = syncDiagnosticEvents(t, &logs)
-	if len(events) != 1 || readPostSubmissionJob(t, a, job.ID).Status != "succeeded" {
+	if len(events) != 1 || readPostSubmissionJob(t, a, job.ID).Status != "pending" {
 		t.Fatal("claimed attempt did not produce one successful summary")
 	}
 	summary := events[0]

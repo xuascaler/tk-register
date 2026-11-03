@@ -10,13 +10,13 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestPostSubmissionFailuresRetryThreeTimesThenRemainTerminal(t *testing.T) {
+func TestPostSubmissionFiveFailedRoundsRemainTerminal(t *testing.T) {
 	store, owner, vendor, version := syncFixture(t)
 	ctx := context.Background()
 	base := time.Now().UTC().Truncate(time.Second)
 	submission := syncSubmission(t, store, owner.ID, vendor.ID, version.ID, "retry@example.com", "claude/cc-pro", "accepted", "501", base)
 	job := enqueuePostSubmissionFixture(t, store, submission, base)
-	for attempt := 1; attempt <= 4; attempt++ {
+	for attempt := 1; attempt <= 5; attempt++ {
 		if ok, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, job.NextRunAt); err != nil || !ok {
 			t.Fatal("due retry was not claimed", attempt, ok, err)
 		}
@@ -25,18 +25,18 @@ func TestPostSubmissionFailuresRetryThreeTimesThenRemainTerminal(t *testing.T) {
 			t.Fatal(err)
 		}
 		job = loadPostSubmissionJob(t, store, submission.ID)
-		if job.AttemptCount != attempt || job.LastError == "" {
+		if job.AttemptCount != attempt || job.FailureCount != attempt || job.SuccessCount != 0 || job.LastError == "" {
 			t.Fatal("incorrect consumed attempt", job)
 		}
-		if attempt < 4 {
-			if job.Status != "pending" || job.FinishedAt != nil || !job.NextRunAt.Equal(finish.Add(3*time.Second)) {
+		if attempt < 5 {
+			if job.Status != "pending" || job.FinishedAt != nil || !job.NextRunAt.Equal(finish.Add(10*time.Second)) {
 				t.Fatal("retry was not delayed from completion", job)
 			}
 			if ok, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, job.NextRunAt.Add(-time.Nanosecond)); err != nil || ok {
 				t.Fatal("retry claimed early", ok, err)
 			}
 		} else if job.Status != "failed" || job.FinishedAt == nil || !job.FinishedAt.Equal(finish) {
-			t.Fatal("fourth failed read was not terminal", job)
+			t.Fatal("fifth failed read was not terminal", job)
 		}
 	}
 	if err := store.RecoverPostSubmissionSyncJobs(ctx, base.Add(time.Hour)); err != nil {
@@ -44,6 +44,66 @@ func TestPostSubmissionFailuresRetryThreeTimesThenRemainTerminal(t *testing.T) {
 	}
 	if ok, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, base.Add(time.Hour)); err != nil || ok {
 		t.Fatal("exhausted read restarted", ok, err)
+	}
+}
+
+func TestPostSubmissionMixedRoundsHonorCooldownAndDoNotCountLocalWaits(t *testing.T) {
+	store, owner, vendor, version := syncFixture(t)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	submission := syncSubmission(t, store, owner.ID, vendor.ID, version.ID, "mixed@example.com", "claude/cc-pro", "accepted", "502", base)
+	job := enqueuePostSubmissionFixture(t, store, submission, base)
+	successes, failures := 0, 0
+	for i, outcome := range []string{"succeeded", "failed", "succeeded", "failed", "succeeded"} {
+		round := i + 1
+		started := job.NextRunAt
+		if ok, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, started); err != nil || !ok {
+			t.Fatal("round was not claimed", round, ok, err)
+		}
+		if round == 3 {
+			// Cached cooldown/login-lock waits return the claim without spending a round.
+			until := started.Add(time.Minute)
+			if err := store.DeferClaimedPostSubmissionSyncJob(ctx, job.ID, round, started, until, started, "Waiting for supplier."); err != nil {
+				t.Fatal(err)
+			}
+			waiting := loadPostSubmissionJob(t, store, submission.ID)
+			if waiting.AttemptCount != round-1 || waiting.SuccessCount != successes || waiting.FailureCount != failures || waiting.Status != "pending" || !waiting.NextRunAt.Equal(until) {
+				t.Fatal("local wait consumed a round or changed prior outcomes", waiting)
+			}
+			if ok, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, until); err != nil || !ok {
+				t.Fatal("deferred round was not claimed", ok, err)
+			}
+			started = until
+		}
+		finished := started.Add(2 * time.Second)
+		retryAt := time.Time{}
+		if round == 2 {
+			// An actual HTTP 429 counts as a failed round and delays the next one.
+			retryAt = finished.Add(time.Minute)
+		}
+		if err := store.FinishPostSubmissionSyncJobAfter(ctx, job.ID, outcome, "Safe supplier failure.", finished, retryAt); err != nil {
+			t.Fatal(err)
+		}
+		if outcome == "succeeded" {
+			successes++
+		} else {
+			failures++
+		}
+		job = loadPostSubmissionJob(t, store, submission.ID)
+		if job.AttemptCount != round || job.SuccessCount != successes || job.FailureCount != failures {
+			t.Fatal("mixed outcome counters diverged", job)
+		}
+		if round < 5 {
+			next := finished.Add(10 * time.Second)
+			if retryAt.After(next) {
+				next = retryAt
+			}
+			if job.Status != "pending" || job.FinishedAt != nil || !job.NextRunAt.Equal(next) {
+				t.Fatal("round ended early or missed completion/cooldown deadline", job)
+			}
+		} else if job.Status != "succeeded" || job.FinishedAt == nil || job.SuccessCount != 3 || job.FailureCount != 2 {
+			t.Fatal("mixed sequence did not end on fifth result", job)
+		}
 	}
 }
 
@@ -86,7 +146,7 @@ func TestAuthJSONAPICompletionQueuesAndDuplicateDoesNotRewriteNewerMetadata(t *t
 		t.Fatal(unchanged, err)
 	}
 	job := authSyncJob(t, store, first.ID)
-	if job.SubmissionID != *target.CurrentSubmissionID || job.SubmissionTriggerID != nil || job.AttemptCount != 0 || !job.NextRunAt.Equal(base.Add(3*time.Second)) || job.IdentityKey != target.IdentityKey {
+	if job.SubmissionID != *target.CurrentSubmissionID || job.SubmissionTriggerID != nil || job.AttemptCount != 0 || !job.NextRunAt.Equal(base.Add(10*time.Second)) || job.IdentityKey != target.IdentityKey {
 		t.Fatal("wrong update trigger/anchor/delay", job)
 	}
 	// The accepted submission was created through the web; the successful API
@@ -115,8 +175,8 @@ func TestAuthJSONAPICompletionQueuesAndDuplicateDoesNotRewriteNewerMetadata(t *t
 	if _, err := store.PostSubmissionSyncTarget(ctx, authSyncJob(t, store, second.ID)); err != nil {
 		t.Fatal("newest update job became ineligible", err)
 	}
-	// A newer successful web update also supersedes a queued API read without
-	// creating a second (web) background job.
+	// A newer successful web update supersedes a queued API read and gets its
+	// own independent background sequence.
 	web, err := store.BeginAuthJSONUpdate(ctx, account, owner.ID, "newer-web-update")
 	if err != nil {
 		t.Fatal(err)
@@ -127,8 +187,62 @@ func TestAuthJSONAPICompletionQueuesAndDuplicateDoesNotRewriteNewerMetadata(t *t
 	if _, err := store.PostSubmissionSyncTarget(ctx, authSyncJob(t, store, second.ID)); !errors.Is(err, ErrPostSubmissionSyncIneligible) {
 		t.Fatal("web update did not supersede older API job", err)
 	}
-	if err := store.DB.Model(&PostSubmissionSyncJob{}).Count(&count).Error; err != nil || count != 2 {
-		t.Fatal("web update unexpectedly scheduled a background read", count, err)
+	if err := store.DB.Model(&PostSubmissionSyncJob{}).Count(&count).Error; err != nil || count != 3 {
+		t.Fatal("web update did not schedule its own background sequence", count, err)
+	}
+	if _, err := store.PostSubmissionSyncTarget(ctx, authSyncJob(t, store, web.ID)); err != nil {
+		t.Fatal("newest web update job became ineligible", err)
+	}
+}
+
+func TestAuthJSONWebOwnerAndAdminUpdatesQueueFiveSuccessfulRounds(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		t.Run(fmt.Sprintf("admin=%t", admin), func(t *testing.T) {
+			store, owner, target := authAuditFixture(t)
+			ctx := context.Background()
+			base := time.Now().UTC().Truncate(time.Second)
+			actor := owner
+			if admin {
+				actor = tokenUser(t, store, "web-update-admin@example.com")
+				if err := store.DB.Model(&actor).Update("role", "admin").Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			audit, err := store.BeginAuthJSONUpdate(ctx, target, actor.ID, "web-five-rounds")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if unchanged, err := store.FinishAuthJSONUpdate(ctx, audit, "updated", "13152", "", base); err != nil || !unchanged {
+				t.Fatal("web update failed to enqueue", unchanged, err)
+			}
+			job := authSyncJob(t, store, audit.ID)
+			if job.UserID != owner.ID || !job.NextRunAt.Equal(base.Add(10*time.Second)) {
+				t.Fatal("web admin changed owner or first delay", job)
+			}
+			for round := 1; round <= 5; round++ {
+				if _, err := store.PostSubmissionSyncTarget(ctx, job); err != nil {
+					t.Fatal("confirmed web update is not eligible", err)
+				}
+				if claimed, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, job.NextRunAt); err != nil || !claimed {
+					t.Fatal(claimed, err)
+				}
+				if err := store.FinishPostSubmissionSyncJob(ctx, job.ID, "succeeded", "", job.NextRunAt.Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				job = authSyncJob(t, store, audit.ID)
+				var saved AccountAuthJSONAudit
+				if err := store.DB.First(&saved, audit.ID).Error; err != nil {
+					t.Fatal(err)
+				}
+				want := "pending"
+				if round == 5 {
+					want = "succeeded"
+				}
+				if job.Status != want || saved.RefreshStatus != want || saved.Status != "updated" || saved.ActorID != actor.ID || saved.OwnerID != owner.ID || job.AttemptCount != round || job.SuccessCount != round || job.FailureCount != 0 {
+					t.Fatal("web update sequence ended early or changed audit identity", job, saved)
+				}
+			}
+		})
 	}
 }
 
@@ -143,7 +257,7 @@ func TestAuthJSONSyncRetryAuditAndRestartRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			job := authSyncJob(t, store, audit.ID)
-			for attempt := 1; attempt <= 4; attempt++ {
+			for attempt := 1; attempt <= 5; attempt++ {
 				if ok, err := store.ClaimPostSubmissionSyncJob(ctx, job.ID, job.NextRunAt); err != nil || !ok {
 					t.Fatal(ok, err)
 				}
@@ -155,7 +269,7 @@ func TestAuthJSONSyncRetryAuditAndRestartRecovery(t *testing.T) {
 					}
 				} else {
 					status := "failed"
-					if attempt == 4 {
+					if attempt == 5 {
 						status = outcome
 					}
 					if err := store.FinishPostSubmissionSyncJob(ctx, job.ID, status, "Safe failure.", finish); err != nil {
@@ -168,7 +282,7 @@ func TestAuthJSONSyncRetryAuditAndRestartRecovery(t *testing.T) {
 					t.Fatal(err)
 				}
 				wantRefresh, wantJob := "pending", "pending"
-				if attempt == 4 {
+				if attempt == 5 {
 					wantRefresh, wantJob = "failed", outcome
 					if outcome == "succeeded" {
 						wantRefresh = "succeeded"
@@ -180,7 +294,7 @@ func TestAuthJSONSyncRetryAuditAndRestartRecovery(t *testing.T) {
 				if saved.Status != "updated" || saved.RefreshStatus != wantRefresh || job.Status != wantJob || job.AttemptCount != attempt {
 					t.Fatal("audit/attempt/terminal state diverged", saved, job)
 				}
-				if attempt < 4 && !job.NextRunAt.Equal(finish.Add(3*time.Second)) {
+				if attempt < 5 && !job.NextRunAt.Equal(finish.Add(10*time.Second)) {
 					t.Fatal("wrong retry deadline", job)
 				}
 			}

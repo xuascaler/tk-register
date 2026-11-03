@@ -48,3 +48,11 @@ test('refresh failure after an accepted update preserves the credential success 
   const completeMessage = 'Auth JSON updated, but account refresh failed. Your last successful data is retained. Try syncing again.';
   assert.equal(authJSONResultMessage({ ...result, refresh_message: completeMessage }), completeMessage);
 });
+
+
+test('a queued refresh reports confirmed credential success without a failure warning', () => {
+  const result = { updated: true, refresh_status: 'pending', refresh_message: 'Auth JSON updated. Five account syncs are scheduled.' } as AuthJSONUpdateResult;
+  assert.equal(authJSONResultMessage(result), result.refresh_message);
+  assert.doesNotMatch(authJSONResultMessage(result), /failed|unconfirmed/);
+  assert.equal(authJSONResultMessage({ ...result, refresh_message: '' }), 'Auth JSON updated. Account status and usage will sync in the background.');
+});

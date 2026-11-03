@@ -111,7 +111,7 @@ func TestAuthJSONOwnershipCSRFAndValidation(t *testing.T) {
 	requireStatus(t, request(t, a, "POST", authRoute(third.ID), authInput(), cookie, csrf), 404)
 }
 
-func TestAuthJSONUpdatePersistsMetadataAndImmediatelyRefreshes(t *testing.T) {
+func TestAuthJSONUpdatePersistsMetadataAndQueuesRefresh(t *testing.T) {
 	a, owner, cookie, csrf, target, fake := setupAuthUpdate(t)
 	before := core.Submission{}
 	a.store.DB.First(&before, *target.CurrentSubmissionID)
@@ -134,16 +134,16 @@ func TestAuthJSONUpdatePersistsMetadataAndImmediatelyRefreshes(t *testing.T) {
 	w = request(t, a, "POST", authRoute(target.ID), map[string]any{"auth_json": string(raw)}, cookie, csrf)
 	requireStatus(t, w, 200)
 	assertNoSecrets(t, w.Body.String())
-	if data(t, w)["updated"] != true || data(t, w)["refresh_status"] != "succeeded" || fake.updates != 1 || fake.refreshes != 1 || fake.target.RecordID != "350001" {
+	if data(t, w)["updated"] != true || data(t, w)["refresh_status"] != "pending" || fake.updates != 1 || fake.refreshes != 0 || fake.target.RecordID != "350001" {
 		t.Fatal(w.Body.String(), fake)
 	}
 	account, err := a.store.SyncedAccountForUser(context.Background(), owner.ID, target.ID)
-	if err != nil || account.AuthJSONUpdatedAt == nil || account.SupplierRecordID == nil || *account.SupplierRecordID != "350001" || account.Snapshot == nil || *account.Snapshot.CostTotal != 12.5 || *account.Snapshot.Currency != "CNY" || *account.Snapshot.Usage5hPercent != 2 {
+	if err != nil || account.AuthJSONUpdatedAt == nil || account.SupplierRecordID == nil || *account.SupplierRecordID != "350001" || account.Snapshot != nil {
 		t.Fatalf("state %+v %v", account, err)
 	}
 	snapshots, _ := a.store.AccountSnapshots(context.Background(), target.ID, 7)
-	if len(snapshots) != 1 {
-		t.Fatal("immediate snapshot missing")
+	if len(snapshots) != 0 {
+		t.Fatal("response must not perform an immediate supplier collection")
 	}
 	after := core.Submission{}
 	a.store.DB.First(&after, *target.CurrentSubmissionID)
@@ -151,8 +151,12 @@ func TestAuthJSONUpdatePersistsMetadataAndImmediatelyRefreshes(t *testing.T) {
 		t.Fatal("changed immutable submission credentials")
 	}
 	audits := authAudits(t, a)
-	if len(audits) != 1 || audits[0].Status != "updated" || audits[0].RefreshStatus != "succeeded" || audits[0].ActorID != owner.ID || audits[0].RequestID == "" {
+	if len(audits) != 1 || audits[0].Status != "updated" || audits[0].RefreshStatus != "pending" || audits[0].ActorID != owner.ID || audits[0].RequestID == "" {
 		t.Fatalf("audit %+v", audits)
+	}
+	job := authAPISyncJob(t, a, audits[0].ID)
+	if job.Status != "pending" || job.AttemptCount != 0 || audits[0].FinishedAt == nil || !job.NextRunAt.Equal(audits[0].FinishedAt.Add(10*time.Second)) {
+		t.Fatalf("web update did not queue ten-second background sync: %+v", job)
 	}
 	if a.redis.Exists(context.Background(), accountSyncLeaseKey).Val() != 0 {
 		t.Fatal("global collection lease leaked")
@@ -189,7 +193,7 @@ func TestAuthJSONEligibilityPerActorRateLimit(t *testing.T) {
 	}
 }
 
-func TestAuthJSONRefreshFailurePreservesLastSuccess(t *testing.T) {
+func TestAuthJSONQueuedWebRefreshReturnsLastSavedSuccess(t *testing.T) {
 	a, owner, cookie, csrf, target, fake := setupAuthUpdate(t)
 	at := time.Now().UTC().Add(-time.Hour)
 	cost := 8.0
@@ -202,15 +206,15 @@ func TestAuthJSONRefreshFailurePreservesLastSuccess(t *testing.T) {
 	w := request(t, a, "POST", authRoute(target.ID), authInput(), cookie, csrf)
 	requireStatus(t, w, 200)
 	assertNoSecrets(t, w.Body.String())
-	if data(t, w)["updated"] != true || data(t, w)["refresh_status"] != "failed" {
+	if data(t, w)["updated"] != true || data(t, w)["refresh_status"] != "pending" || fake.refreshes != 0 {
 		t.Fatal(w.Body.String())
 	}
 	account, _ := a.store.SyncedAccountForUser(context.Background(), owner.ID, target.ID)
-	if account.AuthJSONUpdatedAt == nil || account.Snapshot == nil || *account.Snapshot.CostTotal != 8 || !account.LastSuccessAt.Equal(at) || account.LastError == "" {
+	if account.AuthJSONUpdatedAt == nil || account.Snapshot == nil || *account.Snapshot.CostTotal != 8 || !account.LastSuccessAt.Equal(at) || account.LastError != "" {
 		t.Fatalf("lost old data %+v", account)
 	}
-	if authAudits(t, a)[0].RefreshStatus != "failed" {
-		t.Fatal("refresh audit absent")
+	if authAudits(t, a)[0].RefreshStatus != "pending" {
+		t.Fatal("pending refresh audit absent")
 	}
 }
 
@@ -267,6 +271,10 @@ func TestAuthJSONAdminUnsupportedAndLockGuards(t *testing.T) {
 	audits := authAudits(t, a)
 	if audits[0].ActorID != admin.ID || audits[0].OwnerID == admin.ID {
 		t.Fatal("admin actor/owner mixed")
+	}
+	job := authAPISyncJob(t, a, audits[0].ID)
+	if job.UserID != target.UserID || job.AccountID != target.ID || job.Status != "pending" || fake.refreshes != 0 {
+		t.Fatal("admin update did not queue the owner's saved account", job)
 	}
 	a.store.DB.Model(&core.Vendor{}).Where("id = ?", target.VendorID).Update("enabled", false)
 	requireStatus(t, request(t, a, "GET", authRoute(target.ID), nil, cookie, ""), 409)

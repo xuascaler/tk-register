@@ -27,7 +27,7 @@ func setupPostSubmissionSync(t *testing.T) (*app, core.SyncedAccount, core.PostS
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	job := core.PostSubmissionSyncJob{SubmissionID: *target.CurrentSubmissionID, SubmissionTriggerID: target.CurrentSubmissionID, AccountID: target.ID, UserID: target.UserID, IdentityKey: target.IdentityKey, Status: "pending", NextRunAt: now, CreatedAt: now.Add(-3 * time.Second)}
+	job := core.PostSubmissionSyncJob{SubmissionID: *target.CurrentSubmissionID, SubmissionTriggerID: target.CurrentSubmissionID, AccountID: target.ID, UserID: target.UserID, IdentityKey: target.IdentityKey, Status: "pending", NextRunAt: now, CreatedAt: now.Add(-10 * time.Second)}
 	if err := a.store.DB.Create(&job).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestPostSubmissionSyncUsesFreshSavedCredentials(t *testing.T) {
 	if err := a.processPostSubmissionSync(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
-	if readPostSubmissionJob(t, a, job.ID).Status != "succeeded" || collector.username != "changed-supplier-user" || collector.password != "changed-supplier-password" {
+	if readPostSubmissionJob(t, a, job.ID).Status != "pending" || readPostSubmissionJob(t, a, job.ID).AttemptCount != 1 || collector.username != "changed-supplier-user" || collector.password != "changed-supplier-password" {
 		t.Fatal("worker did not use the current saved website login")
 	}
 }
@@ -94,12 +94,12 @@ func TestPostSubmissionSyncBusyDefersWithoutAttempt(t *testing.T) {
 	if err = a.processPostSubmissionSync(context.Background(), now.Add(5*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if readPostSubmissionJob(t, a, job.ID).Status != "succeeded" || fake.calls != 1 {
+	if readPostSubmissionJob(t, a, job.ID).Status != "pending" || readPostSubmissionJob(t, a, job.ID).AttemptCount != 1 || fake.calls != 1 {
 		t.Fatal("deferred job did not run once")
 	}
 }
 
-func TestPostSubmissionSyncOneTargetOnceAndIndependentSchedule(t *testing.T) {
+func TestPostSubmissionSyncFiveSuccessfulRoundsAndIndependentSchedule(t *testing.T) {
 	a, target, job, fake, now := setupPostSubmissionSync(t)
 	at := now.Add(-time.Hour)
 	state := core.AccountSyncState{ID: 1, Status: "succeeded", LastStartedAt: &at, LastFinishedAt: &at, LastSuccessAt: &at}
@@ -118,14 +118,31 @@ func TestPostSubmissionSyncOneTargetOnceAndIndependentSchedule(t *testing.T) {
 		}
 		return []supplier.AccountResult{pageRecord(targets[0])}, nil
 	}
-	for _, when := range []time.Time{now, now.Add(time.Hour)} {
-		if err := a.processPostSubmissionSync(context.Background(), when); err != nil {
+	for attempt := 1; attempt <= 5; attempt++ {
+		next := readPostSubmissionJob(t, a, job.ID).NextRunAt
+		before := time.Now().UTC()
+		if err := a.processPostSubmissionSync(context.Background(), next); err != nil {
 			t.Fatal(err)
 		}
+		saved := readPostSubmissionJob(t, a, job.ID)
+		if fake.calls != attempt || saved.AttemptCount != attempt || saved.SuccessCount != attempt || saved.FailureCount != 0 {
+			t.Fatalf("successful round was not counted once: %+v calls=%d", saved, fake.calls)
+		}
+		if attempt < 5 {
+			if saved.Status != "pending" || saved.FinishedAt != nil || saved.NextRunAt.Before(before.Add(10*time.Second)) || saved.NextRunAt.After(time.Now().UTC().Add(10*time.Second)) {
+				t.Fatalf("success stopped early or scheduled the next round incorrectly: %+v", saved)
+			}
+			if err := a.processPostSubmissionSync(context.Background(), saved.NextRunAt.Add(-time.Millisecond)); err != nil || fake.calls != attempt {
+				t.Fatal("successful follow-up ran before its deadline", err)
+			}
+		}
+	}
+	if err := a.processPostSubmissionSync(context.Background(), now.Add(time.Hour)); err != nil || fake.calls != 5 {
+		t.Fatal("completed series ran a sixth round", err)
 	}
 	saved := readPostSubmissionJob(t, a, job.ID)
-	if saved.Status != "succeeded" || saved.StartedAt == nil || saved.FinishedAt == nil || saved.LastError != "" || fake.calls != 1 || full.collectCalls != 0 {
-		t.Fatalf("job was not completed exactly once: status=%s started=%v finished=%v calls=%d full_calls=%d", saved.Status, saved.StartedAt, saved.FinishedAt, fake.calls, full.collectCalls)
+	if saved.Status != "succeeded" || saved.StartedAt == nil || saved.FinishedAt == nil || saved.LastError != "" || fake.calls != 5 || full.collectCalls != 0 {
+		t.Fatalf("job did not complete five single-account rounds: status=%s started=%v finished=%v calls=%d full_calls=%d", saved.Status, saved.StartedAt, saved.FinishedAt, fake.calls, full.collectCalls)
 	}
 	account, err := a.store.SyncedAccountForUser(context.Background(), target.UserID, target.ID)
 	if err != nil || account.Snapshot == nil || *account.Snapshot.CostTotal != 123.45 || account.SupplierRecordID == nil || *account.SupplierRecordID != "450001" || account.LastSuccessAt == nil {
@@ -176,7 +193,7 @@ func TestPostSubmissionSyncFailuresRetainLastSnapshot(t *testing.T) {
 				}
 				return []supplier.AccountResult{record}, nil
 			}
-			for attempt := 1; attempt <= 4; attempt++ {
+			for attempt := 1; attempt <= 5; attempt++ {
 				before := time.Now().UTC()
 				if err := a.processPostSubmissionSync(context.Background(), readPostSubmissionJob(t, a, job.ID).NextRunAt); err != nil {
 					t.Fatal(err)
@@ -185,9 +202,9 @@ func TestPostSubmissionSyncFailuresRetainLastSnapshot(t *testing.T) {
 				if saved.AttemptCount != attempt || fake.calls != attempt {
 					t.Fatalf("retry budget mismatch: attempts=%d calls=%d expected=%d", saved.AttemptCount, fake.calls, attempt)
 				}
-				if attempt < 4 {
-					if saved.Status != "pending" || saved.FinishedAt != nil || saved.NextRunAt.Before(before.Add(3*time.Second)) || saved.NextRunAt.After(time.Now().UTC().Add(3*time.Second)) {
-						t.Fatalf("retry was not persisted for three seconds later: status=%s next=%v", saved.Status, saved.NextRunAt)
+				if attempt < 5 {
+					if saved.Status != "pending" || saved.FinishedAt != nil || saved.NextRunAt.Before(before.Add(10*time.Second)) || saved.NextRunAt.After(time.Now().UTC().Add(10*time.Second)) {
+						t.Fatalf("next round was not persisted for ten seconds later: status=%s next=%v", saved.Status, saved.NextRunAt)
 					}
 					if err := a.processPostSubmissionSync(context.Background(), saved.NextRunAt.Add(-time.Millisecond)); err != nil || fake.calls != attempt {
 						t.Fatal("retry ran before its due time", err)
@@ -199,7 +216,7 @@ func TestPostSubmissionSyncFailuresRetainLastSnapshot(t *testing.T) {
 			}
 			saved := readPostSubmissionJob(t, a, job.ID)
 			account, err := a.store.SyncedAccountForUser(context.Background(), target.UserID, target.ID)
-			if err != nil || saved.Status != "failed" || saved.FinishedAt == nil || saved.LastError == "" || fake.calls != 4 || account.LastAttemptAt == nil || !account.LastAttemptAt.After(at) || !account.LastSuccessAt.Equal(at) || account.Snapshot == nil || *account.Snapshot.CostTotal != cost {
+			if err != nil || saved.Status != "failed" || saved.FinishedAt == nil || saved.LastError == "" || fake.calls != 5 || account.LastAttemptAt == nil || !account.LastAttemptAt.After(at) || !account.LastSuccessAt.Equal(at) || account.Snapshot == nil || *account.Snapshot.CostTotal != cost {
 				t.Fatalf("exhausted retries changed saved observation or exceeded cap: error=%v status=%s calls=%d snapshot=%t attempt=%v success=%v", err, saved.Status, fake.calls, account.Snapshot != nil, account.LastAttemptAt, account.LastSuccessAt)
 			}
 			assertNoSecrets(t, saved.LastError+account.LastError)
@@ -207,6 +224,32 @@ func TestPostSubmissionSyncFailuresRetainLastSnapshot(t *testing.T) {
 				t.Fatal("mismatched supplier result replaced the pinned row")
 			}
 		})
+	}
+}
+
+func TestPostSubmissionSyncMixedRoundsRetainLatestSuccessAfterFinalFailure(t *testing.T) {
+	a, target, job, fake, _ := setupPostSubmissionSync(t)
+	fake.run = func(ctx context.Context, targets []supplier.Target) ([]supplier.AccountResult, error) {
+		if fake.calls == 2 || fake.calls >= 4 {
+			return nil, &supplier.Error{Code: supplier.CodeUnavailable}
+		}
+		record := pageRecord(targets[0])
+		amount := float64(fake.calls * 10)
+		record.Account.CostTotal = &amount
+		return []supplier.AccountResult{record}, nil
+	}
+	for round := 1; round <= 5; round++ {
+		if err := a.processPostSubmissionSync(context.Background(), readPostSubmissionJob(t, a, job.ID).NextRunAt); err != nil {
+			t.Fatal(err)
+		}
+		if round < 5 && readPostSubmissionJob(t, a, job.ID).Status != "pending" {
+			t.Fatal("series stopped before five rounds")
+		}
+	}
+	saved := readPostSubmissionJob(t, a, job.ID)
+	account, err := a.store.SyncedAccountForUser(context.Background(), target.UserID, target.ID)
+	if err != nil || saved.Status != "failed" || saved.AttemptCount != 5 || saved.SuccessCount != 2 || saved.FailureCount != 3 || account.Snapshot == nil || account.Snapshot.CostTotal == nil || *account.Snapshot.CostTotal != 30 || account.LastError == "" || account.LastSuccessAt == nil {
+		t.Fatalf("mixed series lost successful data or counters: job=%+v account=%+v err=%v", saved, account, err)
 	}
 }
 
@@ -285,10 +328,10 @@ func TestPostSubmissionSyncRecoversStaleRunningWithRemainingBudget(t *testing.T)
 		t.Fatal(err)
 	}
 	saved := readPostSubmissionJob(t, a, job.ID)
-	if saved.Status != "pending" || saved.AttemptCount != 1 || saved.FinishedAt != nil || saved.LastError == "" || fake.calls != 0 || !saved.NextRunAt.Equal(now.Add(3*time.Second)) {
+	if saved.Status != "pending" || saved.AttemptCount != 1 || saved.FinishedAt != nil || saved.LastError == "" || fake.calls != 0 || !saved.NextRunAt.Equal(now.Add(10*time.Second)) {
 		t.Fatalf("interrupted read lost its bounded retry: status=%s attempts=%d next=%v calls=%d", saved.Status, saved.AttemptCount, saved.NextRunAt, fake.calls)
 	}
-	if err := a.processPostSubmissionSync(context.Background(), saved.NextRunAt); err != nil || fake.calls != 1 || readPostSubmissionJob(t, a, job.ID).Status != "succeeded" || readPostSubmissionJob(t, a, job.ID).AttemptCount != 2 {
+	if err := a.processPostSubmissionSync(context.Background(), saved.NextRunAt); err != nil || fake.calls != 1 || readPostSubmissionJob(t, a, job.ID).Status != "pending" || readPostSubmissionJob(t, a, job.ID).AttemptCount != 2 {
 		t.Fatal("recovered read did not consume the next attempt", err)
 	}
 }

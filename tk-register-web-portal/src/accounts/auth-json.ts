@@ -12,7 +12,7 @@ export type AuthJSONEligibility = {
 
 export type AuthJSONUpdateResult = {
   updated: true;
-  refresh_status: 'succeeded' | 'failed';
+  refresh_status: 'pending' | 'succeeded' | 'failed';
   refresh_message: string;
   account: SyncedAccount | null;
   updated_at: string;
@@ -34,6 +34,7 @@ export function authJSONUpdateError(cause: unknown): { message: string; uncertai
 }
 
 export function authJSONResultMessage(result: AuthJSONUpdateResult) {
+  if (result.refresh_status === 'pending') return result.refresh_message?.trim() || 'Auth JSON updated. Account status and usage will sync in the background.';
   if (result.refresh_status === 'succeeded') return 'Auth JSON updated. Account status and usage refreshed.';
   const prefix = 'Auth JSON updated, but account refresh failed.';
   const details = result.refresh_message?.trim();

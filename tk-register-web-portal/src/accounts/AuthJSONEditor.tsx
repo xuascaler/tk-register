@@ -123,7 +123,7 @@ export function AuthJSONEditor({ account, endpoint, onClose, onSaved }: {
     submitting.current = true; setBusy(true); setError(''); setUncertain(false);
     try {
       const result = await request<AuthJSONUpdateResult>(path, { method: 'POST', body: { auth_json: auth }, signal: controller.signal });
-      if (!result || result.updated !== true || !('account' in result) || (result.account !== null && typeof result.account !== 'object') || !['succeeded', 'failed'].includes(result.refresh_status)) {
+      if (!result || result.updated !== true || !('account' in result) || (result.account !== null && typeof result.account !== 'object') || !['pending', 'succeeded', 'failed'].includes(result.refresh_status)) {
         throw new APIError('The update result could not be confirmed.', 200, 'AUTH_JSON_UPDATE_UNCONFIRMED');
       }
       if (!controller.signal.aborted && mounted.current) {
@@ -155,7 +155,7 @@ export function AuthJSONEditor({ account, endpoint, onClose, onSaved }: {
         <div className='account-auth-field-help' id={helpID}><span>{fileName || 'Paste a JSON object or upload a .json file, up to 2 MB.'}</span>{validFormat && <span className='account-auth-valid'><Check aria-hidden='true' />Valid format</span>}</div>
         <div id={errorID}>{error && <div className={`notice ${uncertain ? 'account-auth-uncertain' : 'error'}`} role='alert'>{error}</div>}</div>
         <p className='account-auth-private'><LockKeyhole aria-hidden='true' />Existing credentials are never shown. Your password and other account details stay unchanged.</p>
-        {busy && <p className='account-auth-progress' role='status'><LoaderCircle className='spin' aria-hidden='true' />Updating credentials and refreshing account status and usage…</p>}
+        {busy && <p className='account-auth-progress' role='status'><LoaderCircle className='spin' aria-hidden='true' />Updating credentials…</p>}
       </div>
       <div className='account-auth-dialog-footer'><button type='button' className='button secondary' disabled={busy} onClick={close}>Cancel</button><button type='submit' className='button primary' disabled={busy || uploading || !editable || !raw.trim()}>{busy ? <><LoaderCircle className='spin' aria-hidden='true' />Updating…</> : 'Update Auth JSON'}</button></div>
     </form>

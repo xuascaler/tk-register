@@ -113,14 +113,14 @@ func TestSupplierSessionsAuthJSONWaitDoesNotReplayWrite(t *testing.T) {
 	if len(audits) != 1 || audits[0].Status != "failed" || audits[0].ErrorCode != "SUPPLIER_RATE_LIMITED" {
 		t.Fatalf("incorrect wait audit: %+v", audits)
 	}
-	// A known successful write followed by a read cooldown must remain successful.
+	// A confirmed web write queues its reads without waiting for query cooldowns.
 	fake.updateErr = nil
 	fake.refreshErr = waitingSupplier("accounts", false, time.Now().UTC().Add(240*time.Second))
 	w = request(t, a, "POST", authRoute(target.ID), authInput(), cookie, csrf)
 	requireStatus(t, w, 200)
 	result := data(t, w)
-	if result["updated"] != true || result["refresh_status"] != "failed" || result["refresh_retry_stage"] != "accounts" || result["refresh_retry_after"].(float64) < 238 || fake.updates != 2 || fake.refreshes != 1 {
-		t.Fatal("post-write refresh wait changed write outcome", w.Body.String())
+	if result["updated"] != true || result["refresh_status"] != "pending" || fake.updates != 2 || fake.refreshes != 0 {
+		t.Fatal("successful web write waited for a supplier refresh", w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "private-access-token") {
 		t.Fatal("private upstream text leaked")
@@ -154,8 +154,13 @@ func TestSupplierSessionsJobDeferralPreservesAttemptAndDueTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved = readPostSubmissionJob(t, a, job.ID)
-	if saved.Status != "succeeded" || saved.AttemptCount != 1 {
+	if saved.Status != "pending" || saved.AttemptCount != 1 {
 		t.Fatalf("resumed job did not use first actual attempt: %+v", saved)
+	}
+	for attempt := 2; attempt <= 5; attempt++ {
+		if err := a.processPostSubmissionSync(context.Background(), readPostSubmissionJob(t, a, job.ID).NextRunAt); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// A stale deferral cannot reopen a terminal job.
 	if err := a.store.DeferClaimedPostSubmissionSyncJob(context.Background(), job.ID, 1, until, until.Add(time.Hour), time.Now().UTC(), "waiting"); err != nil {
@@ -172,7 +177,7 @@ func TestSupplierSessionsActual429RetryBudget(t *testing.T) {
 	fake.run = func(ctx context.Context, _ []supplier.Target) ([]supplier.AccountResult, error) {
 		return nil, waitingSupplier("accounts", false, until)
 	}
-	for attempt := 1; attempt <= 4; attempt++ {
+	for attempt := 1; attempt <= 5; attempt++ {
 		if err := a.processPostSubmissionSync(context.Background(), readPostSubmissionJob(t, a, job.ID).NextRunAt); err != nil {
 			t.Fatal(err)
 		}
@@ -180,11 +185,11 @@ func TestSupplierSessionsActual429RetryBudget(t *testing.T) {
 		if saved.AttemptCount != attempt {
 			t.Fatalf("actual HTTP failure lost attempt: %+v", saved)
 		}
-		if attempt < 4 && (saved.Status != "pending" || saved.NextRunAt.Before(until)) {
+		if attempt < 5 && (saved.Status != "pending" || saved.NextRunAt.Before(until)) {
 			t.Fatalf("cooldown deadline ignored: %+v", saved)
 		}
 	}
-	if saved := readPostSubmissionJob(t, a, job.ID); saved.Status != "failed" || saved.FinishedAt == nil || fake.calls != 4 {
+	if saved := readPostSubmissionJob(t, a, job.ID); saved.Status != "failed" || saved.FinishedAt == nil || fake.calls != 5 {
 		t.Fatalf("retry exhaustion changed: %+v calls=%d", saved, fake.calls)
 	}
 }
@@ -245,7 +250,7 @@ func TestSupplierSessionsDeferredClaimCAS(t *testing.T) {
 	if claimed, err := a.store.ClaimPostSubmissionSyncJob(context.Background(), job.ID, now); err != nil || !claimed {
 		t.Fatal("reclaim failed", err)
 	}
-	// Existing retry finish guard remains conditional on running status.
+	// A finished round is pending for its next read and cannot be refunded.
 	if err := a.store.FinishPostSubmissionSyncJobAfter(context.Background(), job.ID, "succeeded", "", now, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +258,7 @@ func TestSupplierSessionsDeferredClaimCAS(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stored core.PostSubmissionSyncJob
-	if err := a.store.DB.First(&stored, job.ID).Error; err != nil || stored.Status != "succeeded" {
-		t.Fatal("finished job reopened", err)
+	if err := a.store.DB.First(&stored, job.ID).Error; err != nil || stored.Status != "pending" || stored.AttemptCount != 1 || stored.SuccessCount != 1 || !stored.NextRunAt.Equal(now.Add(10*time.Second)) {
+		t.Fatal("finished round was refunded or rescheduled", err)
 	}
 }
