@@ -34,7 +34,7 @@ try {
       const items = accounts.filter(a => `${a.account} ${path.startsWith('/admin/') ? a.user_email : ''}`.includes(search) && (!status || a.snapshot?.account_status === status));
       return ok({ items, page: 1, page_size: 20, total: items.length });
     }
-    if (path === '/accounts/100' || path === '/admin/synced-accounts/100') return ok({ account, snapshots: [snapshot], interval_hours: 2, timezone: 'Asia/Shanghai' });
+    if (path === '/accounts/100' || path === '/admin/synced-accounts/100') return ok({ account, snapshots: [snapshot], snapshot_count: 1, snapshot_page: 1, snapshot_page_size: 50, trend_reduced: false, trend: Object.fromEntries(['cost_total_usd', 'input_tokens_total', 'output_tokens_total'].map(metric => [metric, [[{ snapshot_id: snapshot.id, collected_at: snapshot.collected_at, value: snapshot[metric] }]]])), interval_seconds: 300, timezone: 'Asia/Shanghai' });
     if (path === '/admin/synced-accounts/100/sync' || path === '/accounts/100/sync') {
       assert.equal(req.method(), 'POST'); assert.equal(req.headers()['x-csrf-token'], 'fixture-csrf'); return ok({ account });
     }

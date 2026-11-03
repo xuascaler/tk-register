@@ -40,6 +40,7 @@ type app struct {
 	accountPageCollector               accountPageCollector
 	accountAuthEditor                  accountAuthEditor
 	supplierClient                     *supplier.Client
+	accountSyncWake                    chan struct{}
 }
 type envelope struct {
 	Success    bool   `json:"success"`
@@ -338,6 +339,7 @@ func (a *app) settings(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		a.wakeAccountSync()
 	}
 	rows, e := a.store.Descriptors(r.Context())
 	if e != nil {

@@ -7,6 +7,10 @@ export function knownNumber(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+export function validSyncInterval(value: number): boolean {
+  return Number.isInteger(value) && value >= 60 && value <= 604800;
+}
+
 export function formatCost(value: number | null | undefined, currency: string | null | undefined) {
   if (!knownNumber(value) || !currency) return '—';
   const unit = currency.trim().toUpperCase();
@@ -49,11 +53,11 @@ export function statusTone(status: string | null | undefined) {
 }
 
 // Spend uses the server's USD value. Missing conversions and reset counters are gaps, never zeros.
-export function trendSegments(snapshots: AccountSnapshot[], metric: Metric, intervalHours: number) {
+export function trendSegments(snapshots: AccountSnapshot[], metric: Metric, intervalSeconds: number) {
   const ordered = [...snapshots].filter(s => Number.isFinite(Date.parse(s.collected_at))).sort((a, b) => Date.parse(a.collected_at) - Date.parse(b.collected_at));
   const segments: TrendPoint[][] = [];
   let current: TrendPoint[] = [];
-  const maxGap = Math.max(1, intervalHours) * 3600_000 * 1.6;
+  const maxGap = Math.max(1, intervalSeconds) * 1000 * 1.6;
   for (const snapshot of ordered) {
     const value = snapshot[metric];
     if (!knownNumber(value)) {

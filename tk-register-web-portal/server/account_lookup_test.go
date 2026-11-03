@@ -70,7 +70,7 @@ func TestAccountLookupOwnerAndSnapshotContract(t *testing.T) {
 	w := apiRequest(t, a, "GET", path, token.PlaintextToken, "", "")
 	requireStatus(t, w, 200)
 	out := lookupData(t, w)
-	if out.ID != fmt.Sprint(target.ID) || out.Username != owner.Email || out.Vendor != "tk-register-0" || out.SubmissionStatus != "failed" || out.IntervalHours != 2 {
+	if out.ID != fmt.Sprint(target.ID) || out.Username != owner.Email || out.Vendor != "tk-register-0" || out.SubmissionStatus != "failed" || out.IntervalSeconds != 300 {
 		t.Fatalf("wrong account metadata: %+v", out)
 	}
 	if out.Snapshot == nil || out.Snapshot.CostTotal == nil || *out.Snapshot.CostTotal != 0 || out.Snapshot.OutputTokensTotal != nil || *out.Snapshot.AccountStatus != "active" || out.LastError == nil || out.LastSuccessAt == nil {
@@ -127,13 +127,13 @@ func TestAccountLookupNoSnapshotAndConfiguration(t *testing.T) {
 	vendor := configuredVendor(t, a, owner.ID)
 	seedAdminSubmission(t, a, owner.ID, vendor, "pending@example.com", "unknown", time.Now().UTC())
 	token := lookupToken(t, a, owner.ID)
-	if err := a.store.PatchSettings(context.Background(), map[string]string{"account_sync_interval_hours": "3"}, owner.ID); err != nil {
+	if err := a.store.PatchSettings(context.Background(), map[string]string{"account_sync_interval_seconds": "10800"}, owner.ID); err != nil {
 		t.Fatal(err)
 	}
 	w := apiRequest(t, a, "GET", lookupURL(owner.Email, "pending@example.com"), token.PlaintextToken, "", "")
 	requireStatus(t, w, 200)
 	out := lookupData(t, w)
-	if out.Snapshot != nil || out.RemoteID != nil || out.PlatformAccountID != nil || out.LastError != nil || out.LastSuccessAt != nil || out.LastAttemptAt != nil || out.IntervalHours != 3 {
+	if out.Snapshot != nil || out.RemoteID != nil || out.PlatformAccountID != nil || out.LastError != nil || out.LastSuccessAt != nil || out.LastAttemptAt != nil || out.IntervalSeconds != 10800 {
 		t.Fatalf("unknown metrics became values: %+v", out)
 	}
 	for _, field := range []string{"snapshot", "last_error", "remote_id", "last_success_at"} {

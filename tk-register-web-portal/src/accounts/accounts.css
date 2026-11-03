@@ -104,11 +104,17 @@
 .usage-trend { min-width: 0; }
 .usage-chart-unit { color: #7d8ba0; font-size: 11px; margin: 0 0 7px; }
 .usage-chart { display: block; width: 100%; height: 260px; max-width: none; overflow: visible; }
+.usage-chart-stage { position: relative; }
+.usage-chart:focus-visible { outline: 2px solid #9bb8db; outline-offset: 5px; border-radius: 4px; }
 .usage-chart text { font-family: inherit; font-size: 11px; fill: #7b8da5; }
 .usage-gridline { stroke: #eaf0f6; stroke-width: 1; }
 .usage-chart-line { stroke: #3f70a4; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .usage-chart-point { fill: #fff; stroke: #3f70a4; stroke-width: 1.7; }
 .usage-chart-point:hover { fill: #3f70a4; }
+.usage-chart-guide { stroke: #a8bdd5; stroke-width: 1; stroke-dasharray: 3 4; pointer-events: none; }
+.usage-chart-tooltip { position: absolute; display: grid; gap: 6px; padding: 11px 13px; border: 1px solid #dce5f0; border-radius: 7px; background: #fff; box-shadow: 0 4px 15px #183d6420; pointer-events: none; z-index: 1; }
+.usage-chart-tooltip span { color: #788aa1; font-size: 11px; }
+.usage-chart-tooltip strong { color: var(--navy); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-chart-empty { min-height: 260px; display: flex; flex-direction: column; justify-content: center; }
 .usage-chart-bottom { display: flex; justify-content: space-between; align-items: flex-start; gap: 15px; color: #8290a2; font-size: 11px; margin-top: 10px; }
 .usage-chart-bottom button { flex-shrink: 0; font-size: 12px; }
@@ -117,11 +123,15 @@
 .usage-data-table th, .usage-data-table td { border-bottom: 1px solid var(--border); padding: 10px 8px; }
 .usage-data-table th { background: #f7f9fc; font-weight: 500; position: sticky; top: 0; }
 .usage-data-table td:last-child { font-variant-numeric: tabular-nums; }
+.usage-data-heading { display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; font-size: 12px; color: #50677f; }
+.usage-data-heading span:last-child { color: #7d8fa5; font-size: 11px; }
+.usage-observation-pagination { border-top: 0; padding: 14px 0 0; font-size: 11px; gap: 12px; flex-wrap: wrap; }
+.usage-observation-pagination .button { min-height: 34px; font-size: 11px; padding: 7px 10px; }
 .usage-config-heading { margin: 25px 0 18px; }
 .usage-vendor-label { background: #f2f6fb; color: #57789c; border-radius: 5px; padding: 5px 9px; font-size: 12px; white-space: nowrap; }
 .usage-config-table .switch span { font-family: inherit; }
 .usage-interval { position: relative; max-width: 210px; }
-.usage-interval input { padding-right: 60px; font-variant-numeric: tabular-nums; }
+.usage-interval input { padding-right: 76px; font-variant-numeric: tabular-nums; }
 .usage-interval > span { position: absolute; right: 14px; top: 13px; font-size: 12px; color: #8392a5; pointer-events: none; }
 .usage-password { position: relative; }
 .usage-password input { padding-right: 44px; }

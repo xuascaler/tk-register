@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -74,7 +75,7 @@ var specs = []settingSpec{
 	{"admin_session_absolute_ttl_seconds", "sessions", "integer", "28800", "Maximum administrator session lifetime, in seconds.", 300, 86400, nil},
 	{"admin_session_idle_ttl_seconds", "sessions", "integer", "1800", "Administrator session expires after this much inactivity, in seconds.", 60, 86400, nil},
 	{"account_sync_enabled", "account_sync", "boolean", "false", "Collect account status, usage, and cumulative spend from the supplier website.", 0, 0, nil},
-	{"account_sync_interval_hours", "account_sync", "integer", "2", "Time between automatic collection runs, in hours.", 1, 168, nil},
+	{"account_sync_interval_seconds", "account_sync", "integer", "300", "Time between automatic collection runs, in seconds.", 60, 604800, nil},
 	{"account_sync_timezone", "account_sync", "enum", "Asia/Shanghai", "Timezone used for collection dates and account usage history.", 0, 0, []string{"Asia/Shanghai", "Asia/Singapore", "UTC"}},
 	{"account_sync_website_username", "account_sync", "string", "", "Administrator login username for the supplier website.", 0, 254, nil},
 	{"account_sync_website_password", "account_sync", "secret", "", "Encrypted at rest and never shown again. Leave blank to keep the saved password.", 0, 4096, nil},
@@ -82,6 +83,9 @@ var specs = []settingSpec{
 
 func (s *Store) seedDefaults() error {
 	return s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := migrateSyncIntervalSeconds(tx); err != nil {
+			return err
+		}
 		for _, spec := range specs {
 			row := Setting{Key: spec.Key, Value: spec.Default, Category: spec.Category, Type: spec.Type, IsSecret: spec.Type == "secret"}
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
@@ -201,6 +205,8 @@ func (s *Store) PatchSettings(ctx context.Context, changes map[string]string, ac
 			return err
 		}
 		previousSyncUsername := values.String("account_sync_website_username")
+		previousInterval := values.Int("account_sync_interval_seconds")
+		previousEnabled := values.Bool("account_sync_enabled")
 		for key, value := range changes {
 			if known[key].Type == "secret" && value == "" {
 				continue
@@ -235,6 +241,11 @@ func (s *Store) PatchSettings(ctx context.Context, changes map[string]string, ac
 				}
 			}
 			if err = tx.Model(&Setting{}).Where(clause.Eq{Column: "key", Value: key}).Updates(map[string]interface{}{"value": value, "updated_by": actorID}).Error; err != nil {
+				return err
+			}
+		}
+		if previousInterval != values.Int("account_sync_interval_seconds") || previousEnabled != values.Bool("account_sync_enabled") {
+			if err := resetAccountSchedule(tx, values, time.Now().UTC()); err != nil {
 				return err
 			}
 		}

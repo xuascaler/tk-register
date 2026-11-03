@@ -125,7 +125,7 @@ export const lookupResponseFields: FieldDefinition[] = [
   { name: 'last_success_at', type: 'string | null', description: 'RFC3339 time of the most recent successful collection. A successful collection does not imply a healthy account.' },
   { name: 'last_attempt_at', type: 'string | null', description: 'RFC3339 time of the latest collection attempt, successful or not.' },
   { name: 'last_error', type: 'string | null', description: 'Sanitized collection failure message, or null if no error is recorded.' },
-  { name: 'interval_hours', type: 'integer', description: 'Current configured collection interval in hours. Default: 2. This value alone does not indicate that collection is enabled.' },
+  { name: 'interval_seconds', type: 'integer', description: 'Current configured collection interval in seconds. Default: 300. This value alone does not indicate that collection is enabled.' },
 ];
 
 export const snapshotFields: FieldDefinition[] = [
@@ -291,7 +291,7 @@ export const lookupResponse = {
     last_success_at: '2026-11-01T02:00:00+08:00',
     last_attempt_at: '2026-11-01T02:00:00+08:00',
     last_error: null,
-    interval_hours: 2,
+    interval_seconds: 300,
   },
 };
 

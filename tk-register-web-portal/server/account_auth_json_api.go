@@ -132,7 +132,7 @@ func (a *app) claudeAccountAuthJSONAPI(w http.ResponseWriter, r *http.Request) {
 	a.runAccountAuthJSON(w, r, &user, id, false, lookup, authJSONOperation{
 		Token: &token, Input: input.AuthJSON,
 		FormatAccount: func(account core.AccountDTO) any {
-			return publicAccountLookup(account, user.Email, settings.Int("account_sync_interval_hours"))
+			return publicAccountLookup(account, user.Email, settings.Int("account_sync_interval_seconds"))
 		},
 	})
 }

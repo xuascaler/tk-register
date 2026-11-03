@@ -81,7 +81,7 @@ Administrators edit a typed Key / Value / Description table grouped into Email d
 
 ## Account usage and scheduled collection
 
-**My account → Accounts** shows saved status, usage, cumulative spending and 7/30/90-day trends. **Config → Account sync** configures supplier website credentials and collection frequency (default two hours, paused until configured). Each run signs in afresh; failed runs preserve the last successful data. See the [Account usage collection guide](docs/account-sync.md) for setup, data semantics and API behavior.
+**My account → Accounts** shows saved status, usage, cumulative spending and 7/30/90-day trends. **Config → Account sync** configures supplier website credentials and collection frequency in seconds (default 300 seconds, paused until configured). Runs reuse a valid supplier login session; failed runs preserve the last successful data. Scheduled rounds do not overlap or accumulate missed work. Usage trends render smooth curves from bounded representative observations, while original snapshots remain available through paginated history. See the [Account usage collection guide](docs/account-sync.md) for setup, data semantics and API behavior.
 
 ## Vendor account submissions
 
@@ -169,7 +169,7 @@ Complete upstream responses retain their HTTP status and content type without a 
 
 `X-Request-ID` identifies the request/execution. `X-Submission-ID` is included only after a local submission record exists. These are local tracking headers; an `id` in the vendor response remains the vendor's ID. Each new API POST is a new manual attempt, subject to accepted/running duplicate protection.
 
-A newly accepted API submission with a valid vendor ID also queues one account Sync job, due three seconds after acceptance. The API response does not wait for collection. A failed collection is retried after three seconds, up to three additional retries (four attempts total). If the shared collection lease is busy, the pending job is deferred five seconds without consuming an attempt. These retries only read account status and usage; they never repeat account creation. Success updates the usual account snapshot; failures preserve the last successful data. Saved supplier website credentials are required, independently of whether the two-hour schedule is enabled. Browser submissions, unsuccessful submissions and historical accepted records are not queued by this feature. See the [automatic synchronization details](docs/account-sync.md#automatic-sync-after-api-submission).
+A newly accepted API submission with a valid vendor ID also queues one account Sync job, due three seconds after acceptance. The API response does not wait for collection. A failed collection is retried after three seconds, up to three additional retries (four attempts total). If the shared collection lease is busy, the pending job is deferred five seconds without consuming an attempt. These retries only read account status and usage; they never repeat account creation. Success updates the usual account snapshot; failures preserve the last successful data. Saved supplier website credentials are required, independently of whether scheduled collection is enabled. Browser submissions, unsuccessful submissions and historical accepted records are not queued by this feature. See the [automatic synchronization details](docs/account-sync.md#automatic-sync-after-api-submission).
 
 The Accounts list and usage details read saved snapshots from scheduled collection, successful API operations and explicit collection; opening or refreshing the list does not query the supplier. Each list row has a Sync button; account details retain Sync now. Submission detail status and billing queries remain separate from this collection flow.
 
@@ -182,7 +182,7 @@ Authorization: Bearer <your TK Register API token>
 
 This endpoint requires `accounts:read` and both exact query identifiers, with no request body. It returns an owned account's saved status, cumulative usage, last successful collection time and sanitized latest collection error. It never triggers supplier login or synchronization. A personal administrator token cannot read another user's accounts. Missing or out-of-scope records return the same 404 response; the lookup limit is 600 requests per minute per user. Submission requests use a separate per-user limit.
 
-See the [Account Lookup API reference](docs/account-lookup-api.md) for cURL examples, response fields, null/zero/freshness behavior and error handling. The [Account usage collection guide](docs/account-sync.md) explains the default two-hour collection schedule and administrator configuration.
+See the [Account Lookup API reference](docs/account-lookup-api.md) for cURL examples, response fields, null/zero/freshness behavior and error handling. The [Account usage collection guide](docs/account-sync.md) explains the default 300-second collection schedule and administrator configuration.
 
 ### Auth JSON updates
 
@@ -210,7 +210,7 @@ Role updates are serialized and saved in one database transaction with an `admin
 
 **Account pool → Submission history** lists all individual submissions. Account and submission details retain the owner and vendor, original non-secret parameters, remote IDs and status. The account detail includes its complete paginated submission history. Historical activity and bills remain tied to the selected submission's remote ID; the current account status has its own refresh action. Back controls return to the originating account or global history.
 
-The lists load at most twenty rows per page. Accounts supports account-status filtering and reads saved usage; each accepted account has an explicit Sync button. Opening, reloading, searching or changing pages does not query the supplier. Submission history has separate submission-state filters and reads saved attempts. Background account collection remains configurable (two hours by default). User accounts, API routes and vendor secrets remain isolated from the GoAPI/New API account system.
+The lists load at most twenty rows per page. Accounts supports account-status filtering and reads saved usage; each accepted account has an explicit Sync button. Opening, reloading, searching or changing pages does not query the supplier. Submission history has separate submission-state filters and reads saved attempts. Background account collection remains configurable in seconds (300 seconds by default). User accounts, API routes and vendor secrets remain isolated from the GoAPI/New API account system.
 
 All following routes require a current TK administrator session; writes require the session CSRF token and a valid same-origin request. Vendor queries resolve the submitting user and remote ID server-side and apply the query limit to the administrator making the request. The personal `/submissions` routes remain owner-only, including for administrators.
 

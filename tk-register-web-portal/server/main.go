@@ -121,7 +121,7 @@ func run() error {
 	if e != nil {
 		return errors.New("TK Register could not initialize supplier sessions")
 	}
-	app := &app{supplierClient: supplierClient, store: store, redis: redisClient, mail: &core.Mailer{Store: store}, secret: key, adminEmail: admin, origin: origin, secure: secure, assets: env("TK_REGISTER_ASSETS", "/opt/tk-register-web-portal")}
+	app := &app{accountSyncWake: make(chan struct{}, 1), supplierClient: supplierClient, store: store, redis: redisClient, mail: &core.Mailer{Store: store}, secret: key, adminEmail: admin, origin: origin, secure: secure, assets: env("TK_REGISTER_ASSETS", "/opt/tk-register-web-portal")}
 	listener, e := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if e != nil {
 		return fmt.Errorf("TK Register could not listen on port %d", port)

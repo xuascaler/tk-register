@@ -9,7 +9,7 @@ Open **Management → Config → Account sync** (`/tk-register/#/config/account_
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | `enabled` | `false` | Enables scheduled collection. Pausing does not remove saved history. |
-| `interval_hours` | `2` | Whole hours between automatic runs; accepted range is 1–168. |
+| `interval_seconds` | `300` | Seconds between planned automatic rounds; accepts whole numbers from 60 to 604800. `300` means five minutes. |
 | `timezone` | `Asia/Shanghai` | Timezone for snapshot dates and usage history. Also supports `Asia/Singapore` and `UTC`. |
 | `data_source` | Supplier website | Fixed source for this integration. |
 | `website_username` | Empty | Supplier website login username, configured by an administrator. |
@@ -18,6 +18,16 @@ Open **Management → Config → Account sync** (`/tk-register/#/config/account_
 **Test login** tests the current form values without saving them or collecting account data. A successful test does not enable the schedule. **Save changes** stores the form values; **Discard** restores the saved values. The collection status section shows the latest attempt, latest successful run, next scheduled collection and any failure message.
 
 Credentials are stored in the TK Register configuration database. The password is encrypted with the existing application encryption key and is never returned to the browser. The browser receives only whether a password is configured. Preserve the encryption key across deployments and backups.
+
+## Scheduling and upgrade behavior
+
+The public configuration field is `interval_seconds`; its database setting is `account_sync_interval_seconds`. The migration converts an existing integer-hour setting to seconds exactly once (`2` becomes `7200`) and preserves a previously saved seconds value. New installations start at `300`. Saving a new interval recomputes the next collection time; history is not deleted, and restarting the service does not reset customized values. The administrator page displays **Next sync** from the persisted schedule.
+
+The worker waits for the next due time rather than rounding execution to a 30-second check. Configuration changes wake or invalidate that wait. Planned rounds share the same distributed synchronization lease as manual and post-operation collection. A round that is still running prevents another full collection from starting. Overlapping planned slots are skipped rather than queued: with a 300-second interval, a round starting at 10:00 and finishing at 10:07 proceeds to the next future slot at 10:10, without replaying 10:05. Recovery after downtime starts at most one current collection, then resumes the schedule; it never sends a burst of historical catch-up requests.
+
+The collector retains the existing five-minute whole-run deadline and seven-minute lease safety bound; the lease is released as soon as work completes. A supplier cooldown delays eligible collection without keeping an HTTP request open. These scheduling rules do not remove pending single-account jobs created by successful API submissions or Auth JSON updates. Those durable jobs keep their separate retry and deferral behavior described below.
+
+Each round uses the supplier website's account-list endpoint with `page_size=100`, reading successive pages until the declared total is reached. It does not issue one query per local account. With a valid session, a normal round needs approximately `ceil(supplier account count / 100)` GETs (an empty result still needs one). Only a missing or expired session adds login work. Reducing a two-hour interval to 300 seconds raises planned rounds from 12 to 288 per day; successful snapshot writes increase correspondingly.
 
 ## Authentication lifecycle
 
@@ -80,9 +90,9 @@ Each row has a **Sync** button. Clicking it sends only that account's stable loc
 
 Only accounts with an accepted submission can be synchronized. Rows without one show **Awaiting acceptance** with a disabled Sync button. Supplier errors, busy responses and rate limits retain the last successful status, usage, amount and timestamp. A row shows concise failure feedback with details; HTTP 200 is not treated as success unless the per-account result confirms the update. Manual Sync is not retried automatically. If the server provides a retry interval, that row displays a cooldown before another manual attempt, including failed rows inside an HTTP 200 batch response. `Login retry` and `Query retry` identify which operation is waiting. Leaving the list or changing its scope cancels the UI request and ignores late responses; an already-started server operation may still save its result.
 
-Opening an account detail page also reads saved history. **Sync now** explicitly requests a fresh collection there. Manual collection remains available with saved credentials when scheduled collection is paused. The configurable background schedule (two hours by default), detail-page collection and Auth JSON update flow are unchanged. Server authorization, rate limits, bounded concurrency and supplier availability apply to all fresh collection requests.
+Opening an account detail page also reads saved history. **Sync now** explicitly requests a fresh collection there. Manual collection remains available with saved credentials when scheduled collection is paused. The configurable background schedule defaults to 300 seconds. Detail-page collection and the browser Auth JSON update flow remain explicit operations. Server authorization, rate limits, bounded concurrency and supplier availability apply to all fresh collection requests.
 
-The account detail page shows cumulative spending, input/output tokens, quota-window usage and reset times. The trend supports **7, 30 or 90 days** and separate spending, input-token and output-token views. **View data** exposes the saved observations in a table. **View submission** opens the associated submission record, with a return action to the account detail.
+The account detail page shows cumulative spending, input/output tokens, quota-window usage and reset times. The trend supports **7, 30 or 90 days** and separate spending, input-token and output-token views. It renders smooth curves without permanent sample dots; hovering or focusing the chart reveals the time and value of a saved representative observation. Interpolation is monotone within each valid segment, so it cannot introduce peaks outside the neighboring values. Missing values, long collection gaps and counter resets break the curve. **View data** exposes original observations in a paginated table. **View submission** opens the associated submission record, with a return action to the account detail.
 
 **Management → Account pool → Accounts** reuses the same saved account list with per-row Sync controls, usage details and trends across all users, adding the owner email in a **User** column and in account details. Administrators can search by account or owner email and explicitly sync an account. These routes require an active administrator session; ordinary members remain limited to their own accounts.
 
@@ -119,7 +129,7 @@ An ordinary failed collection returns the job to `pending` with `next_run_at = n
 
 For Auth JSON jobs, the audit's `refresh_status` remains `pending` while queued or retrying, becomes `succeeded` after a saved collection, and becomes `failed` if retries are exhausted or the target is skipped. The credential update outcome stays `updated`. The HTTP response has already returned and does not change later; clients can read saved collection results and timestamps through account lookup.
 
-Pending jobs survive backend restarts. An interrupted `running` job older than two minutes uses the remaining retry budget; it is rescheduled after three seconds if fewer than four attempts were claimed, otherwise it ends as failed. This recovery repeats only a read. Existing manual Sync, the regular two-hour schedule, and the browser Auth JSON editor's immediate refresh retain their existing behavior.
+Pending jobs survive backend restarts. An interrupted `running` job older than two minutes uses the remaining retry budget; it is rescheduled after three seconds if fewer than four attempts were claimed, otherwise it ends as failed. This recovery repeats only a read. Manual Sync and the browser Auth JSON editor's immediate refresh remain explicit operations. The regular schedule is configured separately in seconds. Skipping a missed periodic round never deletes or skips a pending post-submission or post-update job.
 
 ## Values and history
 
@@ -129,9 +139,18 @@ Pending jobs survive backend restarts. An interrupted `running` job older than t
 - Input and output tokens are cumulative counters. Five-hour and seven-day quota values are normalized to percentages by the server before display.
 - An unavailable metric remains SQL `NULL` / JSON `null` and appears as **—**. A known zero remains `0`, `0%` or `0.00 $` as appropriate.
 - Failed collection does not replace the latest successful snapshot with zeros. The list shows **Last known** and **Update failed**; detail shows the failure and the timestamp of the retained successful data. An account that has never been successfully collected continues to show **—**.
+- New snapshots also retain the configured collection cadence as internal `collection_interval_seconds` metadata. This keeps earlier valid curves intact when an administrator changes the interval. Legacy snapshots without that metadata use the retired hours setting as the best available historical cadence; their original metrics are not rewritten.
 - Snapshot dates follow the configured timezone; `collected_at` records the actual collection instant. The supplier's account-metadata timestamp is not treated as a usage-update timestamp, so `source_updated_at` stays null unless a reliable usage timestamp is available.
 - Trends plot saved cumulative observations. Missing observations, long gaps, currency changes and counter resets are not joined into a continuous line. They do not represent zero consumption or calculated interval usage.
 - A new accepted remote identity or plan starts a new displayed account lifetime. Earlier observations remain stored but are not connected to the new lifetime's trend.
+
+### Trend response and original observations
+
+The browser detail response includes `account`, `interval_seconds`, `timezone`, `trend`, `trend_reduced`, `snapshot_count`, `snapshots`, `snapshot_page`, and `snapshot_page_size`. `trend` has `cost_total_usd`, `input_tokens_total`, and `output_tokens_total` entries. Each is an array of separate curve segments; a point contains `snapshot_id`, `collected_at`, and `value`. Segments must not be connected across missing data or counter resets. Each metric returns at most 1,000 representative points. Reduction selects actual saved observations and retains segment endpoints; it does not fabricate amounts. If fragmented segments alone exceed the point budget, older complete segments can be omitted, with `trend_reduced: true`. The page indicates reduced chart detail and offers the paginated original observations. Point reduction changes only the visual representation, not stored snapshots or the latest account totals.
+
+The detail response includes the first observation page, with `snapshot_page=1` and `snapshot_page_size=50`. Page 1 selects the newest observations; items within each page are displayed in chronological order. Additional pages are available from the snapshot endpoints below. `page_size` accepts 1–100 and defaults to 50. The total count refers to the requested 7/30/90-day range and current account lifetime. Empty ranges return an empty table and trend, never zero-valued synthetic observations.
+
+Cumulative snapshots must not be summed to calculate a cumulative total. Any representative or time-bucketed cumulative display uses saved cumulative observations, not the sum of repeated counters. The paginated table remains the source for exact stored values and timestamps.
 
 ## Personal-token account lookup
 
@@ -163,17 +182,19 @@ The following paths are relative to `/tk-register/api` and use the existing JSON
 | --- | --- |
 | `GET /accounts?page=1&search=&status=` | Owner-scoped saved account list: `items`, `total`, `page`, `page_size`. |
 | `POST /accounts/sync` | `{ "account_ids": ["1", "2"] }`, up to 20 owned local account IDs. Returns `accounts`, per-account `results` (`updated`, `failed`, `skipped`), and `updated_count`, `failed_count`, `skipped_count`. Partial failures do not discard successful observations. |
-| `GET /accounts/:id?days=7` | Owned account, current-lifetime snapshots, collection interval and timezone. `days` accepts 7, 30 or 90. |
+| `GET /accounts/:id?days=7` | Owned account, bounded segmented trend data, the first page of current-lifetime observations, collection interval in seconds and timezone. `days` accepts 7, 30 or 90. |
+| `GET /accounts/:id/snapshots?days=7&page=1&page_size=50` | Paginated original observations for the owned account's current lifetime. Returns `items`, `total`, `page`, `page_size`. |
 | `POST /accounts/:id/sync` | Explicit fresh collection using `{}`; returns the account with its latest saved result or `last_error`. |
 | `GET /accounts/:id/auth-json` | Fresh supplier eligibility and account identity, without credentials: `account`, `plan`, `editable`, `reason`, `supplier_record_id`, `updated_at`. |
 | `POST /accounts/:id/auth-json` | `{ "auth_json": object-or-JSON-string }`; updates credentials once and immediately refreshes the account. Returns `updated`, `refresh_status`, `refresh_message`, `account`, `updated_at`. A confirmed update can return `account: null` if local readback fails; the UI retains its existing data and reports the readback failure. |
 | `GET /admin/synced-accounts?page=1&search=&status=` | Administrator saved account list across users; same metrics plus `user_id` and `user_email`. |
 | `POST /admin/synced-accounts/sync` | Administrator version of targeted account synchronization; same request and response, with owner information in returned accounts. |
-| `GET /admin/synced-accounts/:id?days=7` | Administrator view of a stable synced account and its snapshots. |
+| `GET /admin/synced-accounts/:id?days=7` | Administrator account detail with the same bounded trend and snapshot-page contract. |
+| `GET /admin/synced-accounts/:id/snapshots?days=7&page=1&page_size=50` | Administrator view of paginated original observations for the account's current lifetime. |
 | `POST /admin/synced-accounts/:id/sync` | Administrator-triggered fresh collection for that account, with the same configuration, concurrency and cooldown checks. |
 | `GET/POST /admin/synced-accounts/:id/auth-json` | Administrator version of the eligibility/update endpoints, with the same upstream and refresh behavior. |
 | `GET /admin/account-sync` | Administrator configuration without the saved password, plus collection status. |
-| `PUT /admin/account-sync` | Save `enabled`, `interval_hours`, `timezone`, `website_username` and optional `website_password`. |
+| `PUT /admin/account-sync` | Save `enabled`, `interval_seconds`, `timezone`, `website_username` and optional `website_password`. |
 | `POST /admin/account-sync/test-login` | Test `website_username` and optional `website_password`; success returns `authenticated: true`. A blank password uses the saved password only for the same saved username. |
 
 Accounts-list Sync batch requests allow **200 requests per minute per acting user**, shared across member and administrator list routes. Each batch still accepts at most 20 account IDs. Auth JSON editor eligibility GETs allow **300 requests per minute per acting user**. Auth JSON writes allow **100 requests per minute per user**, shared between browser and public API updates. Detail-page Sync retains its cooldown of one request per minute for each acting user and account.

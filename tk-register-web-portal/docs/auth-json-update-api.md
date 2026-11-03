@@ -102,7 +102,7 @@ The `account` object includes saved account identifiers, submission status, coll
 
 For a queued update, the first targeted collection becomes due three seconds after the confirmed write. If collection fails, the worker waits three seconds after the failure and retries, up to **three additional retries (four attempts total)**. A busy shared synchronization lock defers the job five seconds without consuming an attempt. These delays are minimum scheduling delays, so long requests or busy locks can make completion take longer. The worker only reads the account; it never repeats the credential write.
 
-Success stores the account's status, quota windows, token totals, spend and collection time. Failure retains the last successful snapshot. A supplier status such as banned or offline is not proof that the credential write failed. The two-hour schedule and explicit **Sync** action remain available. The browser Auth JSON editor retains its existing immediate-refresh behavior; this asynchronous response contract applies to the public API.
+Success stores the account's status, quota windows, token totals, spend and collection time. Failure retains the last successful snapshot. A supplier status such as banned or offline is not proof that the credential write failed. The configurable schedule and explicit **Sync** action remain available. The browser Auth JSON editor retains its existing immediate-refresh behavior; this asynchronous response contract applies to the public API.
 
 For example, the queued response below contains a snapshot collected five minutes before the credential update. It is safe saved data, not the result of the queued synchronization:
 
@@ -147,7 +147,7 @@ For example, the queued response below contains a snapshot collected five minute
       "last_success_at": "2026-11-01T02:00:00+08:00",
       "last_attempt_at": "2026-11-01T02:00:00+08:00",
       "last_error": null,
-      "interval_hours": 2
+      "interval_seconds": 300
     }
   }
 }

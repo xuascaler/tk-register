@@ -3,17 +3,17 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { errorMessage, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import Select from '../submissions/Select';
-import { formatTime } from './helpers';
+import { formatTime, validSyncInterval } from './helpers';
 import type { SyncConfig } from './types';
 
-type Draft = { enabled: boolean; interval_hours: string; timezone: string; website_username: string; website_password: string };
+type Draft = { enabled: boolean; interval_seconds: string; timezone: string; website_username: string; website_password: string };
 function draftFrom(config: SyncConfig): Draft {
-  return { enabled: config.enabled, interval_hours: String(config.interval_hours), timezone: config.timezone, website_username: config.website_username, website_password: '' };
+  return { enabled: config.enabled, interval_seconds: String(config.interval_seconds), timezone: config.timezone, website_username: config.website_username, website_password: '' };
 }
 
 export default function AccountSyncConfig({ onDirty }: { onDirty: (value: boolean) => void }) {
   const [saved, setSaved] = useState<SyncConfig | null>(null);
-  const [draft, setDraft] = useState<Draft>({ enabled: false, interval_hours: '2', timezone: 'Asia/Shanghai', website_username: '', website_password: '' });
+  const [draft, setDraft] = useState<Draft>({ enabled: false, interval_seconds: '300', timezone: 'Asia/Shanghai', website_username: '', website_password: '' });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<'save' | 'test' | ''>('');
   const [error, setError] = useState('');
@@ -22,7 +22,7 @@ export default function AccountSyncConfig({ onDirty }: { onDirty: (value: boolea
   const [visible, setVisible] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const pending = useRef<AbortController | null>(null);
-  const changed = !!saved && (draft.enabled !== saved.enabled || draft.interval_hours !== String(saved.interval_hours) || draft.timezone !== saved.timezone || draft.website_username !== saved.website_username || draft.website_password !== '');
+  const changed = !!saved && (draft.enabled !== saved.enabled || draft.interval_seconds !== String(saved.interval_seconds) || draft.timezone !== saved.timezone || draft.website_username !== saved.website_username || draft.website_password !== '');
   useEffect(() => { onDirty(changed); return () => onDirty(false); }, [changed, onDirty]);
   useEffect(() => () => pending.current?.abort(), []);
   useEffect(() => {
@@ -56,14 +56,14 @@ export default function AccountSyncConfig({ onDirty }: { onDirty: (value: boolea
   async function save(event: FormEvent) {
     event.preventDefault();
     if (busy || !changed) return;
-    const hours = Number(draft.interval_hours);
+    const seconds = Number(draft.interval_seconds);
     const credentialsChanged = draft.website_username !== saved?.website_username || !!draft.website_password;
-    const problem = !Number.isInteger(hours) || hours < 1 || hours > 168 ? 'Enter a whole number of hours from 1 to 168.' : (draft.enabled || credentialsChanged) ? credentialsError() : '';
+    const problem = !validSyncInterval(seconds) ? 'Enter a whole number of seconds from 60 to 604800.' : (draft.enabled || credentialsChanged) ? credentialsError() : '';
     if (problem) { setError(problem); return; }
     const controller = new AbortController(); pending.current = controller;
     setBusy('save'); setError(''); setNotice('');
     try {
-      const config = await request<SyncConfig>('/admin/account-sync', { method: 'PUT', signal: controller.signal, body: { enabled: draft.enabled, interval_hours: hours, timezone: draft.timezone, website_username: draft.website_username.trim(), ...(draft.website_password ? { website_password: draft.website_password } : {}) } });
+      const config = await request<SyncConfig>('/admin/account-sync', { method: 'PUT', signal: controller.signal, body: { enabled: draft.enabled, interval_seconds: seconds, timezone: draft.timezone, website_username: draft.website_username.trim(), ...(draft.website_password ? { website_password: draft.website_password } : {}) } });
       if (!controller.signal.aborted) { setSaved(config); setDraft(draftFrom(config)); setVisible(false); setTestResult(null); setNotice('Changes saved.'); }
     } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
     finally { if (!controller.signal.aborted) setBusy(''); }
@@ -77,7 +77,7 @@ export default function AccountSyncConfig({ onDirty }: { onDirty: (value: boolea
     <form onSubmit={save} noValidate>
       <table className='config-table usage-config-table'><caption className='sr-only'>Account collection settings</caption><colgroup><col /><col /><col /></colgroup><thead><tr><th scope='col'>Key</th><th scope='col'>Value</th><th scope='col'>Description</th></tr></thead><tbody>
         {row('enabled', <label className='switch'><input type='checkbox' role='switch' aria-labelledby='sync-key-enabled' checked={draft.enabled} disabled={!!busy} onChange={event => change('enabled', event.target.checked)} /><span>{draft.enabled ? 'Enabled' : 'Paused'}</span></label>, 'Run collection automatically, even when no one has the website open.')}
-        {row('interval_hours', <div className='usage-interval'><input id='sync-interval' type='number' min='1' max='168' step='1' value={draft.interval_hours} disabled={!!busy} aria-labelledby='sync-key-interval_hours' aria-describedby='sync-description-interval_hours' onChange={event => change('interval_hours', event.target.value)} /><span>hours</span></div>, 'Time between collections. A new interval applies after saving; existing history is kept.')}
+        {row('interval_seconds', <div className='usage-interval'><input id='sync-interval' type='number' min='60' max='604800' step='1' value={draft.interval_seconds} disabled={!!busy} aria-labelledby='sync-key-interval_seconds' aria-describedby='sync-description-interval_seconds' onChange={event => change('interval_seconds', event.target.value)} /><span>seconds</span></div>, 'Seconds between scheduled collections. 300 seconds is 5 minutes. Saving a new interval reschedules the next run; existing history is kept.')}
         {row('timezone', <Select id='sync-timezone' label='Collection timezone' hiddenLabel value={draft.timezone} disabled={!!busy} onChange={value => change('timezone', value)} options={[{ value: 'Asia/Shanghai', label: 'Asia/Shanghai' }, { value: 'Asia/Singapore', label: 'Asia/Singapore' }, { value: 'UTC', label: 'UTC' }]} />, 'Timezone used for collection dates and usage history. Each snapshot retains its actual collection time.')}
         {row('data_source', <span>Supplier website</span>, 'Read account information from the supplier website.')}
         {row('website_username', <input id='sync-username' type='text' autoComplete='off' spellCheck={false} maxLength={254} value={draft.website_username} disabled={!!busy} aria-labelledby='sync-key-website_username' aria-describedby='sync-description-website_username' placeholder='Website login username' onChange={event => change('website_username', event.target.value)} />, 'The administrator’s login username for the supplier website.')}
@@ -90,6 +90,6 @@ export default function AccountSyncConfig({ onDirty }: { onDirty: (value: boolea
       {notice && <div className='notice success' role='status'><Check aria-hidden='true' />{notice}</div>}
       <div className='save-footer'><span className='save-state' role='status'>{changed ? 'Unsaved changes' : 'No unsaved changes'}</span><div className='footer-actions'><button type='button' className='button quiet' disabled={!changed || !!busy} onClick={() => { setDraft(draftFrom(saved)); setVisible(false); setError(''); setNotice(''); setTestResult(null); }}>Discard</button><button type='submit' className='button primary' disabled={!changed || !!busy}>{busy === 'save' ? 'Saving…' : 'Save changes'}</button></div></div>
     </form>
-    <div className='usage-sync-status'><div className='usage-config-heading'><h2>Collection status</h2><button type='button' className='button pale usage-icon-button' aria-label='Refresh collection status' disabled={loading || !!busy || changed} onClick={() => setAttempt(v => v + 1)}><RefreshCw aria-hidden='true' /></button></div><dl><div><dt>Status</dt><dd>{saved.running ? 'Collecting' : saved.enabled ? 'Scheduled' : 'Paused'}</dd></div><div><dt>Last attempt</dt><dd>{formatTime(saved.last_run_at, saved.timezone)}</dd></div><div><dt>Last success</dt><dd>{formatTime(saved.last_success_at, saved.timezone)}</dd></div><div><dt>Next collection</dt><dd>{saved.enabled ? formatTime(saved.next_run_at, saved.timezone) : '—'}</dd></div></dl>{saved.last_error && <div className='usage-stale-notice'><strong>Last collection failed</strong><p>{saved.last_error}</p></div>}</div>
+    <div className='usage-sync-status'><div className='usage-config-heading'><h2>Collection status</h2><button type='button' className='button pale usage-icon-button' aria-label='Refresh collection status' disabled={loading || !!busy || changed} onClick={() => setAttempt(v => v + 1)}><RefreshCw aria-hidden='true' /></button></div><dl><div><dt>Status</dt><dd>{saved.running ? 'Collecting' : saved.enabled ? 'Scheduled' : 'Paused'}</dd></div><div><dt>Last attempt</dt><dd>{formatTime(saved.last_run_at, saved.timezone)}</dd></div><div><dt>Last success</dt><dd>{formatTime(saved.last_success_at, saved.timezone)}</dd></div><div><dt>Next sync</dt><dd>{saved.enabled ? formatTime(saved.next_run_at, saved.timezone) : '—'}</dd></div></dl>{saved.last_error && <div className='usage-stale-notice'><strong>Last collection failed</strong><p>{saved.last_error}</p></div>}</div>
   </section>;
 }

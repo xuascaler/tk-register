@@ -121,7 +121,7 @@ All identifiers are JSON strings. All times shown below are examples.
     "last_success_at": "2026-11-01T02:00:00+08:00",
     "last_attempt_at": "2026-11-01T02:00:00+08:00",
     "last_error": null,
-    "interval_hours": 2
+    "interval_seconds": 300
   }
 }
 ```
@@ -142,7 +142,7 @@ All identifiers are JSON strings. All times shown below are examples.
 | `last_success_at` | RFC3339 string or null | Most recent successful collection time. Does not indicate that the supplier account is healthy. |
 | `last_attempt_at` | RFC3339 string or null | Most recent collection attempt, whether successful or unsuccessful. |
 | `last_error` | string or null | Sanitized collection failure message, or `null` when no failure is recorded. |
-| `interval_hours` | integer | Current configured automatic collection interval in hours. The default is 2; administrators can change it. This field alone does not indicate that scheduled collection is enabled. |
+| `interval_seconds` | integer | Current configured automatic collection interval in seconds. The default for a new installation is 300; administrators can choose an integer from 60 to 604800. This field alone does not indicate that scheduled collection is enabled. |
 
 ### Snapshot fields
 

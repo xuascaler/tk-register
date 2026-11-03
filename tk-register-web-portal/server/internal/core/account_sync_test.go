@@ -211,7 +211,7 @@ func TestAccountSyncSettingsRequireCredentialsAndKeepSecretsPrivate(t *testing.T
 	s := testStore(t)
 	ctx := context.Background()
 	values, err := s.Settings(ctx)
-	if err != nil || values.Bool("account_sync_enabled") || values.Int("account_sync_interval_hours") != 2 {
+	if err != nil || values.Bool("account_sync_enabled") || values.Int("account_sync_interval_seconds") != 300 {
 		t.Fatal("unsafe sync defaults", err)
 	}
 	if err = s.PatchSettings(ctx, map[string]string{"account_sync_enabled": "true"}, 1); !IsValidationError(err) {
@@ -221,7 +221,7 @@ func TestAccountSyncSettingsRequireCredentialsAndKeepSecretsPrivate(t *testing.T
 		t.Fatal("username changed without password", err)
 	}
 	password := "fixture-secret-website-password"
-	changes := map[string]string{"account_sync_enabled": "true", "account_sync_website_username": "supplier-test", "account_sync_website_password": password, "account_sync_interval_hours": "8"}
+	changes := map[string]string{"account_sync_enabled": "true", "account_sync_website_username": "supplier-test", "account_sync_website_password": password, "account_sync_interval_seconds": "28800"}
 	if err = s.PatchSettings(ctx, changes, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -241,21 +241,21 @@ func TestAccountSyncSettingsRequireCredentialsAndKeepSecretsPrivate(t *testing.T
 			t.Fatal("website password disclosed")
 		}
 	}
-	if err = s.PatchSettings(ctx, map[string]string{"account_sync_website_password": "", "account_sync_interval_hours": "12"}, 1); err != nil {
+	if err = s.PatchSettings(ctx, map[string]string{"account_sync_website_password": "", "account_sync_interval_seconds": "43200"}, 1); err != nil {
 		t.Fatal(err)
 	}
 	values, _ = s.Settings(ctx)
-	if values.String("account_sync_website_password") != password || values.Int("account_sync_interval_hours") != 12 {
+	if values.String("account_sync_website_password") != password || values.Int("account_sync_interval_seconds") != 43200 {
 		t.Fatal("blank replacement discarded password")
 	}
-	if err = s.PatchSettings(ctx, map[string]string{"account_sync_website_username": "new-user", "account_sync_interval_hours": "24"}, 1); !IsValidationError(err) {
+	if err = s.PatchSettings(ctx, map[string]string{"account_sync_website_username": "new-user", "account_sync_interval_seconds": "86400"}, 1); !IsValidationError(err) {
 		t.Fatal("changed username reused old password")
 	}
 	values, _ = s.Settings(ctx)
-	if values.Int("account_sync_interval_hours") != 12 {
+	if values.Int("account_sync_interval_seconds") != 43200 {
 		t.Fatal("invalid update partially applied")
 	}
-	for _, changes := range []map[string]string{{"account_sync_interval_hours": "0"}, {"account_sync_interval_hours": "169"}, {"account_sync_timezone": "Invalid/Zone"}} {
+	for _, changes := range []map[string]string{{"account_sync_interval_seconds": "0"}, {"account_sync_interval_seconds": "604801"}, {"account_sync_timezone": "Invalid/Zone"}} {
 		if err = s.PatchSettings(ctx, changes, 1); !IsValidationError(err) {
 			t.Fatal("invalid sync setting accepted", changes, err)
 		}

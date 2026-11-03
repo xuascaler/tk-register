@@ -89,7 +89,7 @@ func TestAuthJSONAPIQueuesRefreshAndAuditContract(t *testing.T) {
 				t.Fatal("expected one credential write and no inline account collection", fake)
 			}
 			account := out.Account
-			if account.ID != fmt.Sprint(target.ID) || account.Username != owner.Email || account.Account != target.Account || account.Vendor != "tk-register-0" || account.IntervalHours != 2 {
+			if account.ID != fmt.Sprint(target.ID) || account.Username != owner.Email || account.Account != target.Account || account.Vendor != "tk-register-0" || account.IntervalSeconds != 300 {
 				t.Fatalf("unsafe or incorrect public account attribution: %+v", account)
 			}
 			if account.Snapshot != nil || account.LastSuccessAt != nil {

@@ -37,7 +37,7 @@ var errSyncUnsupported = errors.New("this account is not eligible for collection
 
 type accountSyncConfig struct {
 	Enabled            bool       `json:"enabled"`
-	IntervalHours      int        `json:"interval_hours"`
+	IntervalSeconds    int        `json:"interval_seconds"`
 	Timezone           string     `json:"timezone"`
 	DataSource         string     `json:"data_source"`
 	WebsiteUsername    string     `json:"website_username"`
@@ -53,7 +53,7 @@ func syncDue(v core.Values, state core.AccountSyncState, now time.Time) bool {
 	if !v.Bool("account_sync_enabled") || v.String("account_sync_website_username") == "" || v.String("account_sync_website_password") == "" {
 		return false
 	}
-	return state.LastStartedAt == nil || !now.Before(state.LastStartedAt.Add(time.Duration(v.Int("account_sync_interval_hours"))*time.Hour))
+	return state.NextRunAt != nil && !now.Before(*state.NextRunAt)
 }
 
 func (a *app) syncConfig(ctx context.Context) (accountSyncConfig, error) {
@@ -70,16 +70,9 @@ func (a *app) syncConfig(ctx context.Context) (accountSyncConfig, error) {
 	if err != nil {
 		return out, err
 	}
-	out = accountSyncConfig{Enabled: v.Bool("account_sync_enabled"), IntervalHours: v.Int("account_sync_interval_hours"), Timezone: v.String("account_sync_timezone"), DataSource: "website", WebsiteUsername: v.String("account_sync_website_username"), PasswordConfigured: v.String("account_sync_website_password") != "", Running: running > 0, LastRunAt: state.LastStartedAt, LastSuccessAt: state.LastSuccessAt, LastError: state.LastError}
+	out = accountSyncConfig{Enabled: v.Bool("account_sync_enabled"), IntervalSeconds: v.Int("account_sync_interval_seconds"), Timezone: v.String("account_sync_timezone"), DataSource: "website", WebsiteUsername: v.String("account_sync_website_username"), PasswordConfigured: v.String("account_sync_website_password") != "", Running: running > 0, LastRunAt: state.LastStartedAt, LastSuccessAt: state.LastSuccessAt, LastError: state.LastError, NextRunAt: state.NextRunAt}
 	if state.Status == "running" && running == 0 {
 		out.LastError = "The last collection was interrupted. Previously collected data is retained."
-	}
-	if out.Enabled && out.PasswordConfigured && out.WebsiteUsername != "" {
-		next := time.Now().UTC()
-		if state.LastStartedAt != nil {
-			next = state.LastStartedAt.Add(time.Duration(out.IntervalHours) * time.Hour)
-		}
-		out.NextRunAt = &next
 	}
 	return out, nil
 }
@@ -162,26 +155,8 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		a.accountAuthJSON(w, r, user, id, adminAccounts, lookupAccount)
 		return true
 	}
-	if len(parts) == 1 && r.Method == "GET" {
-		days := 7
-		if raw := r.URL.Query().Get("days"); raw != "" {
-			days, err = strconv.Atoi(raw)
-		}
-		if err != nil || (days != 7 && days != 30 && days != 90) {
-			fail(w, 400, "INVALID_RANGE", "Choose 7, 30, or 90 days.")
-			return true
-		}
-		snapshots, err := a.store.AccountSnapshots(r.Context(), id, days)
-		if err != nil {
-			internal(w)
-			return true
-		}
-		v, err := a.store.Settings(r.Context())
-		if err != nil {
-			internal(w)
-			return true
-		}
-		ok(w, map[string]any{"account": account, "snapshots": snapshots, "interval_hours": v.Int("account_sync_interval_hours"), "timezone": v.String("account_sync_timezone")})
+	if r.Method == "GET" && (len(parts) == 1 || (len(parts) == 2 && parts[1] == "snapshots")) {
+		a.accountUsageData(w, r, account, id, len(parts) == 2)
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "sync" && r.Method == "POST" {
@@ -253,7 +228,7 @@ func (a *app) adminAccountSync(w http.ResponseWriter, r *http.Request, route str
 	if route == "admin/account-sync" && r.Method == "PUT" {
 		var in struct {
 			Enabled         *bool   `json:"enabled"`
-			IntervalHours   *int    `json:"interval_hours"`
+			IntervalSeconds *int    `json:"interval_seconds"`
 			Timezone        *string `json:"timezone"`
 			WebsiteUsername *string `json:"website_username"`
 			WebsitePassword *string `json:"website_password"`
@@ -265,8 +240,8 @@ func (a *app) adminAccountSync(w http.ResponseWriter, r *http.Request, route str
 		if in.Enabled != nil {
 			changes["account_sync_enabled"] = strconv.FormatBool(*in.Enabled)
 		}
-		if in.IntervalHours != nil {
-			changes["account_sync_interval_hours"] = strconv.Itoa(*in.IntervalHours)
+		if in.IntervalSeconds != nil {
+			changes["account_sync_interval_seconds"] = strconv.Itoa(*in.IntervalSeconds)
 		}
 		if in.Timezone != nil {
 			changes["account_sync_timezone"] = *in.Timezone
@@ -289,6 +264,7 @@ func (a *app) adminAccountSync(w http.ResponseWriter, r *http.Request, route str
 			}
 			return
 		}
+		a.wakeAccountSync()
 		out, err := a.syncConfig(r.Context())
 		if err != nil {
 			internal(w)
@@ -425,6 +401,35 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		}
 		finishDiagnostic()
 	}()
+	var claim *core.AccountSyncClaim
+	scheduleMessage := ""
+	if scheduled {
+		var err error
+		claim, err = a.store.ClaimScheduledAccountSync(ctx, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		if claim == nil {
+			summary.Event = ""
+			return nil
+		}
+		defer func() {
+			message := scheduleMessage
+			if message == "" && resultErr != nil {
+				message = publicCollectionError(resultErr)
+			}
+			skipped := errors.Is(resultErr, errSyncBusy)
+			if skipped {
+				message = "Another sync is running. This scheduled collection was skipped."
+			}
+			_, retryAt, _, _ := supplier.RetryDetails(resultErr)
+			finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer finishCancel()
+			if err := a.store.FinishScheduledAccountSync(finishCtx, *claim, time.Now().UTC(), message, retryAt, skipped); err != nil && resultErr == nil {
+				resultErr = err
+			}
+		}()
+	}
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -452,23 +457,9 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		summary.ErrorKind = "configuration"
 		return errSyncNotConfigured
 	}
-	now := time.Now().UTC()
-	if scheduled {
-		var state core.AccountSyncState
-		if err = a.store.DB.WithContext(ctx).First(&state, 1).Error; err != nil {
-			return err
-		}
-		if !syncDue(v, state, now) {
-			summary.Event = ""
-			return nil
-		}
-		if err = a.store.DB.WithContext(ctx).Model(&state).Updates(map[string]any{"last_started_at": now, "last_finished_at": nil, "last_error": "", "status": "running"}).Error; err != nil {
-			return err
-		}
-	}
 	targets, err := a.store.CollectionTargets(ctx, userID, accountID)
 	if err != nil {
-		a.finishCollection(scheduled, "Could not load the account list.")
+		scheduleMessage = "Could not load the account list."
 		return err
 	}
 	if len(targets) == 0 {
@@ -477,7 +468,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 			return errSyncUnsupported
 		}
 		summary.Outcome, summary.ErrorKind = "skipped", ""
-		return a.finishCollection(scheduled, "")
+		return nil
 	}
 	// Collect reuses the shared supplier session when valid; account data is
 	// always read afresh. Query and login cooldowns remain separate.
@@ -512,7 +503,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 			e := a.store.RecordAccountFailure(saveCtx, target.ID, target.IdentityKey, message, at)
 			if e != nil && !errors.Is(e, core.ErrAccountIdentityChanged) {
 				summary.ErrorKind = "persistence"
-				a.finishCollection(scheduled, "Could not save account collection results.")
+				scheduleMessage = "Could not save account collection results."
 				return e
 			}
 			continue
@@ -534,7 +525,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		}
 		if e != nil && !errors.Is(e, core.ErrAccountIdentityChanged) {
 			summary.ErrorKind = "persistence"
-			a.finishCollection(scheduled, "Could not save account collection results.")
+			scheduleMessage = "Could not save account collection results."
 			return e
 		}
 	}
@@ -547,9 +538,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	if message == "" {
 		summary.Outcome, summary.ErrorKind = "succeeded", ""
 	}
-	if err := a.finishCollection(scheduled, message); err != nil {
-		return err
-	}
+	scheduleMessage = message
 	// Preserve the saved failure but expose a supplier cooldown to direct callers.
 	if seconds, _, _, _ := supplier.RetryDetails(collectionErr); seconds > 0 {
 		return collectionErr
@@ -557,52 +546,68 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	return nil
 }
 
-func (a *app) finishCollection(scheduled bool, message string) error {
-	if !scheduled {
-		return nil
+// wakeAccountSync coalesces saves; the worker rereads the durable schedule.
+func (a *app) wakeAccountSync() {
+	if a.accountSyncWake == nil {
+		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	at := time.Now().UTC()
-	updates := map[string]any{"last_finished_at": at, "last_error": message, "status": "failed"}
-	if message == "" {
-		updates["status"] = "succeeded"
-		updates["last_success_at"] = at
+	select {
+	case a.accountSyncWake <- struct{}{}:
+	default:
 	}
-	return a.store.DB.WithContext(ctx).Model(&core.AccountSyncState{}).Where("id = ?", 1).Updates(updates).Error
+}
+
+func accountScheduleWait(v core.Values, state core.AccountSyncState, now time.Time) time.Duration {
+	// This is a cross-instance/configuration discovery bound, not a polling grid:
+	// a due time 7 seconds away creates a 7-second timer.
+	wait := 30 * time.Second
+	if core.AccountSyncConfigured(v) && state.NextRunAt != nil {
+		until := state.NextRunAt.Sub(now)
+		if until < wait {
+			wait = until
+		}
+	}
+	if wait < 0 {
+		return 0
+	}
+	return wait
 }
 
 func (a *app) runAccountSync(ctx context.Context) {
-	// Due times are persisted. Restarting this process does not reset the timer.
-	check := func() {
+	for ctx.Err() == nil {
 		lookup, cancel := context.WithTimeout(ctx, 10*time.Second)
-		v, err := a.store.Settings(lookup)
+		values, err := a.store.Settings(lookup)
 		var state core.AccountSyncState
 		if err == nil {
 			err = a.store.DB.WithContext(lookup).First(&state, 1).Error
 		}
 		cancel()
-		if err != nil {
-			if ctx.Err() == nil {
-				log.Print("Account sync: could not read scheduling state")
+		wait := 30 * time.Second
+		if err == nil {
+			now := time.Now().UTC()
+			if syncDue(values, state, now) {
+				if err = a.collectAccounts(ctx, 0, 0, true); err != nil && !errors.Is(err, errSyncBusy) && !errors.Is(err, errSyncNotConfigured) && ctx.Err() == nil {
+					log.Print("Account sync: collection could not complete; check the saved sync status")
+				}
+				if err == nil || errors.Is(err, errSyncBusy) {
+					continue
+				}
+				// Failed database/Redis operations must not cause a hot loop.
+				wait = 5 * time.Second
+			} else {
+				wait = accountScheduleWait(values, state, now)
 			}
-			return
+		} else if ctx.Err() == nil {
+			log.Print("Account sync: could not read scheduling state")
 		}
-		if syncDue(v, state, time.Now().UTC()) {
-			if err = a.collectAccounts(ctx, 0, 0, true); err != nil && !errors.Is(err, errSyncBusy) && !errors.Is(err, errSyncNotConfigured) && ctx.Err() == nil {
-				log.Print("Account sync: collection could not complete; check the saved sync status")
-			}
-		}
-	}
-	check()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
-			check()
+		case <-a.accountSyncWake:
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 }

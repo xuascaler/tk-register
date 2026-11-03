@@ -78,7 +78,7 @@ func TestAccountsOwnershipCSRFAndReadOnlyViews(t *testing.T) {
 	}
 	w := request(t, a, "GET", "admin/account-sync", nil, ac, "")
 	requireStatus(t, w, 200)
-	if data(t, w)["interval_hours"] != float64(2) || data(t, w)["enabled"] != false {
+	if data(t, w)["interval_seconds"] != float64(300) || data(t, w)["enabled"] != false {
 		t.Fatal("incorrect schedule defaults")
 	}
 	requireStatus(t, request(t, a, "PUT", "admin/account-sync", map[string]any{"enabled": true}, ac, acsrf), 400)
@@ -97,7 +97,7 @@ func TestAccountSyncSettingsAndUnsavedLogin(t *testing.T) {
 		t.Fatal("test login saved credentials")
 	}
 	body["enabled"] = false
-	body["interval_hours"] = 8
+	body["interval_seconds"] = 28800
 	body["timezone"] = "Asia/Shanghai"
 	w = request(t, a, "PUT", "admin/account-sync", body, ac, csrf)
 	requireStatus(t, w, 200)
@@ -165,6 +165,7 @@ func TestAccountCollectionFreshRunsRetainDataAndSchedule(t *testing.T) {
 		t.Fatal("each run must call the collector with credentials")
 	}
 	configureSync(t, a, admin.ID, true)
+	makeScheduleDue(t, a)
 	fake.err = nil
 	if err = a.collectAccounts(context.Background(), 0, 0, true); err != nil {
 		t.Fatal(err)
@@ -176,7 +177,7 @@ func TestAccountCollectionFreshRunsRetainDataAndSchedule(t *testing.T) {
 		t.Fatal("scheduler ignored interval")
 	}
 	past := time.Now().Add(-8*time.Hour - time.Minute)
-	if err = a.store.DB.Model(&core.AccountSyncState{}).Where("id = ?", 1).Update("last_started_at", past).Error; err != nil {
+	if err = a.store.DB.Model(&core.AccountSyncState{}).Where("id = ?", 1).Update("next_run_at", past).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err = a.collectAccounts(context.Background(), 0, 0, true); err != nil {
@@ -224,10 +225,10 @@ func TestAccountIdentityMatchingAndInterval(t *testing.T) {
 		t.Fatal("ambiguous email was matched")
 	}
 	now := time.Now().UTC()
-	v := core.Values{"account_sync_enabled": "true", "account_sync_interval_hours": "8", "account_sync_website_username": "user", "account_sync_website_password": "password"}
+	v := core.Values{"account_sync_enabled": "true", "account_sync_interval_seconds": "28800", "account_sync_website_username": "user", "account_sync_website_password": "password"}
 	for _, elapsed := range []time.Duration{0, 7 * time.Hour, 8*time.Hour - time.Nanosecond, 8 * time.Hour, 9 * time.Hour} {
 		last := now.Add(-elapsed)
-		if got := syncDue(v, core.AccountSyncState{LastStartedAt: &last}, now); got != (elapsed >= 8*time.Hour) {
+		if got := syncDue(v, core.AccountSyncState{NextRunAt: timePointer(last.Add(8 * time.Hour))}, now); got != (elapsed >= 8*time.Hour) {
 			t.Fatalf("interval boundary %s", elapsed)
 		}
 	}
@@ -246,6 +247,7 @@ func TestAccountCollectionInvalidMetricDoesNotAbortOtherAccounts(t *testing.T) {
 	first := seedAdminSubmission(t, a, owner.ID, vendor, "invalid@example.com", "accepted", now)
 	second := seedAdminSubmission(t, a, owner.ID, vendor, "valid@example.com", "accepted", now.Add(time.Second))
 	configureSync(t, a, admin.ID, true)
+	makeScheduleDue(t, a)
 	invalid := float64(150)
 	cost := float64(0)
 	currency := "CNY"
@@ -349,5 +351,13 @@ func TestAdminSyncedAccountsAuthorizationAndOwnerParity(t *testing.T) {
 	}
 	if fake.collectCalls != 1 {
 		t.Fatal("list or details unexpectedly contacted the supplier")
+	}
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
+func makeScheduleDue(t *testing.T, a *app) {
+	t.Helper()
+	if err := a.store.DB.Model(&core.AccountSyncState{}).Where("id = ?", 1).Update("next_run_at", time.Now().UTC().Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
 	}
 }

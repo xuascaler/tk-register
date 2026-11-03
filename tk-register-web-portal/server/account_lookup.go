@@ -31,7 +31,7 @@ type accountLookupResult struct {
 	LastSuccessAt     *time.Time               `json:"last_success_at"`
 	LastAttemptAt     *time.Time               `json:"last_attempt_at"`
 	LastError         *string                  `json:"last_error"`
-	IntervalHours     int                      `json:"interval_hours"`
+	IntervalSeconds   int                      `json:"interval_seconds"`
 }
 
 func lookupParameters(r *http.Request) (username, account string, valid bool) {
@@ -59,7 +59,7 @@ func validAccountLookupIdentity(username, account string) bool {
 	return true
 }
 
-func publicAccountLookup(row core.AccountDTO, username string, intervalHours int) accountLookupResult {
+func publicAccountLookup(row core.AccountDTO, username string, intervalSeconds int) accountLookupResult {
 	var lastError *string
 	if row.LastError != "" {
 		lastError = &row.LastError
@@ -68,7 +68,7 @@ func publicAccountLookup(row core.AccountDTO, username string, intervalHours int
 		ID: row.ID, Username: username, Account: row.Account, Vendor: "tk-register-0", Plan: row.Plan,
 		RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, SubmissionStatus: row.SubmissionStatus,
 		Snapshot: row.Snapshot, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt,
-		LastError: lastError, IntervalHours: intervalHours,
+		LastError: lastError, IntervalSeconds: intervalSeconds,
 	}
 }
 
@@ -121,5 +121,5 @@ func (a *app) claudeAccountLookupAPI(w http.ResponseWriter, r *http.Request) {
 		internal(w)
 		return
 	}
-	ok(w, publicAccountLookup(row, user.Email, settings.Int("account_sync_interval_hours")))
+	ok(w, publicAccountLookup(row, user.Email, settings.Int("account_sync_interval_seconds")))
 }

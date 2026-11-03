@@ -46,16 +46,25 @@ export type AccountPage = {
   page_size: number;
 };
 
+export type AccountTrendPoint = { snapshot_id: string; collected_at: string; value: number };
+export type AccountTrend = Record<'cost_total_usd' | 'input_tokens_total' | 'output_tokens_total', AccountTrendPoint[][]>;
+export type SnapshotPage = { items: AccountSnapshot[]; total: number; page: number; page_size: number };
+
 export type AccountDetails = {
   account: SyncedAccount;
   snapshots: AccountSnapshot[];
-  interval_hours: number;
+  snapshot_count: number;
+  snapshot_page: number;
+  snapshot_page_size: number;
+  trend: AccountTrend;
+  trend_reduced: boolean;
+  interval_seconds: number;
   timezone: string;
 };
 
 export type SyncConfig = {
   enabled: boolean;
-  interval_hours: number;
+  interval_seconds: number;
   timezone: string;
   data_source: 'website';
   website_username: string;

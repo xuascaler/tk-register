@@ -4,8 +4,9 @@ import { APIError, errorMessage, request, retryAfterSeconds, retryStage, type Re
 import { ErrorNotice, Loading } from '../ui';
 import Select from '../submissions/Select';
 import { AdminBadge } from '../admin/shared';
-import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statusLabel, statusTone, trendSegments, type Metric } from './helpers';
-import type { AccountDetails, AccountPage, AccountSnapshot, SyncedAccount } from './types';
+import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statusLabel, statusTone, type Metric } from './helpers';
+import type { AccountDetails, AccountPage, SyncedAccount } from './types';
+import { UsageTrend } from './UsageTrend';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
 import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
 import { loadAccountPage, mergeSyncedAccount, syncAccountRow, syncRetryLabel, type AccountRowSyncResult } from './row-sync';
@@ -131,38 +132,6 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
 
 const metricNames: Record<Metric, string> = { cost_total_usd: 'Total spent', input_tokens_total: 'Input tokens', output_tokens_total: 'Output tokens' };
 
-function Trend({ snapshots, interval, timezone, metric }: { snapshots: AccountSnapshot[]; interval: number; timezone: string; metric: Metric }) {
-  const target = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(640);
-  const [table, setTable] = useState(false);
-  useEffect(() => {
-    const element = target.current;
-    if (!element) return;
-    const observer = new ResizeObserver(entries => setWidth(Math.max(240, entries[0].contentRect.width)));
-    observer.observe(element); return () => observer.disconnect();
-  }, []);
-  const displayed = trendSegments(snapshots, metric, interval);
-  const points = displayed.flat();
-  const height = 260, left = width < 420 ? 56 : 72, right = 20, top = 24, bottom = 44;
-  const first = Math.min(...points.map(p => p.time)), last = Math.max(...points.map(p => p.time));
-  const min = Math.min(...points.map(p => p.value)), max = Math.max(...points.map(p => p.value));
-  const span = Math.max(1, max - min), lo = Math.max(0, min - span * .12), hi = max + span * .12;
-  const x = (time: number) => left + (last === first ? .5 : (time - first) / (last - first)) * (width - left - right);
-  const y = (value: number) => top + (1 - (value - lo) / (hi - lo)) * (height - top - bottom);
-  const valueLabel = (value: number | null) => metric === 'cost_total_usd' ? formatCost(value, 'USD') : formatTokens(value);
-  const ticks = width < 500 ? 3 : 4;
-  return <div ref={target} className='usage-trend'>
-    <div className='usage-chart-unit'>{metric === 'cost_total_usd' ? 'Cumulative spend' : `Cumulative ${metric === 'input_tokens_total' ? 'input' : 'output'} tokens`}</div>
-    {!points.length ? <div className='usage-chart-empty'><h3>No usage data yet</h3><p>A trend will appear after successful collections.</p></div> : <svg className='usage-chart' width={width} height={height} viewBox={`0 0 ${width} ${height}`} role='img' aria-label={`${metricNames[metric]} over time, ${points.length} collected observations. Gaps indicate unavailable data or a counter reset.`}>
-      {[0, 1, 2, 3].map(index => { const value = lo + (hi - lo) * index / 3; const pos = y(value); return <g key={index}><line x1={left} y1={pos} x2={width - right} y2={pos} className='usage-gridline' /><text x={left - 10} y={pos + 4} textAnchor='end'>{new Intl.NumberFormat('en-US', { notation: 'compact', minimumFractionDigits: metric === 'cost_total_usd' ? 2 : 0, maximumFractionDigits: metric === 'cost_total_usd' ? 2 : 1 }).format(value)}{metric === 'cost_total_usd' ? ' $' : ''}</text></g>; })}
-      {Array.from({ length: first === last ? 1 : ticks }, (_, index) => { const time = first === last ? first : first + (last - first) * index / (ticks - 1); return <text key={index} x={x(time)} y={height - 16} textAnchor={first === last ? 'middle' : index === 0 ? 'start' : index === ticks - 1 ? 'end' : 'middle'}>{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: timezone }).format(time)}</text>; })}
-      {displayed.map((segment, index) => <g key={index}><polyline fill='none' className='usage-chart-line' points={segment.map(point => `${x(point.time)},${y(point.value)}`).join(' ')} />{segment.map(point => <circle key={point.snapshot.id} cx={x(point.time)} cy={y(point.value)} r={points.length > 45 ? 2 : 3.5} className='usage-chart-point'><title>{formatTime(point.snapshot.collected_at, timezone)}: {valueLabel(point.value)}</title></circle>)}</g>)}
-    </svg>}
-    <div className='usage-chart-bottom'><span>Collection times use {timezone}. Gaps are not zero usage.</span><button className='usage-text-button' onClick={() => setTable(v => !v)} aria-expanded={table}>{table ? 'Hide data' : 'View data'}</button></div>
-    {table && <div className='usage-data-scroll'><table className='usage-data-table'><caption className='sr-only'>Collected usage values</caption><thead><tr><th scope='col'>Collected at</th><th scope='col'>{metricNames[metric]}</th></tr></thead><tbody>{snapshots.map(row => <tr key={row.id}><td>{formatTime(row.collected_at, timezone)}</td><td>{valueLabel(row[metric])}</td></tr>)}</tbody></table>{!snapshots.length && <p className='usage-small'>No observations in this date range.</p>}</div>}
-  </div>;
-}
-
 export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }: { id: string; onBack: () => void; onSubmission: (id: string) => void; admin?: boolean }) {
   const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountDetails | null>(null);
@@ -267,9 +236,9 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
         <div><span>Output tokens</span><strong>{formatTokens(snapshot?.output_tokens_total, true)}</strong><small>{formatTokens(snapshot?.output_tokens_total)} tokens</small></div>
       </div>
       <div className='usage-windows-panel'><div><UsageWindow label='5-hour usage' value={snapshot?.usage_5h_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_5h_at, data.timezone)}</span></div><div><UsageWindow label='7-day usage' value={snapshot?.usage_7d_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_7d_at, data.timezone)}</span></div></div>
-      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>Usage trend</h2><p className='usage-small'>Saved observations, collected every {data.interval_hours} {data.interval_hours === 1 ? 'hour' : 'hours'} when enabled.</p></div><Select id='usage-date-range' label='Date range' hiddenLabel value={days} onChange={setDays} disabled={syncing || loading} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '90', label: 'Last 90 days' }]} /></div>
+      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>Usage trend</h2><p className='usage-small'>Saved observations, collected every {data.interval_seconds.toLocaleString()} seconds when enabled.</p></div><Select id='usage-date-range' label='Date range' hiddenLabel value={days} onChange={setDays} disabled={syncing || loading} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '90', label: 'Last 90 days' }]} /></div>
         <div className='usage-metric-tabs' role='group' aria-label='Trend metric'>{(Object.keys(metricNames) as Metric[]).map(key => <button key={key} aria-pressed={metric === key} onClick={() => setMetric(key)}>{metricNames[key]}</button>)}</div>
-        {loading ? <Loading label='Loading usage history…' /> : <Trend snapshots={data.snapshots} interval={data.interval_hours} timezone={data.timezone} metric={metric} />}
+        {loading ? <Loading label='Loading usage history…' /> : <UsageTrend key={`${id}:${days}`} data={data} endpoint={`${endpoint}/${encodeURIComponent(id)}/snapshots`} days={days} metric={metric} />}
       </section>
       {editorOpen && <AuthJSONEditor account={account} endpoint={endpoint} onClose={() => setEditorOpen(false)} onSaved={credentialsSaved} />}
     </>}

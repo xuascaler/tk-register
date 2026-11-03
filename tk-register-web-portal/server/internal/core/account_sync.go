@@ -47,17 +47,18 @@ type SyncedAccount struct {
 // AccountSnapshotValues preserves absent values as SQL NULL and JSON null.
 // Cumulative counters are observations; resets must not become negative usage.
 type AccountSnapshotValues struct {
-	PlatformAccountID *string    `gorm:"size:32" json:"platform_account_id"`
-	SourceUpdatedAt   *time.Time `json:"source_updated_at"`
-	AccountStatus     *string    `gorm:"size:80" json:"account_status"`
-	InputTokensTotal  *int64     `json:"input_tokens_total"`
-	OutputTokensTotal *int64     `json:"output_tokens_total"`
-	CostTotal         *float64   `json:"cost_total"`
-	Currency          *string    `gorm:"size:8" json:"currency"`
-	Usage5hPercent    *float64   `json:"usage_5h_percent"`
-	Reset5hAt         *time.Time `json:"reset_5h_at"`
-	Usage7dPercent    *float64   `json:"usage_7d_percent"`
-	Reset7dAt         *time.Time `json:"reset_7d_at"`
+	CollectionIntervalSeconds *int       `json:"collection_interval_seconds,omitempty"`
+	PlatformAccountID         *string    `gorm:"size:32" json:"platform_account_id"`
+	SourceUpdatedAt           *time.Time `json:"source_updated_at"`
+	AccountStatus             *string    `gorm:"size:80" json:"account_status"`
+	InputTokensTotal          *int64     `json:"input_tokens_total"`
+	OutputTokensTotal         *int64     `json:"output_tokens_total"`
+	CostTotal                 *float64   `json:"cost_total"`
+	Currency                  *string    `gorm:"size:8" json:"currency"`
+	Usage5hPercent            *float64   `json:"usage_5h_percent"`
+	Reset5hAt                 *time.Time `json:"reset_5h_at"`
+	Usage7dPercent            *float64   `json:"usage_7d_percent"`
+	Reset7dAt                 *time.Time `json:"reset_7d_at"`
 }
 
 type AccountSnapshot struct {
@@ -74,12 +75,14 @@ type AccountSnapshot struct {
 // AccountSyncState stores scheduling timestamps across server restarts. A
 // distributed scheduler lease is separate from this durable status record.
 type AccountSyncState struct {
-	ID             uint64     `gorm:"primaryKey" json:"id"`
-	LastStartedAt  *time.Time `json:"last_started_at"`
-	LastFinishedAt *time.Time `json:"last_finished_at"`
-	LastSuccessAt  *time.Time `json:"last_success_at"`
-	LastError      string     `gorm:"size:255;not null;default:''" json:"last_error"`
-	Status         string     `gorm:"size:24;not null;default:idle" json:"status"`
+	NextRunAt        *time.Time `json:"next_run_at"`
+	ScheduleRevision uint64     `gorm:"not null;default:0" json:"-"`
+	ID               uint64     `gorm:"primaryKey" json:"id"`
+	LastStartedAt    *time.Time `json:"last_started_at"`
+	LastFinishedAt   *time.Time `json:"last_finished_at"`
+	LastSuccessAt    *time.Time `json:"last_success_at"`
+	LastError        string     `gorm:"size:255;not null;default:''" json:"last_error"`
+	Status           string     `gorm:"size:24;not null;default:idle" json:"status"`
 }
 
 type AccountSnapshotDTO struct {
@@ -126,6 +129,9 @@ func (s *Store) migrateAccountSync() error {
 		return err
 	}
 	if err := s.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&AccountSyncState{ID: 1, Status: "idle"}).Error; err != nil {
+		return err
+	}
+	if err := s.initializeAccountSchedule(context.Background()); err != nil {
 		return err
 	}
 	return s.EnsureSyncedAccounts(context.Background())
@@ -511,6 +517,17 @@ func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, exp
 		if account.IdentityKey != expectedIdentity || account.CurrentSubmissionID == nil {
 			return ErrAccountIdentityChanged
 		}
+		// Store the cadence with the observation so later configuration changes
+		// cannot turn valid historical intervals into apparent collection gaps.
+		var cadence Setting
+		if err := tx.Where(clause.Eq{Column: "key", Value: "account_sync_interval_seconds"}).First(&cadence).Error; err != nil {
+			return err
+		}
+		seconds := Values{"interval": cadence.Value}.Int("interval")
+		if seconds < 60 || seconds > 604800 {
+			return validationErrorf("invalid collection interval")
+		}
+		values.CollectionIntervalSeconds = &seconds
 		snap := AccountSnapshot{AccountID: account.ID, IdentityKey: expectedIdentity, SnapshotDate: at.In(loc).Format("2006-01-02"), CollectedAt: at, DataSource: "website", AccountSnapshotValues: values}
 		insert := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&snap)
 		if insert.Error != nil {
