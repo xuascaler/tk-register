@@ -17,6 +17,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"goapi-tk-register/server/common"
 	"goapi-tk-register/server/internal/core"
+	"goapi-tk-register/server/internal/diagnostics"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -99,6 +100,7 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-Request-ID", requestID)
+	r = r.WithContext(diagnostics.WithTrace(r.Context(), diagnostics.Trace{TraceID: requestID}))
 	if r.URL.Path == basePath+"/healthz" {
 		if r.Method != "GET" {
 			w.WriteHeader(405)

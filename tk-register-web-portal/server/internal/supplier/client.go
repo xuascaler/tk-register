@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"goapi-tk-register/server/common"
+	"goapi-tk-register/server/internal/diagnostics"
 )
 
 const (
@@ -237,14 +238,40 @@ func (s *session) request(ctx context.Context, method, path string, payload any)
 	if s.token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.token)
 	}
+	// Instrument actual network attempts only. Record the response status before
+	// error classification, including the early 429 return below. The deferred
+	// event includes body-read failures without consuming any additional body.
+	started := time.Now()
+	event := diagnostics.RequestEvent{StartedAt: started.UTC(), Method: method, Path: req.URL.Path, Outcome: "failed"}
+	if req.URL.Path == apiPrefix+"/accounts" && method == http.MethodGet {
+		event.Page = diagnosticPositiveInt(req.URL.Query(), "page")
+		event.PageSize = diagnosticPositiveInt(req.URL.Query(), "page_size")
+	}
+	defer func() {
+		event.DurationMS = time.Since(started).Milliseconds()
+		diagnostics.LogRequest(ctx, event)
+	}()
 	response, err := s.http.Do(req)
+	if response != nil {
+		event.HTTPStatus = response.StatusCode
+		event.RetryAfterSeconds = diagnosticRetryAfter(response.Header.Get("Retry-After"), time.Now())
+	}
 	if err != nil {
+		event.ErrorKind = diagnosticTransportKind(ctx, err)
 		if s.classifyReadErrors {
 			return 0, nil, collectionTransportError(ctx, err)
 		}
 		return 0, nil, safeError(CodeUnavailable)
 	}
 	defer response.Body.Close()
+	switch {
+	case response.StatusCode == http.StatusTooManyRequests:
+		event.ErrorKind = "rate_limited"
+	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
+		event.ErrorKind = "authentication"
+	case response.StatusCode < 200 || response.StatusCode >= 300:
+		event.ErrorKind = "http"
+	}
 	if s.classifyReadErrors && response.StatusCode == http.StatusTooManyRequests {
 		return 0, nil, safeError(CodeRateLimited)
 	}
@@ -255,15 +282,99 @@ func (s *session) request(ctx context.Context, method, path string, payload any)
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
+		event.ErrorKind = diagnosticTransportKind(ctx, err)
+		if event.ErrorKind == "transport" {
+			event.ErrorKind = "body_read"
+		}
 		if s.classifyReadErrors {
 			return 0, nil, collectionTransportError(ctx, err)
 		}
 		return 0, nil, safeError(CodeUnavailable)
 	}
 	if len(body) > maxResponseBytes {
+		event.ErrorKind = "response_too_large"
 		return 0, nil, safeError(CodeContractMismatch)
 	}
+	event.Outcome = "succeeded"
 	return response.StatusCode, body, nil
+}
+
+func diagnosticPositiveInt(query url.Values, key string) *int {
+	values := query[key]
+	if len(values) != 1 || len(values[0]) == 0 || len(values[0]) > 7 {
+		return nil
+	}
+	for _, r := range values[0] {
+		if r < '0' || r > '9' {
+			return nil
+		}
+	}
+	n, err := strconv.Atoi(values[0])
+	if err != nil || n < 1 || n > 1000000 {
+		return nil
+	}
+	return &n
+}
+
+// Only recognized bounded numeric/date forms enter logs; never print a raw
+// response header, which can contain arbitrary upstream-controlled text.
+func diagnosticRetryAfter(value string, now time.Time) *int64 {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 64 {
+		return nil
+	}
+	digits := true
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			digits = false
+			break
+		}
+	}
+	var seconds int64
+	if digits {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return nil
+		}
+		seconds = n
+	} else {
+		at, err := http.ParseTime(value)
+		if err != nil {
+			return nil
+		}
+		seconds = int64(math.Ceil(at.Sub(now).Seconds()))
+	}
+	if seconds < 0 || seconds > 7*24*60*60 {
+		return nil
+	}
+	return &seconds
+}
+
+func diagnosticTransportKind(ctx context.Context, err error) string {
+	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		return "canceled"
+	}
+	var network net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &network) && network.Timeout()) {
+		return "timeout"
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return "dns"
+	}
+	var verification *tls.CertificateVerificationError
+	var invalid x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	var authority x509.UnknownAuthorityError
+	var record tls.RecordHeaderError
+	if errors.As(err, &verification) || errors.As(err, &invalid) || errors.As(err, &hostname) || errors.As(err, &authority) || errors.As(err, &record) {
+		return "tls"
+	}
+	var operation *net.OpError
+	if errors.As(err, &operation) && operation.Op == "dial" {
+		return "connect"
+	}
+	return "transport"
 }
 
 func readStatus(status int) error {

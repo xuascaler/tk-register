@@ -186,12 +186,14 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 			fail(w, 409, "ACCOUNT_NOT_ACCEPTED", "Only an accepted account can be synchronized.")
 			return true
 		}
+		r = r.WithContext(accountSyncTrace(r.Context(), "detail_sync", user.ID, id))
 		allowed, e := a.redis.SetNX(r.Context(), redisPrefix+"account-sync:manual:"+strconv.FormatUint(user.ID, 10)+":"+strconv.FormatUint(id, 10), "1", time.Minute).Result()
 		if e != nil {
 			internal(w)
 			return true
 		}
 		if !allowed {
+			syncDiagnosticGate(r.Context(), "local_rate_limit", 1, 60, 60)
 			rateFailure(w, 60)
 			return true
 		}
@@ -314,12 +316,14 @@ func (a *app) adminAccountSync(w http.ResponseWriter, r *http.Request, route str
 			fail(w, 400, "PASSWORD_REQUIRED", "Enter a website password.")
 			return
 		}
+		r = r.WithContext(accountSyncTrace(r.Context(), "test_login", actorID, 0))
 		allowed, err := a.redis.SetNX(r.Context(), redisPrefix+"account-sync:test:"+strconv.FormatUint(actorID, 10), "1", 5*time.Second).Result()
 		if err != nil {
 			internal(w)
 			return
 		}
 		if !allowed {
+			syncDiagnosticGate(r.Context(), "local_rate_limit", 1, 5, 5)
 			rateFailure(w, 5)
 			return
 		}
@@ -387,9 +391,24 @@ func matchSupplierAccount(target core.SyncedAccount, records []supplier.Account)
 	return nil, errors.New("More than one supplier record matches this account. An administrator must check the account identity.")
 }
 
-func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, scheduled bool) error {
+func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, scheduled bool) (resultErr error) {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
+	source := "detail_sync"
+	if scheduled {
+		source = "scheduled_sync"
+	}
+	ctx = accountSyncTrace(ctx, source, 0, accountID)
+	summary, finishDiagnostic := beginSyncDiagnostic(ctx)
+	defer func() {
+		if resultErr != nil {
+			summary.Outcome = "failed"
+			if summary.ErrorKind == "" || summary.ErrorKind == "unknown" {
+				summary.ErrorKind = syncDiagnosticError(resultErr)
+			}
+		}
+		finishDiagnostic()
+	}()
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -399,6 +418,8 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		return err
 	}
 	if !locked {
+		summary.Event = ""
+		syncDiagnosticGate(ctx, "sync_lock_busy", 0, 0, 0)
 		return errSyncBusy
 	}
 	defer func() {
@@ -412,6 +433,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	}
 	username, password := v.String("account_sync_website_username"), v.String("account_sync_website_password")
 	if username == "" || password == "" {
+		summary.ErrorKind = "configuration"
 		return errSyncNotConfigured
 	}
 	now := time.Now().UTC()
@@ -421,6 +443,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 			return err
 		}
 		if !syncDue(v, state, now) {
+			summary.Event = ""
 			return nil
 		}
 		if err = a.store.DB.WithContext(ctx).Model(&state).Updates(map[string]any{"last_started_at": now, "last_finished_at": nil, "last_error": "", "status": "running"}).Error; err != nil {
@@ -434,13 +457,18 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	}
 	if len(targets) == 0 {
 		if accountID != 0 {
+			summary.Outcome, summary.SkippedCount = "skipped", 1
 			return errSyncUnsupported
 		}
+		summary.Outcome, summary.ErrorKind = "skipped", ""
 		return a.finishCollection(scheduled, "")
 	}
 	// Collect creates a fresh authenticated session for each call. No token is
 	// shared with a previous scheduled run or stored in Redis/SQL.
 	records, collectionErr := a.collector().Collect(ctx, username, password)
+	if collectionErr != nil {
+		summary.ErrorKind = syncDiagnosticError(collectionErr)
+	}
 	// Persist a failed attempt even if the read deadline has expired. No further
 	// upstream work happens under this short persistence-only context.
 	saveCtx, saveCancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -461,8 +489,13 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		}
 		if message != "" {
 			failures++
+			summary.FailedCount++
+			if summary.ErrorKind == "unknown" {
+				summary.ErrorKind = "contract"
+			}
 			e := a.store.RecordAccountFailure(saveCtx, target.ID, target.IdentityKey, message, at)
 			if e != nil && !errors.Is(e, core.ErrAccountIdentityChanged) {
+				summary.ErrorKind = "persistence"
 				a.finishCollection(scheduled, "Could not save account collection results.")
 				return e
 			}
@@ -475,9 +508,16 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		e := a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, values, at, v.String("account_sync_timezone"))
 		if core.IsValidationError(e) {
 			failures++
+			summary.FailedCount++
+			summary.ErrorKind = "contract"
 			e = a.store.RecordAccountFailure(saveCtx, target.ID, target.IdentityKey, "The supplier returned invalid usage data. Previously collected data is retained.", at)
+		} else if e == nil {
+			summary.UpdatedCount++
+		} else if errors.Is(e, core.ErrAccountIdentityChanged) {
+			summary.SkippedCount++
 		}
 		if e != nil && !errors.Is(e, core.ErrAccountIdentityChanged) {
+			summary.ErrorKind = "persistence"
 			a.finishCollection(scheduled, "Could not save account collection results.")
 			return e
 		}
@@ -487,6 +527,9 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		message = publicCollectionError(collectionErr)
 	} else if failures > 0 {
 		message = fmt.Sprintf("%d account(s) could not be updated. Their last successful data is retained.", failures)
+	}
+	if message == "" {
+		summary.Outcome, summary.ErrorKind = "succeeded", ""
 	}
 	return a.finishCollection(scheduled, message)
 }

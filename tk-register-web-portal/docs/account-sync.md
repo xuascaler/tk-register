@@ -27,6 +27,32 @@ If the supplier reports an expired session during a run, the collector signs in 
 
 The supplier origin is fixed to `https://120.233.254.152:8000`. The previously authorized certificate-verification exception is scoped to that supplier; requests are not redirected to another origin.
 
+## Supplier request diagnostics
+
+Set the server environment variable `TK_REGISTER_SUPPLIER_DIAGNOSTICS=all` while investigating collection failures. The default, `errors`, records failed requests and unsuccessful sync outcomes only. Restart/recreate the application container after changing its environment. Diagnostics do not change login, pagination, retries, synchronization locks or request limits.
+
+`TK_SUPPLIER_REQUEST` records one structured JSON event for each actual supplier website HTTP attempt. It covers public-key requests, login and account-list reads, including pagination and existing read retries. It does not log the Auth JSON PUT payload or change that write's no-retry behavior. In `all` mode, successful attempts are also recorded, allowing requests leading up to a rate limit to be counted.
+
+Each event contains a server-generated `trace_id`, operation `source`, vendor, applicable local actor/account/job IDs, stage, method, allowlisted path, start time, duration and upstream HTTP status. Valid positive `page` and `page_size` query parameters appear as separate numeric fields; the URL query string and account-search keyword are omitted. A valid upstream `Retry-After` is normalized to seconds; absent or invalid values are omitted. Transport failures use a fixed error category rather than raw exception text.
+
+`TK_ACCOUNT_SYNC` events record sync summaries and local rejection gates. Summaries include the number of upstream HTTP attempts and account outcomes, including partial failures returned in an HTTP 200 response. Gates distinguish the local user quota (`local_rate_limit`) from an occupied synchronization lease (`sync_lock_busy`); these are different from an upstream HTTP 429. For browser requests, the trace ID matches the response's `X-Request-ID`. Scheduled runs and asynchronous jobs receive their own trace IDs; queued jobs also include their local job ID and attempt.
+
+Example request event (illustrative, not a recorded incident):
+
+```json
+{"trace_id":"sync-example-001","source":"manual_sync","vendor":"tk-register-0","stage":"accounts","method":"GET","path":"/supplier-account/api/supplier/accounts","page":2,"page_size":100,"http_status":429,"duration_ms":85,"retry_after_seconds":30}
+```
+
+To inspect the standalone deployment:
+
+```sh
+docker compose logs --since=15m tk-register | grep -E 'TK_SUPPLIER_REQUEST|TK_ACCOUNT_SYNC'
+```
+
+Use the same `trace_id` to follow the login and reads for one operation. An upstream `http_status: 429` identifies the exact rejecting endpoint; a local gate identifies a rejection before collection. Request timing shows the observed traffic rate, but does not establish the supplier's configured quota unless the supplier explicitly provides it.
+
+Logs exclude credentials, tokens, account emails, request bodies, response bodies and arbitrary response headers. The existing Docker log rotation bounds local storage (the standalone deployment keeps three 10 MB files). Collect the relevant diagnostic window promptly, then return the environment variable to `errors` when investigation is complete. No diagnostic database table is added.
+
 ## User pages
 
 **My account → Accounts** (`/tk-register/#/accounts`) shows only the signed-in user's accounts. It groups retries under one stable local account identity based on owner, vendor and normalized account identifier. A row includes the account email, plan, account ID, status, available quota windows, cumulative amount spent and last successful collection time.

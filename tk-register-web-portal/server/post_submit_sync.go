@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goapi-tk-register/server/internal/core"
+	"goapi-tk-register/server/internal/diagnostics"
 	"goapi-tk-register/server/internal/supplier"
 	"gorm.io/gorm"
 )
@@ -29,6 +30,12 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 	if err != nil || job == nil {
 		return err
 	}
+	source := "post_submit_sync"
+	if job.AuthJSONAuditID != nil {
+		source = "auth_json_refresh"
+	}
+	ctx = accountSyncTrace(ctx, source, 0, job.AccountID)
+	ctx = diagnostics.WithTrace(ctx, diagnostics.Trace{JobID: job.ID})
 	token, err := randomToken()
 	if err != nil {
 		return err
@@ -38,6 +45,7 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 		return err
 	}
 	if !locked {
+		syncDiagnosticGate(ctx, "sync_lock_busy", 0, 0, 5)
 		return a.store.DeferPostSubmissionSyncJob(ctx, job.ID, now)
 	}
 	defer func() {
@@ -49,30 +57,51 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 	if err != nil || !claimed {
 		return err
 	}
+	ctx = diagnostics.WithTrace(ctx, diagnostics.Trace{Attempt: job.AttemptCount + 1})
+	summary, finishDiagnostic := beginSyncDiagnostic(ctx)
+	defer finishDiagnostic()
 
 	status, message := "failed", "Automatic account sync could not complete. Previously collected data is retained."
 	finish := func() error {
 		persist, stop := pagePersistenceContext(deadline, 5*time.Second)
 		defer stop()
-		return a.store.FinishPostSubmissionSyncJob(persist, job.ID, status, message, time.Now().UTC())
+		summary.Outcome = status
+		switch status {
+		case "succeeded":
+			summary.UpdatedCount, summary.ErrorKind = 1, ""
+		case "skipped":
+			summary.SkippedCount, summary.ErrorKind = 1, ""
+		default:
+			summary.FailedCount = 1
+		}
+		err := a.store.FinishPostSubmissionSyncJob(persist, job.ID, status, message, time.Now().UTC())
+		if err != nil {
+			summary.Outcome, summary.ErrorKind = "failed", "persistence"
+		}
+		return err
 	}
 	target, err := a.store.PostSubmissionSyncTarget(ctx, *job)
 	if err != nil {
 		if errors.Is(err, core.ErrPostSubmissionSyncIneligible) {
 			status, message = "skipped", postSubmissionSyncUnavailable
+		} else {
+			summary.ErrorKind = "persistence"
 		}
 		return finish()
 	}
 	values, err := a.store.Settings(ctx)
 	if err != nil {
+		summary.ErrorKind = "persistence"
 		return finish()
 	}
 	username, password := values.String("account_sync_website_username"), values.String("account_sync_website_password")
 	if username == "" || password == "" {
+		summary.ErrorKind = "configuration"
 		message = "Website login has not been configured by an administrator."
 		return finish()
 	}
 	if ctx.Err() != nil {
+		summary.ErrorKind = syncDiagnosticError(ctx.Err())
 		return finish()
 	}
 	selection := supplier.Target{Account: target.Account}
@@ -86,6 +115,7 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 	stopCollection()
 	record, rowErr := postSubmissionSyncResult(target, selection, records, collectionErr)
 	if rowErr != nil {
+		summary.ErrorKind = syncDiagnosticError(rowErr)
 		message = pageCollectionError(rowErr)
 	}
 	persist, stopPersist := pagePersistenceContext(deadline, 5*time.Second)
@@ -102,6 +132,7 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 		}
 		if rowErr == nil && current.SupplierRecordID != nil && *current.SupplierRecordID != record.ID {
 			rowErr = errors.New("supplier record changed during collection")
+			summary.ErrorKind = "contract"
 			message = pageCollectionError(rowErr)
 		}
 		if rowErr != nil {
@@ -115,6 +146,7 @@ func (a *app) processPostSubmissionSync(parent context.Context, now time.Time) e
 	if errors.Is(err, core.ErrPostSubmissionSyncIneligible) || errors.Is(err, core.ErrAccountIdentityChanged) {
 		status, message = "skipped", postSubmissionSyncUnavailable
 	} else if err != nil {
+		summary.ErrorKind = "persistence"
 		message = "Account data could not be saved. Previously collected data is retained."
 		// Invalid snapshot data must leave the previous observation intact while
 		// still recording this failed attempt. A failed confirmation or

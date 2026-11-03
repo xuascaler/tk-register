@@ -142,15 +142,23 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 		vendorFailure(w, err)
 		return
 	}
+	var diagnosticAccountID uint64
+	if len(targets) == 1 {
+		diagnosticAccountID = targets[0].ID
+	}
+	ctx = accountSyncTrace(ctx, "manual_sync", user.ID, diagnosticAccountID)
 	retry, err := loginAttempt.Run(ctx, a.redis, []string{redisPrefix + "account-sync:page-rate:" + strconv.FormatUint(user.ID, 10)}, 200, 60).Int()
 	if err != nil {
 		internal(w)
 		return
 	}
 	if retry > 0 {
+		syncDiagnosticGate(ctx, "local_rate_limit", 200, 60, retry)
 		rateFailure(w, retry)
 		return
 	}
+	summary, finishDiagnostic := beginSyncDiagnostic(ctx)
+	defer finishDiagnostic()
 	out := pageSyncResponse{Accounts: []core.AccountDTO{}, Results: make([]pageSyncResult, len(targets))}
 	eligible := []int{}
 	selections := []supplier.Target{}
@@ -194,6 +202,7 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 		}
 		username, password := values.String("account_sync_website_username"), values.String("account_sync_website_password")
 		if username == "" || password == "" {
+			summary.ErrorKind = "configuration"
 			fail(w, 503, "SYNC_NOT_CONFIGURED", "Website login has not been configured by an administrator.")
 			return
 		}
@@ -204,6 +213,8 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 		}
 		if e = a.acquirePageSyncLease(ctx, token); e != nil {
 			if errors.Is(e, errSyncBusy) {
+				summary.Event = ""
+				syncDiagnosticGate(ctx, "sync_lock_busy", 0, 0, 5)
 				fail(w, 409, "SYNC_RUNNING", "An account sync is still running. Please try again shortly.")
 			} else {
 				internal(w)
@@ -217,6 +228,9 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 		}()
 		collection, cancelCollect := context.WithTimeout(ctx, 40*time.Second)
 		records, collectionErr := a.pageCollector().CollectTargets(collection, username, password, selections)
+		if collectionErr != nil {
+			summary.ErrorKind = syncDiagnosticError(collectionErr)
+		}
 		cancelCollect()
 		// The collector returns an explicit result for each queried target. Preserve
 		// successful rows even if a later filtered search failed or timed out.
@@ -257,9 +271,13 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 					rowErr = a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, supplierAccountSnapshot(record), at, values.String("account_sync_timezone"))
 				}
 				if rowErr != nil {
+					summary.ErrorKind = "persistence"
 					message = "Account data could not be saved. Previously collected data is retained."
 				}
 			} else {
+				if summary.ErrorKind == "unknown" {
+					summary.ErrorKind = syncDiagnosticError(rowErr)
+				}
 				message = pageCollectionError(rowErr)
 			}
 			if rowErr == nil {
@@ -301,6 +319,13 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 			out.FailedCount++
 		case "skipped":
 			out.SkippedCount++
+		}
+	}
+	summary.UpdatedCount, summary.FailedCount, summary.SkippedCount = out.UpdatedCount, out.FailedCount, out.SkippedCount
+	if out.FailedCount == 0 {
+		summary.Outcome, summary.ErrorKind = "succeeded", ""
+		if out.UpdatedCount == 0 {
+			summary.Outcome = "skipped"
 		}
 	}
 	ok(w, out)

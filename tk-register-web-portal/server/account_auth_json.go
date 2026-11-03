@@ -112,6 +112,11 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		}
 		return
 	}
+	diagnosticSource := "auth_json_check"
+	if r.Method == "POST" {
+		diagnosticSource = "auth_json_update"
+	}
+	r = r.WithContext(accountSyncTrace(r.Context(), diagnosticSource, user.ID, target.ID))
 	values, err := a.store.Settings(r.Context())
 	if err != nil {
 		internal(w)
@@ -132,6 +137,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		return
 	}
 	if retry > 0 {
+		syncDiagnosticGate(r.Context(), "local_rate_limit", limit, 60, retry)
 		rateFailure(w, retry)
 		return
 	}
@@ -200,6 +206,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		return
 	}
 	if !locked {
+		syncDiagnosticGate(r.Context(), "sync_lock_busy", 0, 0, 0)
 		fail(w, 409, "AUTH_JSON_UPDATE_RUNNING", "An update for this account is already running. Please wait.")
 		return
 	}
@@ -215,6 +222,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		return
 	}
 	if !locked {
+		syncDiagnosticGate(r.Context(), "sync_lock_busy", 0, 0, 0)
 		fail(w, 409, "SYNC_RUNNING", "An account sync is running. Please try again shortly.")
 		return
 	}
@@ -287,6 +295,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		refreshStatus, refreshMessage = "pending", "Auth JSON updated. Account refresh is scheduled after three seconds; failed refreshes are retried up to three times."
 	} else if persistErr == nil && unchanged {
 		refreshCtx, refreshCancel := context.WithTimeout(ctx, 15*time.Second)
+		refreshCtx = accountSyncTrace(refreshCtx, "auth_json_refresh", user.ID, target.ID)
 		record, refreshErr := editor.CollectAccount(refreshCtx, username, password, supplier.Target{Account: target.Account, RecordID: info.RecordID})
 		refreshCancel()
 		if refreshErr == nil && (!strings.EqualFold(strings.TrimSpace(record.Account), strings.TrimSpace(target.Account)) || record.ID != info.RecordID) {
