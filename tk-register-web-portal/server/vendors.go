@@ -48,7 +48,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			return true
 		}
 	}
-	service := core.VendorService{Store: a.store, Transport: a.vendorTransport}
+	service := a.submissionService()
 	if err := a.store.RecoverVendorExecutions(r.Context()); err != nil {
 		internal(w)
 		return true

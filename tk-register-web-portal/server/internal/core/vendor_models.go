@@ -70,18 +70,21 @@ type ProtocolParameter struct {
 	Position  int             `gorm:"not null"`
 }
 type Submission struct {
-	ID                uint64          `gorm:"primaryKey"`
-	UserID            uint64          `gorm:"not null;uniqueIndex:idx_user_request;index"`
-	User              User            `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT"`
-	VendorID          uint64          `gorm:"not null;index"`
-	Vendor            Vendor          `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT"`
-	ProtocolVersionID uint64          `gorm:"not null;index"`
-	ProtocolVersion   ProtocolVersion `gorm:"foreignKey:ProtocolVersionID;constraint:OnDelete:RESTRICT"`
-	ClientRequestKey  string          `gorm:"size:80;not null;uniqueIndex:idx_user_request"`
-	RequestHash       string          `gorm:"size:64;not null"`
-	Source            string          `gorm:"size:16;not null;default:web"`
-	APITokenID        *uint64         `gorm:"index"`
-	APIToken          *UserAPIToken   `gorm:"foreignKey:APITokenID;constraint:OnDelete:RESTRICT"`
+	ID                     uint64          `gorm:"primaryKey"`
+	UserID                 uint64          `gorm:"not null;uniqueIndex:idx_user_request;index"`
+	User                   User            `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT"`
+	VendorID               uint64          `gorm:"not null;index"`
+	Vendor                 Vendor          `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT"`
+	ProtocolVersionID      uint64          `gorm:"not null;index"`
+	ProtocolVersion        ProtocolVersion `gorm:"foreignKey:ProtocolVersionID;constraint:OnDelete:RESTRICT"`
+	ClientRequestKey       string          `gorm:"size:80;not null;uniqueIndex:idx_user_request"`
+	RequestHash            string          `gorm:"size:64;not null"`
+	Source                 string          `gorm:"size:16;not null;default:web"`
+	SubmitMode             string          `gorm:"size:24;not null;default:create"`
+	RestoredFromDeletedID  *uint64         `gorm:"index"`
+	TargetSupplierRecordID string          `gorm:"size:32;not null;default:''"`
+	APITokenID             *uint64         `gorm:"index"`
+	APIToken               *UserAPIToken   `gorm:"foreignKey:APITokenID;constraint:OnDelete:RESTRICT"`
 	// A non-null key protects accepted accounts and submissions currently in flight.
 	ActiveAccountKey           *string `gorm:"size:64;uniqueIndex"`
 	Account                    string  `gorm:"size:254;not null;index"`
@@ -147,6 +150,7 @@ type VendorDTO struct {
 type SubmissionDTO struct {
 	ID                string         `json:"id"`
 	Source            string         `json:"source"`
+	SubmitMode        string         `json:"submit_mode"`
 	VendorID          string         `json:"vendor_id"`
 	VendorCode        string         `json:"vendor_code"`
 	VendorName        string         `json:"vendor_name"`
@@ -219,7 +223,7 @@ func (s *Store) migrateVendors() error {
 	return s.DB.Transaction(func(tx *gorm.DB) error {
 		// Older releases locked unconfirmed submissions indefinitely. Preserve
 		// their history but allow a new explicit attempt; accepted/running locks stay.
-		if e := tx.Model(&Submission{}).Where("status = ? AND active_account_key IS NOT NULL", "unknown").Update("active_account_key", nil).Error; e != nil {
+		if e := tx.Model(&Submission{}).Where("status = ? AND active_account_key IS NOT NULL AND restored_from_deleted_id IS NULL", "unknown").Update("active_account_key", nil).Error; e != nil {
 			return e
 		}
 		vendor := Vendor{Code: "tk-register-0", Name: "TK Register 0", BaseURL: VendorOrigin, Enabled: true, Timezone: "Asia/Shanghai"}
@@ -420,7 +424,7 @@ func (s *Store) submissionDTO(ctx context.Context, record Submission) (Submissio
 			statusCheckedAt = &checked
 		}
 	}
-	return SubmissionDTO{ID: idString(record.ID), Source: record.Source, VendorID: idString(v.ID), VendorCode: v.Code, VendorName: v.Name, ProtocolVersionID: idString(record.ProtocolVersionID), Account: record.Account, Plan: record.Plan, Status: record.Status, RemoteID: record.RemoteID, RemoteAlias: record.RemoteAlias, RemoteStatus: record.RemoteStatus, PlatformAccountID: record.PlatformAccountID, Parameters: params, CreatedAt: record.CreatedAt.UTC(), UpdatedAt: record.UpdatedAt.UTC(), LastCheckedAt: record.LastCheckedAt, StatusCheckedAt: statusCheckedAt}, nil
+	return SubmissionDTO{ID: idString(record.ID), Source: record.Source, SubmitMode: record.SubmitMode, VendorID: idString(v.ID), VendorCode: v.Code, VendorName: v.Name, ProtocolVersionID: idString(record.ProtocolVersionID), Account: record.Account, Plan: record.Plan, Status: record.Status, RemoteID: record.RemoteID, RemoteAlias: record.RemoteAlias, RemoteStatus: record.RemoteStatus, PlatformAccountID: record.PlatformAccountID, Parameters: params, CreatedAt: record.CreatedAt.UTC(), UpdatedAt: record.UpdatedAt.UTC(), LastCheckedAt: record.LastCheckedAt, StatusCheckedAt: statusCheckedAt}, nil
 }
 func (s *Store) OwnedSubmission(ctx context.Context, userID, id uint64) (Submission, error) {
 	var record Submission
@@ -507,7 +511,7 @@ func (s *Store) Submissions(ctx context.Context, userID uint64, page int, search
 func (s *Store) RecoverVendorExecutions(ctx context.Context) error {
 	cutoff := time.Now().UTC().Add(-2 * time.Minute)
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := tx.Model(&Submission{}).Where("status = ? AND created_at < ?", "running", cutoff).Updates(map[string]any{"status": "unknown", "active_account_key": nil}).Error; e != nil {
+		if e := tx.Model(&Submission{}).Where("status = ? AND created_at < ?", "running", cutoff).Updates(map[string]any{"status": "unknown", "active_account_key": gorm.Expr("CASE WHEN restored_from_deleted_id IS NULL THEN NULL ELSE active_account_key END")}).Error; e != nil {
 			return e
 		}
 		return tx.Model(&ProtocolExecution{}).Where("status = ? AND created_at < ?", "running", cutoff).Updates(map[string]any{"status": "unknown", "error_code": "EXECUTION_INTERRUPTED", "message": "The service could not confirm the remote result. Do not resubmit this account automatically.", "finished_at": time.Now().UTC()}).Error

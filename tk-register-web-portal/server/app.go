@@ -30,6 +30,7 @@ type mailer interface {
 	SendCode(context.Context, string, string, string, int) error
 }
 type app struct {
+	accountRestorer                    core.AccountRestorer
 	store                              *core.Store
 	redis                              *redis.Client
 	mail                               mailer

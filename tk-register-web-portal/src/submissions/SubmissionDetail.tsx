@@ -266,15 +266,16 @@ export default function SubmissionDetails({
             {detail.user && <span className='admin-email'>Submitted by {detail.user.email}</span>}
             {endpointPrefix === '/admin/submissions' && <span>Submission #{submission.id}</span>}
             <span>Submitted {dateTime(submission.created_at)}</span>
+            <span>{submission.submit_mode === 'restore_update' ? 'Restore by update' : submission.submit_mode === 'create_fallback' ? 'Create after upstream lookup' : 'Create account'}</span>
             <span>
               Submission <StateBadge value={submission.status} />
             </span>
           </div>
           {submission.status === 'unknown' && (
             <div className='notice'>
-              The platform result is unconfirmed. You may submit this account
-              again; each attempt is saved separately. The earlier attempt may
-              already have created the account.
+              {submission.submit_mode === 'restore_update' || submission.submit_mode === 'create_fallback'
+                ? 'The supplier result is unconfirmed. Do not resubmit. Contact an administrator to verify the previous attempt.'
+                : 'The platform result is unconfirmed. You may submit this account again; each attempt is saved separately. The earlier attempt may already have created the account.'}
             </div>
           )}
           {submission.status === 'running' && (

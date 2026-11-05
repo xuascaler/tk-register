@@ -59,6 +59,7 @@ func authError(code string) *Error {
 }
 
 type editRecord struct {
+	Alias string `json:"alias"`
 	rawAccount
 	Provider    string          `json:"provider"`
 	Model       string          `json:"model"`

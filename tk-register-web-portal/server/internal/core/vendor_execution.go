@@ -36,7 +36,9 @@ type VendorService struct {
 	Store     *Store
 	Transport http.RoundTripper
 	// ErrorLogger defaults to the process logger, collected by Docker.
-	ErrorLogger *log.Logger
+	ErrorLogger     *log.Logger
+	Restorer        AccountRestorer
+	AcquireMutation func(context.Context, uint64, string) (func(), error)
 }
 
 var verifiedVendorTransport = func() *http.Transport {
@@ -105,6 +107,7 @@ func (v *VendorService) credential(ctx context.Context, vendor Vendor, version P
 // APIExecutionResult keeps the complete upstream response in memory only. The
 // durable submission history contains bounded, redacted fields instead.
 type APIExecutionResult struct {
+	SubmitMode   string
 	SubmissionID string
 	RequestID    string
 	HTTPStatus   int
@@ -197,8 +200,26 @@ func (v *VendorService) create(ctx context.Context, userID uint64, input CreateS
 	if e != nil {
 		return SubmissionDetail{}, e
 	}
+	// The route and archive are selected durably under the same vendor lock as deletion.
+	var archive DeletedAccount
+	if e := v.Store.DB.WithContext(ctx).Where("vendor_id = ? AND LOWER(TRIM(account_email)) = ?", vendorID, NormalizeEmail(normalized["account"].(string))).Order("deleted_at DESC,id DESC").First(&archive).Error; e != nil && !errors.Is(e, ErrNotFound) {
+		return SubmissionDetail{}, e
+	}
+	if archive.ID != 0 {
+		if _, e := ValidateClaudeAccountAuthJSON(normalized["auth_json"], normalized["account"].(string)); e != nil {
+			return SubmissionDetail{}, e
+		}
+	}
+	if v.AcquireMutation != nil {
+		release, e := v.AcquireMutation(ctx, vendorID, normalized["account"].(string))
+		if e != nil {
+			return SubmissionDetail{}, e
+		}
+		defer release()
+	}
+
 	accountKey := v.Store.fingerprint(idString(userID) + ":" + idString(vendorID) + ":" + normalized["account"].(string))
-	record := Submission{UserID: userID, Source: source, APITokenID: apiTokenID, VendorID: vendorID, ProtocolVersionID: versionID, ClientRequestKey: input.ClientRequestKey, RequestHash: fingerprint, ActiveAccountKey: &accountKey, Account: normalized["account"].(string), Plan: normalized["plan"].(string), ParametersJSON: safeJSON, SecretParametersCiphertext: encrypted, Status: "running"}
+	record := Submission{UserID: userID, Source: source, APITokenID: apiTokenID, VendorID: vendorID, ProtocolVersionID: versionID, ClientRequestKey: input.ClientRequestKey, RequestHash: fingerprint, ActiveAccountKey: &accountKey, Account: normalized["account"].(string), Plan: normalized["plan"].(string), ParametersJSON: safeJSON, SecretParametersCiphertext: encrypted, Status: "running", SubmitMode: "create"}
 	execution := ProtocolExecution{ProtocolVersionID: versionID, RequestID: uuid.NewString(), Operation: "push", Status: "running", RequestJSON: safeJSON}
 	e = v.Store.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var lockedVendor Vendor
@@ -206,6 +227,9 @@ func (v *VendorService) create(ctx context.Context, userID uint64, input CreateS
 			return e
 		}
 		if e := rejectSubmissionDuringDeletion(tx, vendorID, record.Account); e != nil {
+			return e
+		}
+		if e := selectSubmissionRoute(tx, &record); e != nil {
 			return e
 		}
 		if e := tx.Create(&record).Error; e != nil {
@@ -225,8 +249,14 @@ func (v *VendorService) create(ctx context.Context, userID uint64, input CreateS
 		return SubmissionDetail{}, e
 	}
 	// Once the durable record exists, finish independently of browser disconnection.
-	result := v.execute(vendor, version, execution.RequestID, normalized, nil, token)
+	var result executionResult
+	if record.RestoredFromDeletedID != nil {
+		result = v.executeRestoredSubmission(vendor, version, &record, execution, normalized, token)
+	} else {
+		result = v.execute(vendor, version, execution.RequestID, normalized, nil, token)
+	}
 	if apiResponse != nil {
+		apiResponse.SubmitMode = record.SubmitMode
 		apiResponse.SubmissionID = idString(record.ID)
 		apiResponse.RequestID = execution.RequestID
 		if result.gatewayStatus == 0 && result.httpStatus != nil && !result.responseIncomplete && !result.responseTruncated {
@@ -297,6 +327,9 @@ func (v *VendorService) RefreshStatus(ctx context.Context, userID, id uint64, fo
 	if record.Status != "accepted" || record.RemoteID == nil {
 		return SubmissionDetail{}, vendorError(409, "ACCOUNT_NOT_ACCEPTED", "Remote queries are available only after the vendor accepts this account.")
 	}
+	if e := v.Store.checkSubmissionNotArchived(ctx, record); e != nil {
+		return SubmissionDetail{}, e
+	}
 	now := time.Now().UTC()
 	if !force && record.MetricsJSON != "" {
 		var metrics MetricResult
@@ -328,6 +361,18 @@ func (v *VendorService) Query(ctx context.Context, userID, id uint64, operation 
 	}
 	record, e := v.Store.OwnedSubmission(ctx, userID, id)
 	if e != nil {
+		return SubmissionDetail{}, e
+	}
+	// Serialize fresh queries with deletion/restoration so a previous owner cannot
+	// begin a read before deletion and receive data from the replacement lifetime.
+	if v.AcquireMutation != nil {
+		release, err := v.AcquireMutation(ctx, record.VendorID, record.Account)
+		if err != nil {
+			return SubmissionDetail{}, err
+		}
+		defer release()
+	}
+	if e := v.Store.checkSubmissionNotArchived(ctx, record); e != nil {
 		return SubmissionDetail{}, e
 	}
 	if record.Status != "accepted" || record.RemoteID == nil {
@@ -660,7 +705,7 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 				redacted := redactStrings(*result.alias, secrets).(string)
 				changes["remote_alias"] = redacted
 			}
-			if state == "failed" || state == "unknown" {
+			if state == "failed" || state == "unknown" && record.RestoredFromDeletedID == nil {
 				changes["active_account_key"] = nil
 			}
 		} else if result.status == "succeeded" {
@@ -696,7 +741,13 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 			if err := tx.Select("id, user_id, vendor_id, account, plan, status, source, remote_id, platform_account_id, created_at").Where("id = ? AND user_id = ?", record.ID, userID).First(&accepted).Error; err != nil {
 				return err
 			}
-			return enqueuePostSubmissionSyncTx(tx, accepted, now)
+			if err := enqueuePostSubmissionSyncTx(tx, accepted, now); err != nil {
+				return err
+			}
+			if record.SubmitMode == "restore_update" && record.TargetSupplierRecordID != "" {
+				return tx.Model(&SyncedAccount{}).Where("user_id = ? AND vendor_id = ? AND LOWER(TRIM(account)) = ? AND current_submission_id = ? AND deleted_at IS NULL", userID, record.VendorID, NormalizeEmail(record.Account), record.ID).Updates(map[string]any{"supplier_record_id": record.TargetSupplierRecordID, "auth_json_updated_at": now}).Error
+			}
+			return nil
 		}
 		return nil
 	})

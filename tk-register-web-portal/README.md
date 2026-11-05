@@ -136,6 +136,18 @@ All paths below are relative to `/tk-register/api` and require a TK session. Wri
 | `GET /admin/vendors/:id`                  | Administrator-only vendor configuration; token is write-only.                                              |
 | `PUT /admin/vendors/:id`                  | Administrator-only update of `{ enabled, timezone, access_token }`.                                        |
 
+## Resubmitting deleted accounts
+
+Browser and personal-token submissions share one route decision. The server searches completed `deleted_account` history by vendor and normalized account email across all users. No deletion history uses the existing OpenAPI creation flow. With deletion history, a complete exact-match supplier website lookup selects an update of the original supplier row; a confirmed absent account falls back to OpenAPI creation. Authentication failures, incomplete searches, duplicate matches, timeouts, and a changed supplier row ID never authorize fallback creation.
+
+The update uses the newly submitted password, Auth JSON, plan, dates and supported metadata. Omitted optional fields preserve the supplier's current values. The supplier edit form cannot change tags: omit tags or submit the existing tags; a requested tag change returns `supplier_restore_tags_unsupported`. Supplier locks and credential-edit restrictions still apply.
+
+A confirmed operation creates a new accepted submission owned by its current submitter, even when another user originally deleted it. The original owner's account remains archived and historical records are not transferred. Archived submissions cannot run fresh status or billing queries. A same-owner restoration reuses the local account row with a new lifetime; a different owner gets their own local account row. Both queue the existing five follow-up collections. Old usage snapshots are retained separately; restoring an account does not reset its upstream quota.
+
+Submission details expose `submit_mode`: `create`, `restore_update`, or `create_fallback`. External API responses also include `X-Submission-Mode`. Creation responses retain their existing passthrough contract; successful updates return HTTP 200 with the verified existing numeric `id`, supplier `alias` (using the existing public masking), and `submission_mode: "restore_update"`.
+
+Requests for the same supplier/email share the account mutation lease with deletion and Auth JSON edits. Restoration requests also have a durable in-flight/unknown guard, including fallback creation. Repeated browser request keys replay the saved result. An uncertain supplier write remains Unknown and blocks resubmission across restarts; it needs administrator reconciliation, because the supplier does not echo credentials and a metadata read cannot prove that all new credentials were saved. Writes are never automatically retried.
+
 ## User API tokens and external APIs
 
 **My account → API documentation** is the in-app reference for every public token API. Open `/tk-register#/docs` for the endpoint directory, authentication and limits; each endpoint has linkable parameter, cURL, response and error sections. Examples use the current website origin. The guides never send live API requests or include the signed-in user's token. Profile, sign-in details and token management remain in **Account settings**.

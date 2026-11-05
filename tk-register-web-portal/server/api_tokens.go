@@ -139,12 +139,15 @@ func (a *app) claudeAccountsAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	service := core.VendorService{Store: a.store, Transport: a.vendorTransport}
+	service := a.submissionService()
 	if err := a.store.RecoverVendorExecutions(r.Context()); err != nil {
 		internal(w)
 		return
 	}
 	result, err := service.CreateAPI(r.Context(), user.ID, token.ID, parameters)
+	if result.SubmitMode != "" {
+		w.Header().Set("X-Submission-Mode", result.SubmitMode)
+	}
 	if result.SubmissionID != "" {
 		w.Header().Set("X-Submission-ID", result.SubmissionID)
 	}

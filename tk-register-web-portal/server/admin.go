@@ -152,7 +152,7 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 				vendorFailure(w, e)
 				return true
 			}
-			service := core.VendorService{Store: a.store, Transport: a.vendorTransport}
+			service := a.submissionService()
 			if parts[1] == "status" {
 				var input struct {
 					Force bool `json:"force"`

@@ -17,6 +17,7 @@ export type Vendor = {
   credential_updated_at?: string | null;
 };
 export type Submission = {
+  submit_mode?: 'create' | 'restore_update' | 'create_fallback';
   id: string;
   vendor_id: string;
   vendor_code: string;
