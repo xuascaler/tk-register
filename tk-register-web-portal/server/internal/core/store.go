@@ -186,6 +186,10 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, errors.New("could not migrate post-submission sync jobs")
 	}
+	if err = s.migrateBillExports(); err != nil {
+		s.Close()
+		return nil, errors.New("could not migrate bill exports")
+	}
 	if err = s.validateVendorSecrets(); err != nil {
 		s.Close()
 		return nil, err

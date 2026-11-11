@@ -30,6 +30,7 @@ type mailer interface {
 	SendCode(context.Context, string, string, string, int) error
 }
 type app struct {
+	billExporter                       billExporter
 	accountRestorer                    core.AccountRestorer
 	store                              *core.Store
 	redis                              *redis.Client
@@ -144,6 +145,9 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	route := strings.TrimPrefix(r.URL.Path, basePath+"/api/")
+	if a.billExportRoutes(w, r, route) {
+		return
+	}
 	if a.accountSyncRoutes(w, r, route) {
 		return
 	}

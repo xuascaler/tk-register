@@ -268,3 +268,25 @@ TK_E2E_URL=http://127.0.0.1:39124 node tests/submissions.integration.mjs
 The optional `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` selects an installed Chromium browser. This fixture exists only in Go test files. Its vendor transport responds in memory and cannot contact the real vendor, even though protocol validation still checks the real configured origin. Tests verify database persistence/encryption, user isolation, repeated/uncertain submissions, CNY billing, and layouts at 1440/768/390/320 pixels. No vendor key is needed.
 
 Frontend tests use isolated fixtures. Backend tests use SQLite, temporary Redis and a local SMTP test server, without creating production users or delivering external emails. For local HTTP development, set `TK_REGISTER_PUBLIC_ORIGIN` to the loopback origin; the cookie Secure attribute follows that origin's protocol. Production must use an HTTPS origin.
+
+## Administrator Claude bill exports
+
+Config → **Bill exports** generates a filtered Excel workbook for one selected TK Register user. The interface uses the existing admin styles. Choose a user and an inclusive date range (up to 60 days, Beijing time), then generate the export. Refreshing the page does not cancel the job; recent exports remain available for download for seven days.
+
+The account set is frozen when the job is created: all current, undeleted `tk-register-0` Claude accounts belonging to the selected user, across all list pages. Repeated submissions are represented by the stable account record. Historical ownership is not considered. Accounts transferred into that user are therefore included for the entire selected date range. Accounts deleted before creation are excluded.
+
+The worker uses the configured **Account sync** website login and its encrypted Redis session cache to call the supplier's read-only `/supplier-account/api/supplier/bill/claude-export` endpoint. This endpoint returns account/model period totals, not daily observations. Local account snapshots are not used to estimate consumption. Platform account IDs are matched in their own namespace and verified against account emails; creation-response IDs are not treated as platform IDs.
+
+Only the selected user's filtered report is stored. The supplier-wide source workbook is processed privately in memory and is never served to browsers. The generated workbook contains account summary, bill details and accounts requiring review. Missing mappings and conflicting identities are distinguished from a verified account with no bill rows. CNY amounts and token counts come from the supplier export; selected totals are recomputed with exact decimal arithmetic. No historical exchange-rate conversion is applied.
+
+All endpoints below require an active administrator session. POST additionally requires the existing CSRF token and same-origin checks.
+
+| Method and path (relative to `/tk-register/api`) | Purpose |
+| --- | --- |
+| `POST /admin/bill-exports` | Create a job with string `user_id`, `start_date`, `end_date` (`YYYY-MM-DD`). |
+| `GET /admin/bill-exports` | Latest 20 job summaries. |
+| `GET /admin/bill-exports/:id` | Job status and counts, without report/file payloads. |
+| `GET /admin/bill-exports/:id/results?view=summary&page=1` | Paginated summary; use `details` or `review` for other sheets (50 rows/page). |
+| `GET /admin/bill-exports/:id/download` | Download only the filtered `.xlsx`; expired files return HTTP 410. |
+
+Jobs persist in `bill_export_jobs`; the frozen account selection is in `bill_export_accounts`. A distributed export gate and token-fenced database leases prevent two workers from publishing the same job. Interrupted reads may safely restart after lease expiry. Supplier login/query cooldowns defer jobs without busy retries. Export work does not hold a SQL transaction during HTTP calls or block the request handler. Reports have bounded source/row/output sizes; unsupported input formats fail explicitly. Filtered JSON is limited to 4 MiB and XLSX to 8 MiB; use a shorter date range if the result exceeds those limits. Creation is limited to five requests/minute per administrator, with at most five active jobs per administrator and 20 globally.

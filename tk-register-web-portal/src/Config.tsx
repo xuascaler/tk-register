@@ -12,6 +12,7 @@ import { ErrorNotice, Loading } from './ui';
 import VendorConfig from './submissions/VendorConfig';
 import Select from './submissions/Select';
 import Users from './admin/Users';
+import BillExports from './admin/BillExports';
 import AccountSyncConfig from './accounts/AccountSyncConfig';
 import {
   readableDuration,
@@ -28,6 +29,7 @@ const groups = [
   ['vendors', 'Vendors'],
   ['account_sync', 'Account sync'],
   ['users', 'Users'],
+  ['bill_exports', 'Bill exports'],
 ] as const;
 function initialDraft(settings: Setting[]) {
   return Object.fromEntries(
@@ -270,7 +272,7 @@ export default function Config({
       ) : (
         <>
           <div
-            className='tabs'
+            className='tabs config-section-tabs'
             role='tablist'
             aria-label='Configuration sections'
           >
@@ -287,7 +289,7 @@ export default function Config({
                 onClick={() => selectCategory(key)}
               >
                 {title}
-                {key !== 'vendors' && key !== 'users' && key !== 'account_sync' && (
+                {key !== 'vendors' && key !== 'users' && key !== 'account_sync' && key !== 'bill_exports' && (
                   <span className='tab-count' aria-hidden='true'>
                     {settings.filter((s) => s.category === key).length}
                   </span>
@@ -308,7 +310,9 @@ export default function Config({
               }))}
             />
           </div>
-          {category === 'users' ? (
+          {category === 'bill_exports' ? (
+            <div id='config-panel' role='tabpanel' aria-labelledby='tab-bill_exports'><BillExports /></div>
+          ) : category === 'users' ? (
             <div id='config-panel' role='tabpanel' aria-labelledby='tab-users'><Users currentUser={currentUser} registrationEnabled={String(settings.find(setting => setting.key === 'registration_enabled')?.value) === 'true'} /></div>
           ) : category === 'account_sync' ? (
             <div id='config-panel' role='tabpanel' aria-labelledby='tab-account_sync'><AccountSyncConfig onDirty={setSyncDirty} /></div>

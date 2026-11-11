@@ -100,3 +100,19 @@ func TestDiagnosticsLoggerCannotBreakRequest(t *testing.T) {
 	LogRequest(ctx, RequestEvent{StartedAt: time.Now(), Outcome: "failed"})
 	LogSync(ctx, SyncEvent{Event: "gate", Outcome: "rejected"})
 }
+
+func TestBillExportDiagnosticPathOmitsQueryAndAccountData(t *testing.T) {
+	t.Setenv("TK_REGISTER_SUPPLIER_DIAGNOSTICS", "all")
+	var output bytes.Buffer
+	ctx := WithLogger(context.Background(), log.New(&output, "", 0))
+	LogRequest(ctx, RequestEvent{StartedAt: time.Now(), Method: "GET", Path: "/supplier-account/api/supplier/bill/claude-export", HTTPStatus: 200, Outcome: "succeeded"})
+	event := decoded(t, strings.TrimSpace(output.String()), "TK_SUPPLIER_REQUEST")
+	if event["stage"] != "bill_export" || event["method"] != "GET" {
+		t.Fatal(event)
+	}
+	output.Reset()
+	LogRequest(ctx, RequestEvent{StartedAt: time.Now(), Method: "GET", Path: "/supplier-account/api/supplier/bill/claude-export?start_ds=secret", HTTPStatus: 200, Outcome: "succeeded"})
+	if strings.Contains(output.String(), "secret") {
+		t.Fatal("query leaked")
+	}
+}

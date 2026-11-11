@@ -194,6 +194,8 @@ func LogRequest(ctx context.Context, e RequestEvent) {
 		path, stage, method = e.Path, "pubkey", "POST"
 	case e.Method == "POST" && e.Path == "/supplier-account/api/supplier/login":
 		path, stage, method = e.Path, "login", "POST"
+	case e.Method == "GET" && e.Path == "/supplier-account/api/supplier/bill/claude-export":
+		path, stage, method = e.Path, "bill_export", "GET"
 	case e.Method == "GET" && e.Path == "/supplier-account/api/supplier/accounts":
 		path, stage, method = e.Path, "accounts", "GET"
 	}
@@ -269,5 +271,5 @@ func LogSession(ctx context.Context, event, stage string, waitSeconds int) {
 		Event       string `json:"event"`
 		Stage       string `json:"stage"`
 		WaitSeconds int    `json:"wait_seconds,omitempty"`
-	}{fields(ctx), event, allowed(stage, "login", "accounts", "login_lock"), max(0, waitSeconds)})
+	}{fields(ctx), event, allowed(stage, "login", "accounts", "bill_export", "login_lock"), max(0, waitSeconds)})
 }
