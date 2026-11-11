@@ -181,14 +181,8 @@ try {
     }
     if (path === "/auth/code") {
       codes++;
-      assert.ok(["register", "login"].includes(body.purpose));
+      assert.equal(body.purpose, "login");
       return ok({ retry_after: 60, expires_in: 600 });
-    }
-    if (path === "/auth/register") {
-      assert.equal(body.username, body.email);
-      assert.equal(body.code, "A1b2C3");
-      user = "member";
-      return ok(userSession(user));
     }
     if (path === "/auth/login") {
       if (body.email === "admin@example.com" && body.method === "code")
@@ -201,6 +195,8 @@ try {
           code_expires_in: 600,
           retry_after: 60,
         });
+      assert.equal(body.method, "code");
+      assert.equal(body.code, "A1b2C3");
       user = "member";
       return ok(userSession(user));
     }
@@ -232,11 +228,12 @@ try {
   });
   await page.goto(`http://127.0.0.1:${port}/tk-register/`);
   await page.getByRole("heading", { name: "Sign in", exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "Create account", exact: true }).count(),
+    0,
+  );
   await capture("login");
-  await page
-    .getByRole("button", { name: "Create account", exact: true })
-    .click();
-  await capture("register");
+  await page.getByRole("button", { name: "Email code", exact: true }).click();
   await page
     .getByLabel("Email address", { exact: true })
     .fill("member@example.com");
@@ -246,23 +243,7 @@ try {
     true,
   );
   await page.getByLabel("Verification code", { exact: true }).fill("A1b2C3");
-  await page.getByLabel("Password", { exact: true }).fill("test-password");
-  await page
-    .getByLabel("Confirm password", { exact: true })
-    .fill("other-password");
-  await page
-    .getByRole("button", { name: "Create account", exact: true })
-    .click();
-  await page
-    .getByRole("alert")
-    .filter({ hasText: "passwords do not match" })
-    .waitFor();
-  await page
-    .getByLabel("Confirm password", { exact: true })
-    .fill("test-password");
-  await page
-    .getByRole("button", { name: "Create account", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page
     .getByRole("heading", { name: "Submit account", exact: true })
     .waitFor();
@@ -378,7 +359,7 @@ try {
   assert.deepEqual(await page.evaluate(() => Object.keys(localStorage)), []);
   assert.deepEqual(pageErrors, []);
   console.log(
-    "Passed registration, member access, administrator two-step sign-in, settings saves, secret handling, validation, responsive layouts, and session expiry. No real APIs or emails were used.",
+    "Passed member email-code sign-in, member access, administrator two-step sign-in, settings saves, secret handling, validation, responsive layouts, and session expiry. No real APIs or emails were used.",
   );
 } finally {
   if (browser) await browser.close();

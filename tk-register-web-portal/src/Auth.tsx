@@ -388,39 +388,30 @@ export default function Auth({
                   : 'Sign in'}
           </button>
         </form>
-        <div className='auth-footer'>
-          {challenge ? (
-            <button
-              className='text-button'
-              disabled={busy || sending}
-              onClick={() => reset('login')}
-            >
-              Back to sign in
-            </button>
-          ) : page === 'register' ? (
-            <>
-              Already have an account?{' '}
+        {(challenge || page === 'register') && (
+          <div className='auth-footer'>
+            {challenge ? (
               <button
                 className='text-button'
                 disabled={busy || sending}
                 onClick={() => reset('login')}
               >
-                Sign in
+                Back to sign in
               </button>
-            </>
-          ) : status.registration_enabled ? (
-            <>
-              New to TK Register?{' '}
-              <button
-                className='text-button'
-                disabled={busy || sending}
-                onClick={() => reset('register')}
-              >
-                Create account
-              </button>
-            </>
-          ) : null}
-        </div>
+            ) : page === 'register' ? (
+              <>
+                Already have an account?{' '}
+                <button
+                  className='text-button'
+                  disabled={busy || sending}
+                  onClick={() => reset('login')}
+                >
+                  Sign in
+                </button>
+              </>
+            ) : null}
+          </div>
+        )}
       </section>
     </main>
   );

@@ -41,24 +41,22 @@ try {
     assert.equal(response.status(), 200);
   };
   const register = async (email) => {
-    await page
-      .getByRole("button", { name: "Create account", exact: true })
-      .click();
-    await page.getByLabel("Email address", { exact: true }).fill(email);
-    await page.getByRole("button", { name: "Send code", exact: true }).click();
-    await page.getByText(/Code requested\. Check your inbox/).waitFor();
-    await page
-      .getByLabel("Verification code", { exact: true })
-      .fill(await code(email, "register"));
-    await page
-      .getByLabel("Password", { exact: true })
-      .fill("Fixture-password-2026!");
-    await page
-      .getByLabel("Confirm password", { exact: true })
-      .fill("Fixture-password-2026!");
-    await page
-      .getByRole("button", { name: "Create account", exact: true })
-      .click();
+    const delivery = await page.request.post(`${base}/tk-register/api/auth/code`, {
+      headers: { Origin: base },
+      data: { email, purpose: "register" },
+    });
+    assert.equal(delivery.status(), 200);
+    const registration = await page.request.post(`${base}/tk-register/api/auth/register`, {
+      headers: { Origin: base },
+      data: {
+        username: email,
+        email,
+        password: "Fixture-password-2026!",
+        code: await code(email, "register"),
+      },
+    });
+    assert.equal(registration.status(), 200);
+    await page.reload();
     await page
       .getByRole("heading", { name: "Submit account", exact: true })
       .waitFor();
