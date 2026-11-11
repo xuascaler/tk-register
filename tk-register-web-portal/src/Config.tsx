@@ -309,7 +309,7 @@ export default function Config({
             />
           </div>
           {category === 'users' ? (
-            <div id='config-panel' role='tabpanel' aria-labelledby='tab-users'><Users currentUser={currentUser} /></div>
+            <div id='config-panel' role='tabpanel' aria-labelledby='tab-users'><Users currentUser={currentUser} registrationEnabled={String(settings.find(setting => setting.key === 'registration_enabled')?.value) === 'true'} /></div>
           ) : category === 'account_sync' ? (
             <div id='config-panel' role='tabpanel' aria-labelledby='tab-account_sync'><AccountSyncConfig onDirty={setSyncDirty} /></div>
           ) : category === 'vendors' ? (

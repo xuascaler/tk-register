@@ -21,7 +21,7 @@ func adminPage(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return page, true
 }
 func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) bool {
-	if route != "admin/users" && route != "admin/users/role" && route != "admin/accounts" && !strings.HasPrefix(route, "admin/accounts/") && route != "admin/submissions" && !strings.HasPrefix(route, "admin/submissions/") {
+	if route != "admin/users" && route != "admin/users/role" && route != "admin/users/registration-code" && route != "admin/accounts" && !strings.HasPrefix(route, "admin/accounts/") && route != "admin/submissions" && !strings.HasPrefix(route, "admin/submissions/") {
 		return false
 	}
 	actor, _, valid := a.authenticated(w, r, r.Method != "GET")
@@ -37,6 +37,22 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 			internal(w)
 			return true
 		}
+	}
+	if route == "admin/users/registration-code" && r.Method == "POST" {
+		var input struct {
+			Email string `json:"email"`
+		}
+		if decode(w, r, &input) {
+			a.sendVerificationCode(w, r, input.Email, "register", true)
+		}
+		return true
+	}
+	if route == "admin/users" && r.Method == "POST" {
+		user, _, created := a.registerVerifiedUser(w, r, actor)
+		if created {
+			ok(w, map[string]any{"user": core.AdminUser{ID: strconv.FormatUint(user.ID, 10), Email: user.Email, Role: user.Role, Status: user.Status, CreatedAt: user.CreatedAt.UTC()}})
+		}
+		return true
 	}
 	if route == "admin/users/role" && r.Method == "POST" {
 		var input struct {

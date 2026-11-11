@@ -76,6 +76,27 @@ func (s *Store) AdminUsers(ctx context.Context, page int, search string) (AdminU
 	}
 	return out, nil
 }
+
+// CreateMemberByAdmin rechecks the actor while holding its row lock, so a
+// concurrent demotion cannot create a member using stale admin authorization.
+// It intentionally does not create a session or grant administrator privileges.
+func (s *Store) CreateMemberByAdmin(ctx context.Context, actorID, actorVersion uint64, user *User) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var actor User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&actor, actorID).Error; err != nil {
+			return err
+		}
+		if actor.Role != "admin" || actor.Status != "active" || actor.AuthVersion != actorVersion {
+			return vendorError(403, "FORBIDDEN", "Administrator access is required.")
+		}
+		user.Role = "member"
+		user.Status = "active"
+		transactionStore := *s
+		transactionStore.DB = tx
+		return transactionStore.CreateUser(ctx, user)
+	})
+}
+
 func (s *Store) ChangeUserRole(ctx context.Context, actorID, actorVersion uint64, email, role, protectedEmail string) (AdminUser, error) {
 	var out AdminUser
 	email = NormalizeEmail(email)

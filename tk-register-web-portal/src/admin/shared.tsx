@@ -56,8 +56,9 @@ export function useListFilters() {
     return () => clearTimeout(timer);
   }, [search]);
   const refresh = () => { forceNext.current = true; setAttempt(value => value + 1); };
+  const resetSearch = () => { setSearch(''); setQuery(''); setPage(1); };
   const changeStatus = (value: string) => { setStatus(value); setPage(1); };
-  return { search, setSearch, query, page, setPage, status, changeStatus, attempt, forceNext, refresh };
+  return { search, setSearch, resetSearch, query, page, setPage, status, changeStatus, attempt, forceNext, refresh };
 }
 
 

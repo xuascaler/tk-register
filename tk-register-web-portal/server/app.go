@@ -459,13 +459,24 @@ func (a *app) sendCode(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &in) {
 		return
 	}
-	in.Email = core.NormalizeEmail(in.Email)
+	a.sendVerificationCode(w, r, in.Email, in.Purpose, false)
+}
+
+// Both registration entry points share delivery throttling, TTLs and the same
+// one-time register-purpose code. Only authenticated admins receive an explicit
+// existing-email error; the public endpoint keeps its non-enumerating response.
+func (a *app) sendVerificationCode(w http.ResponseWriter, r *http.Request, email, purpose string, administrator bool) {
+	in := struct{ Email, Purpose string }{core.NormalizeEmail(email), purpose}
 	if !validEmail(in.Email) || (in.Purpose != "register" && in.Purpose != "login") {
 		fail(w, 400, "INVALID_REQUEST", "Enter a valid email address of up to 50 characters.")
 		return
 	}
 	v, good := a.config(w, r)
 	if !good {
+		return
+	}
+	if administrator && !v.Bool("registration_enabled") {
+		fail(w, 403, "REGISTRATION_DISABLED", "Registration is currently unavailable.")
 		return
 	}
 	if (in.Purpose == "register" && !v.Bool("registration_enabled")) || (in.Purpose == "login" && !v.Bool("email_code_login_enabled")) {
@@ -475,6 +486,10 @@ func (a *app) sendCode(w http.ResponseWriter, r *http.Request) {
 	u, err := a.store.GetUserByEmail(r.Context(), in.Email)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		internal(w)
+		return
+	}
+	if administrator && err == nil {
+		fail(w, 409, "EMAIL_ALREADY_REGISTERED", "This email is already registered. Use Add admin to change its role.")
 		return
 	}
 	send := in.Purpose == "register" && errors.Is(err, gorm.ErrRecordNotFound) || in.Purpose == "login" && err == nil && u.Status == "active" && u.Role == "member"
@@ -489,6 +504,16 @@ func (a *app) sendCode(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"retry_after": v.Int("email_send_cooldown_seconds"), "expires_in": ttl, "message": "If this email is eligible, a verification code has been sent."})
 }
 func (a *app) register(w http.ResponseWriter, r *http.Request) {
+	user, values, good := a.registerVerifiedUser(w, r, nil)
+	if good {
+		a.establish(w, r, user, values)
+	}
+}
+
+// Creating a user and signing that user in are deliberately separate. The
+// administrator entry point shares every registration check without replacing
+// the administrator's session with the newly created member's session.
+func (a *app) registerVerifiedUser(w http.ResponseWriter, r *http.Request, actor *core.User) (*core.User, core.Values, bool) {
 	var in struct {
 		Email    string `json:"email"`
 		Username string `json:"username"`
@@ -496,54 +521,68 @@ func (a *app) register(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if !decode(w, r, &in) {
-		return
+		return nil, nil, false
 	}
 	in.Email = core.NormalizeEmail(in.Email)
 	if !validEmail(in.Email) || (in.Username != "" && core.NormalizeEmail(in.Username) != in.Email) || utf8.RuneCountInString(in.Password) < 8 || len(in.Password) > 72 {
 		fail(w, 400, "INVALID_REQUEST", "Use a valid email (up to 50 characters) and a password of at least 8 characters, up to 72 UTF-8 bytes. The username must match the email.")
-		return
+		return nil, nil, false
 	}
 	v, good := a.config(w, r)
 	if !good {
-		return
+		return nil, nil, false
 	}
 	if !v.Bool("registration_enabled") {
 		fail(w, 403, "REGISTRATION_DISABLED", "Registration is currently unavailable.")
-		return
+		return nil, nil, false
 	}
 	existing, err := a.store.GetUserByEmail(r.Context(), in.Email)
 	if err == nil && existing != nil {
-		fail(w, 400, "REGISTRATION_FAILED", "This registration could not be completed. Check the email and code or sign in.")
-		return
+		if actor != nil {
+			fail(w, 409, "EMAIL_ALREADY_REGISTERED", "This email is already registered. Use Add admin to change its role.")
+		} else {
+			fail(w, 400, "REGISTRATION_FAILED", "This registration could not be completed. Check the email and code or sign in.")
+		}
+		return nil, nil, false
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		internal(w)
-		return
+		return nil, nil, false
 	}
 	valid, err := a.checkCode(r.Context(), in.Email, "register", in.Code, v.Int("verification_max_attempts"), "")
 	if err != nil {
 		internal(w)
-		return
+		return nil, nil, false
 	}
 	if !valid {
 		fail(w, 400, "INVALID_CODE", "The verification code is invalid or expired.")
-		return
+		return nil, nil, false
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
 	if err != nil {
 		internal(w)
-		return
+		return nil, nil, false
 	}
 	role := "member"
-	if in.Email == a.adminEmail {
+	if actor == nil && in.Email == a.adminEmail {
 		role = "admin"
 	}
 	user := &core.User{Email: in.Email, PasswordHash: string(hash), Role: role, Status: "active", EmailVerifiedAt: time.Now().UTC()}
-	if err = a.store.CreateUser(r.Context(), user); err != nil {
-		fail(w, 409, "REGISTRATION_FAILED", "This registration could not be completed. Try signing in or request a new code.")
-		return
+	if actor == nil {
+		err = a.store.CreateUser(r.Context(), user)
+	} else {
+		err = a.store.CreateMemberByAdmin(r.Context(), actor.ID, actor.AuthVersion, user)
 	}
-	a.establish(w, r, user, v)
+	if err != nil {
+		var authorization *core.VendorError
+		if errors.As(err, &authorization) {
+			vendorFailure(w, err)
+		} else {
+			fail(w, 409, "REGISTRATION_FAILED", "This registration could not be completed. Try signing in or request a new code.")
+		}
+		return nil, nil, false
+	}
+	return user, v, true
 }
 func (a *app) passwordRate(w http.ResponseWriter, r *http.Request, email string, v core.Values) ([]string, bool) {
 	keys := []string{redisPrefix + "login-email:" + digest(email), redisPrefix + "login-ip:" + digest(clientIP(r))}

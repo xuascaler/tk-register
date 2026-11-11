@@ -1,10 +1,11 @@
-import { Check, ShieldCheck, UserMinus, UserPlus, X } from 'lucide-react';
+import { Check, Plus, ShieldCheck, UserMinus, UserPlus, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { errorMessage, request, type User } from '../api';
 import { dateTime, Empty, StateBadge } from '../submissions/shared';
 import { ErrorNotice, Loading } from '../ui';
 import { ListToolbar, Pagination, useListFilters } from './shared';
 import type { AdminUser, Page } from './types';
+import CreateUserDialog from './CreateUserDialog';
 
 function RoleDialog({ role, currentUser, onClose, onSaved }: {
   role: 'admin' | 'member'; currentUser: User; onClose: () => void; onSaved: (user: AdminUser) => void;
@@ -70,7 +71,7 @@ function RoleDialog({ role, currentUser, onClose, onSaved }: {
   </dialog>;
 }
 
-export default function Users({ currentUser }: { currentUser: User }) {
+export default function Users({ currentUser, registrationEnabled }: { currentUser: User; registrationEnabled: boolean }) {
   const filters = useListFilters();
   const { page, query, attempt } = filters;
   const [list, setList] = useState<Page<AdminUser> | null>(null);
@@ -78,6 +79,9 @@ export default function Users({ currentUser }: { currentUser: User }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [role, setRole] = useState<'admin' | 'member' | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const registrationDeadlines = useRef<Record<string, number>>({});
   useEffect(() => {
     const abort = new AbortController();
     setLoading(true); setError('');
@@ -94,10 +98,18 @@ export default function Users({ currentUser }: { currentUser: User }) {
     setNotice(user.role === 'admin' ? `${user.email} is now an admin.` : `Admin access removed for ${user.email}.`);
     filters.refresh();
   }
+  function created(user: AdminUser) {
+    setCreating(false);
+    setCreatedId(user.id);
+    setNotice(`Account created for ${user.email}.`);
+    filters.resetSearch();
+    filters.refresh();
+  }
   return <div className='admin-users'>
-    <div className='section-heading admin-users-heading'><div><h2>Users</h2><p className='muted small'>Manage administrator access by email.</p></div>
-      <div className='admin-role-actions'><button className='button secondary' onClick={() => { setNotice(''); setRole('admin'); }}><UserPlus aria-hidden='true' />Add admin</button><button className='button secondary' onClick={() => { setNotice(''); setRole('member'); }}><UserMinus aria-hidden='true' />Del admin</button></div>
+    <div className='section-heading admin-users-heading'><div><h2>Users</h2><p className='muted small'>Create accounts and manage administrator access.</p></div>
+      <div className='admin-role-actions'><button className='button primary admin-create-trigger' disabled={!registrationEnabled} aria-describedby={!registrationEnabled ? 'admin-registration-disabled' : undefined} onClick={() => { setNotice(''); setCreating(true); }}><Plus aria-hidden='true' />Create account</button><button className='button secondary' onClick={() => { setNotice(''); setRole('admin'); }}><UserPlus aria-hidden='true' />Add admin</button><button className='button secondary' onClick={() => { setNotice(''); setRole('member'); }}><UserMinus aria-hidden='true' />Del admin</button></div>
     </div>
+    {!registrationEnabled && <p className='muted small' id='admin-registration-disabled'>Registration is disabled. Enable it in Config → Access to create an account.</p>}
     {notice && <div className='notice success' role='status'><Check aria-hidden='true' />{notice}</div>}
     <ListToolbar id='users' search={filters.search} onSearch={filters.setSearch} placeholder='Search user email' busy={loading} onRefresh={filters.refresh} />
     <ErrorNotice>{error}</ErrorNotice>
@@ -105,8 +117,8 @@ export default function Users({ currentUser }: { currentUser: User }) {
       {!list.items.length ? <Empty title='No matching users'>Try another email address.</Empty> : <div className='admin-table-wrap'><table className='admin-table admin-users-table'>
         <caption className='sr-only'>Registered users and their roles</caption>
         <thead><tr><th scope='col'>User</th><th scope='col'>Role</th><th scope='col'>Status</th><th scope='col'>Joined</th></tr></thead>
-        <tbody>{list.items.map(user => <tr key={user.id}>
-          <td className='admin-primary-cell' data-label='User'><span className='admin-email'>{user.email}</span><span className='admin-cell-note'>User #{user.id}{String(user.id) === String(currentUser.id) ? ' · You' : ''}</span></td>
+        <tbody>{list.items.map(user => <tr key={user.id} className={user.id === createdId ? 'admin-user-created' : undefined}>
+          <td className='admin-primary-cell' data-label='User'><span className='admin-email'>{user.email}</span><span className='admin-cell-note'>User #{user.id}{String(user.id) === String(currentUser.id) ? ' · You' : user.id === createdId ? ' · Just created' : ''}</span></td>
           <td data-label='Role'><span className={`admin-role-badge ${user.role === 'admin' ? 'is-admin' : ''}`}>{user.role === 'admin' && <ShieldCheck aria-hidden='true' />}{user.role === 'admin' ? 'Admin' : 'Member'}</span></td>
           <td data-label='Status'><StateBadge value={user.status} /></td>
           <td data-label='Joined'><time dateTime={user.created_at}>{dateTime(user.created_at)}</time></td>
@@ -115,5 +127,6 @@ export default function Users({ currentUser }: { currentUser: User }) {
       <Pagination data={list} noun='user' busy={loading} onPage={filters.setPage} />
     </section> : error ? <button className='button secondary' onClick={filters.refresh}>Try again</button> : null}
     {role && <RoleDialog role={role} currentUser={currentUser} onClose={() => setRole(null)} onSaved={saved} />}
+    {creating && <CreateUserDialog deadlines={registrationDeadlines} onClose={() => setCreating(false)} onSaved={created} />}
   </div>;
 }

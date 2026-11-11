@@ -216,6 +216,8 @@ See the [Auth JSON Update API reference](docs/auth-json-update-api.md) for the f
 
 **Config → Users** lists TK Register users, roles, account status and registration time. **Add admin** and **Del admin** accept an existing user's email; changing a role does not create or delete an account. Roles are read-only in the table. The current administrator and bootstrap administrator cannot be demoted, and the server prevents removing the last active administrator. A promoted administrator must sign in with a password and email code.
 
+**Create account** opens the email registration form in the Users page. Enter the new user's email, request and verify an email code, and set and confirm a password. The email is the username. New accounts start as members; granting administrator access remains a separate **Add admin** operation. Successful creation refreshes the user list without signing in as the new user or replacing the current administrator's session. The form follows the current registration setting, code lifetime, resend cooldown, email/IP limits and password rules. Turning registration off also disables administrator account creation.
+
 Role updates are serialized and saved in one database transaction with an `admin_role_audits` record (`actor_id` and `target_id` reference `users.id`). Each change increments `users.auth_version`. Sessions and pending administrator login challenges carry that version and are rejected after a role change, even if the user's role is subsequently restored. Existing users migrate with version zero, so the deployment itself does not sign everyone out. `admin_role_guards` contains the singleton row used to serialize concurrent role changes.
 
 **Management → Account pool → Accounts** groups submissions by vendor, submitting user and trimmed/case-normalized account identifier. Different owners' accounts are never merged. Latest submit status uses `created_at DESC, id DESC`; current account status comes from the newest accepted submission with a remote ID. A later failed submission does not replace that accepted account. A newer accepted record becomes the query target even when its first status query has not completed.
@@ -229,6 +231,8 @@ All following routes require a current TK administrator session; writes require 
 | Method and path | Behavior |
 | --- | --- |
 | `GET /admin/users?page=1&search=` | Paginated users without authentication secrets. |
+| `POST /admin/users/registration-code` | Send a registration code for `{ email }`; returns configured `retry_after` and `expires_in` in seconds. Shares registration code delivery and limits with public signup. |
+| `POST /admin/users` | Create a verified member with `{ username, email, password, code }`; username must match email. Returns `{ user }` without a new session or login cookie. |
 | `POST /admin/users/role` | Change an existing user's role using `{ email, role: "admin" | "member" }`. |
 | `GET /admin/accounts?page=1&search=&status=` | Grouped account pool, owner, latest submission and current accepted account. |
 | `GET /admin/accounts/:id?page=1` | Account summary and its paginated history. Any submission ID in the group is a valid stable link. |
