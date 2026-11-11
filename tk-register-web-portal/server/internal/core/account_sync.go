@@ -163,22 +163,26 @@ func (s *Store) EnsureSyncedAccounts(ctx context.Context) error {
 }
 
 func (s *Store) ensureSyncedAccounts(ctx context.Context, userID uint64) error {
-	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		q := tx.Model(&Submission{}).Table("submissions AS s").Where(`NOT EXISTS (SELECT 1 FROM submissions AS newer WHERE newer.user_id = s.user_id AND newer.vendor_id = s.vendor_id AND LOWER(TRIM(newer.account)) = LOWER(TRIM(s.account)) AND (newer.created_at > s.created_at OR (newer.created_at = s.created_at AND newer.id > s.id)))`)
-		if userID != 0 {
-			q = q.Where("s.user_id = ?", userID)
-		}
-		var latestRows []Submission
-		if err := q.Select("s.id, s.user_id, s.vendor_id, s.account, s.plan, s.status, s.remote_id, s.platform_account_id, s.created_at").Find(&latestRows).Error; err != nil {
+	// Startup/import reconciliation is explicit maintenance, never part of a
+	// read. Commit one account at a time so it cannot hold an entire owner's
+	// rows while waiting for another request's locks.
+	q := s.DB.WithContext(ctx).Model(&Submission{}).Table("submissions AS s").Where(`NOT EXISTS (SELECT 1 FROM submissions AS newer WHERE newer.user_id = s.user_id AND newer.vendor_id = s.vendor_id AND LOWER(TRIM(newer.account)) = LOWER(TRIM(s.account)) AND (newer.created_at > s.created_at OR (newer.created_at = s.created_at AND newer.id > s.id)))`)
+	if userID != 0 {
+		q = q.Where("s.user_id = ?", userID)
+	}
+	var latestRows []Submission
+	if err := q.Select("s.id, s.user_id, s.vendor_id, s.account").Order("s.id ASC").Find(&latestRows).Error; err != nil {
+		return err
+	}
+	for _, latest := range latestRows {
+		if err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			_, err := ensureSyncedAccountForSubmissionTx(tx, latest)
+			return err
+		}); err != nil {
 			return err
 		}
-		for _, latest := range latestRows {
-			if _, err := ensureSyncedAccountTx(tx, latest); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // This helper always uses the caller's transaction. Submission acceptance and
@@ -337,9 +341,6 @@ func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int,
 	if err := validAccountFilter(page, search, status); err != nil {
 		return out, err
 	}
-	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
-		return out, err
-	}
 	q := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("deleted_at IS NULL")
 	if !includeOwner {
 		q = q.Where("user_id = ?", userID)
@@ -380,9 +381,6 @@ func (s *Store) SyncedAccountForUser(ctx context.Context, userID, id uint64) (Ac
 	if userID == 0 || id == 0 {
 		return AccountDTO{}, ErrNotFound
 	}
-	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
-		return AccountDTO{}, err
-	}
 	var row SyncedAccount
 	if err := s.DB.WithContext(ctx).Where("id = ? AND user_id = ? AND deleted_at IS NULL", id, userID).First(&row).Error; err != nil {
 		return AccountDTO{}, err
@@ -406,9 +404,6 @@ func (s *Store) LookupSyncedAccountForUser(ctx context.Context, userID uint64, v
 	if err := s.DB.WithContext(ctx).Where("code = ?", vendorCode).First(&vendor).Error; err != nil {
 		return AccountDTO{}, err
 	}
-	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
-		return AccountDTO{}, err
-	}
 	key := accountDigest(idString(userID), idString(vendor.ID), account)
 	var row SyncedAccount
 	if err := s.DB.WithContext(ctx).Where("account_key = ? AND user_id = ? AND vendor_id = ? AND deleted_at IS NULL", key, userID, vendor.ID).First(&row).Error; err != nil {
@@ -424,9 +419,6 @@ func (s *Store) LookupSyncedAccountForUser(ctx context.Context, userID uint64, v
 func (s *Store) SyncedAccountForAdmin(ctx context.Context, id uint64) (AccountDTO, error) {
 	if id == 0 {
 		return AccountDTO{}, ErrNotFound
-	}
-	if err := s.ensureSyncedAccounts(ctx, 0); err != nil {
-		return AccountDTO{}, err
 	}
 	var row SyncedAccount
 	if err := s.DB.WithContext(ctx).Where("deleted_at IS NULL").First(&row, id).Error; err != nil {
@@ -472,9 +464,6 @@ func (s *Store) AccountSnapshots(ctx context.Context, accountID uint64, days int
 }
 
 func (s *Store) CollectionTargets(ctx context.Context, userID, accountID uint64) ([]SyncedAccount, error) {
-	if err := s.ensureSyncedAccounts(ctx, userID); err != nil {
-		return nil, err
-	}
 	q := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("deleted_at IS NULL").Where("current_submission_id IS NOT NULL AND deletion_status = ?", "")
 	q = q.Where("vendor_id IN (?)", s.DB.Model(&Vendor{}).Select("id").Where("enabled = ? AND code = ?", true, "tk-register-0"))
 	if userID != 0 {

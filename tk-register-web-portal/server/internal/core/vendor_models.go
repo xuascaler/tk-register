@@ -510,12 +510,51 @@ func (s *Store) Submissions(ctx context.Context, userID uint64, page int, search
 // Expired running records are uncertain, never automatically put back in a send queue.
 func (s *Store) RecoverVendorExecutions(ctx context.Context) error {
 	cutoff := time.Now().UTC().Add(-2 * time.Minute)
-	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if e := tx.Model(&Submission{}).Where("status = ? AND created_at < ?", "running", cutoff).Updates(map[string]any{"status": "unknown", "active_account_key": gorm.Expr("CASE WHEN restored_from_deleted_id IS NULL THEN NULL ELSE active_account_key END")}).Error; e != nil {
-			return e
+	now := time.Now().UTC()
+	interrupted := map[string]any{"status": "unknown", "error_code": "EXECUTION_INTERRUPTED", "message": "The service could not confirm the remote result. Do not resubmit this account automatically.", "finished_at": now}
+	var submissions []Submission
+	if err := s.DB.WithContext(ctx).Select("id, user_id, vendor_id, account").Where("status = ? AND created_at < ?", "running", cutoff).Order("id ASC").Find(&submissions).Error; err != nil {
+		return err
+	}
+	for _, submission := range submissions {
+		// One account per transaction: recovery must not lock every owner's
+		// accounts together. Lock executions before their submission/account,
+		// matching ordinary result persistence in VendorService.finish.
+		if err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var executions []ProtocolExecution
+			if err := tx.Select("id").Where("submission_id = ? AND status = ? AND created_at < ?", submission.ID, "running", cutoff).Order("id ASC").Find(&executions).Error; err != nil {
+				return err
+			}
+			for _, execution := range executions {
+				if err := tx.Model(&ProtocolExecution{}).Where("id = ? AND status = ? AND created_at < ?", execution.ID, "running", cutoff).Updates(interrupted).Error; err != nil {
+					return err
+				}
+			}
+			changed := tx.Model(&Submission{}).Where("id = ? AND status = ? AND created_at < ?", submission.ID, "running", cutoff).Updates(map[string]any{"status": "unknown", "active_account_key": gorm.Expr("CASE WHEN restored_from_deleted_id IS NULL THEN NULL ELSE active_account_key END")})
+			if changed.Error != nil {
+				return changed.Error
+			}
+			if changed.RowsAffected == 0 {
+				return nil
+			}
+			_, err := ensureSyncedAccountForSubmissionTx(tx, submission)
+			return err
+		}); err != nil {
+			return err
 		}
-		return tx.Model(&ProtocolExecution{}).Where("status = ? AND created_at < ?", "running", cutoff).Updates(map[string]any{"status": "unknown", "error_code": "EXECUTION_INTERRUPTED", "message": "The service could not confirm the remote result. Do not resubmit this account automatically.", "finished_at": time.Now().UTC()}).Error
-	})
+	}
+	// Expired read-only queries can belong to an already accepted submission.
+	// Close those executions without changing its acceptance or account data.
+	var executions []ProtocolExecution
+	if err := s.DB.WithContext(ctx).Select("id").Where("status = ? AND created_at < ?", "running", cutoff).Order("id ASC").Find(&executions).Error; err != nil {
+		return err
+	}
+	for _, execution := range executions {
+		if err := s.DB.WithContext(ctx).Model(&ProtocolExecution{}).Where("id = ? AND status = ? AND created_at < ?", execution.ID, "running", cutoff).Updates(interrupted).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (s *Store) validateVendorSecrets() error {
 	var cs []VendorCredential

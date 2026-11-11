@@ -114,6 +114,10 @@ func seedAdminSubmission(t *testing.T, a *app, owner uint64, vendor core.VendorD
 	if e := a.store.DB.Create(&r).Error; e != nil {
 		t.Fatal(e)
 	}
+	// Imported fixtures explicitly build the account projection; GET is read-only.
+	if e := a.store.EnsureSyncedAccounts(context.Background()); e != nil {
+		t.Fatal(e)
+	}
 	return r
 }
 func decodeAdminPage(t *testing.T, w *httptest.ResponseRecorder) core.AdminAccountPage {

@@ -20,6 +20,7 @@ func vendorFailure(w http.ResponseWriter, err error) {
 		fail(w, 404, "NOT_FOUND", "This record does not exist.")
 		return
 	}
+	logUnexpectedVendorFailure(w, err)
 	internal(w)
 }
 func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string) bool {

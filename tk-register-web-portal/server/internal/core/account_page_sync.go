@@ -10,13 +10,6 @@ func (s *Store) PageSyncTargets(ctx context.Context, userID uint64, ids []uint64
 	if len(ids) == 0 || len(ids) > 20 || (!admin && userID == 0) {
 		return nil, ErrNotFound
 	}
-	owner := userID
-	if admin {
-		owner = 0
-	}
-	if err := s.ensureSyncedAccounts(ctx, owner); err != nil {
-		return nil, err
-	}
 	return s.pageAccountRows(ctx, userID, ids, admin)
 }
 func (s *Store) pageAccountRows(ctx context.Context, userID uint64, ids []uint64, admin bool) ([]SyncedAccount, error) {
@@ -44,13 +37,6 @@ func (s *Store) pageAccountRows(ctx context.Context, userID uint64, ids []uint64
 	return ordered, nil
 }
 func (s *Store) PageSyncedAccountDTOs(ctx context.Context, userID uint64, ids []uint64, admin bool) ([]AccountDTO, map[uint64]string, error) {
-	owner := userID
-	if admin {
-		owner = 0
-	}
-	if err := s.ensureSyncedAccounts(ctx, owner); err != nil {
-		return nil, nil, err
-	}
 	rows, err := s.pageAccountRows(ctx, userID, ids, admin)
 	if err != nil {
 		return nil, nil, err

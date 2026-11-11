@@ -148,11 +148,13 @@ func TestPostSubmissionEnqueueFailureRollsBackAcceptanceAndAccount(t *testing.T)
 	if err = service.Store.DB.Where("submission_id = ?", submission.ID).First(&execution).Error; err != nil || execution.Status != "running" || execution.FinishedAt != nil {
 		t.Fatal("execution completion escaped failed transaction", execution, err)
 	}
-	for _, model := range []any{&SyncedAccount{}, &PostSubmissionSyncJob{}} {
-		var count int64
-		if err = service.Store.DB.Model(model).Count(&count).Error; err != nil || count != 0 {
-			t.Fatal("account/job escaped failed transaction", count, err)
-		}
+	var account SyncedAccount
+	if err = service.Store.DB.Where("latest_submission_id = ?", submission.ID).First(&account).Error; err != nil || account.SubmissionStatus != "running" || account.CurrentSubmissionID != nil || account.RemoteID != nil {
+		t.Fatal("acceptance escaped rollback into the initial running account", account, err)
+	}
+	var count int64
+	if err = service.Store.DB.Model(&PostSubmissionSyncJob{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatal("job escaped failed transaction", count, err)
 	}
 }
 

@@ -189,9 +189,11 @@ func TestPageSyncGlobalFailureAndIdentityGuards(t *testing.T) {
 					if err := a.store.DB.Create(&sub).Error; err != nil {
 						t.Fatal(err)
 					}
-					// Account projection has not been reconciled yet; final DTO read must see
-					// this new accepted lifetime instead of labeling its data as refreshed.
-
+					// Real acceptance now projects the new lifetime in its write transaction.
+					// This direct database fixture must do the same before the old query ends.
+					if err := a.store.EnsureSyncedAccounts(ctx); err != nil {
+						t.Fatal(err)
+					}
 				}
 				return []supplier.AccountResult{record}, nil
 			}

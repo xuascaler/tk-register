@@ -109,6 +109,7 @@ func (a *app) claudeAccountAuthJSONAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		logUnexpectedVendorFailure(w, err)
 		internal(w)
 		return
 	}

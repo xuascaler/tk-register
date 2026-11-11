@@ -236,7 +236,13 @@ func (v *VendorService) create(ctx context.Context, userID uint64, input CreateS
 			return e
 		}
 		execution.SubmissionID = record.ID
-		return tx.Create(&execution).Error
+		if e := tx.Create(&execution).Error; e != nil {
+			return e
+		}
+		// Persist the owner-scoped account while saving the submission, so list
+		// and lookup requests never need to rebuild account projections.
+		_, e := ensureSyncedAccountForSubmissionTx(tx, record)
+		return e
 	})
 	if e != nil {
 		if detail, found, lookupErr := replay(); found || lookupErr != nil {
@@ -748,6 +754,12 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 				return tx.Model(&SyncedAccount{}).Where("user_id = ? AND vendor_id = ? AND LOWER(TRIM(account)) = ? AND current_submission_id = ? AND deleted_at IS NULL", userID, record.VendorID, NormalizeEmail(record.Account), record.ID).Updates(map[string]any{"supplier_record_id": record.TargetSupplierRecordID, "auth_json_updated_at": now}).Error
 			}
 			return nil
+		}
+		if len(changes) > 0 {
+			// Failed/unknown pushes remain visible, and successful metrics may
+			// supply a platform ID. Keep both changes atomic with their account.
+			_, err := ensureSyncedAccountForSubmissionTx(tx, record)
+			return err
 		}
 		return nil
 	})

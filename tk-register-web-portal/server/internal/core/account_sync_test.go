@@ -39,6 +39,10 @@ func syncSubmission(t *testing.T, s *Store, userID, vendorID, versionID uint64, 
 	if err := s.DB.Create(&r).Error; err != nil {
 		t.Fatal(err)
 	}
+	// Direct database fixtures bypass the submission lifecycle service.
+	if err := s.EnsureSyncedAccounts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	return r
 }
 
