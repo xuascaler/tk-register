@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,14 +32,28 @@ func (a *app) billExportClient() billExporter {
 	return supplier.NewClient()
 }
 
+func billExportFilename(job core.BillExportJob) string {
+	email := strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(job.UserEmail))
+	if email == "" {
+		email = "user-" + strconv.FormatUint(job.TargetUserID, 10)
+	}
+	return fmt.Sprintf("claude-bills_%s_%s_to_%s.xlsx", email, job.StartDate, job.EndDate)
+}
+
 func billJobDTO(job core.BillExportJob) map[string]any {
 	if job.Status == "completed" && !job.ExpiresAt.After(time.Now()) {
 		job.Status = "expired"
 	}
 	return map[string]any{
 		"id": strconv.FormatUint(job.ID, 10), "status": job.Status,
-		"user":       map[string]string{"id": strconv.FormatUint(job.TargetUserID, 10), "email": job.UserEmail},
-		"start_date": job.StartDate, "end_date": job.EndDate, "created_at": job.CreatedAt, "finished_at": job.FinishedAt, "expires_at": job.ExpiresAt,
+		"download_filename": billExportFilename(job),
+		"user":              map[string]string{"id": strconv.FormatUint(job.TargetUserID, 10), "email": job.UserEmail},
+		"start_date":        job.StartDate, "end_date": job.EndDate, "created_at": job.CreatedAt, "finished_at": job.FinishedAt, "expires_at": job.ExpiresAt,
 		"account_count": job.AccountCount, "matched_account_count": job.MatchedAccountCount, "review_account_count": job.ReviewAccountCount,
 		"row_count": job.RowCount, "total_cny": job.TotalCNY, "currency": "CNY", "error": job.ErrorMessage,
 	}
@@ -152,7 +167,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 			return true
 		}
 		w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="claude-bills-user-%d-%s-%s.xlsx"`, job.TargetUserID, job.StartDate, job.EndDate))
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": billExportFilename(job)}))
 		w.Header().Set("Content-Length", strconv.Itoa(len(job.Artifact)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(job.Artifact)

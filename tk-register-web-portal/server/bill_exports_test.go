@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"os"
 	"strings"
 	"testing"
@@ -58,6 +59,10 @@ func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	}
 	w = request(t, a, "GET", route+"/"+id, nil, cookie, "")
 	requireStatus(t, w, 200)
+	expectedFilename := fmt.Sprintf("claude-bills_%s_2026-01-01_to_2026-01-02.xlsx", owner.Email)
+	if data(t, w)["download_filename"] != expectedFilename {
+		t.Fatal("download filename must identify the selected account owner")
+	}
 	if strings.Contains(w.Body.String(), "filtered-xlsx-fixture") || strings.Contains(w.Body.String(), "one@example.com") {
 		t.Fatal("polling must not expose artifact/report payload")
 	}
@@ -69,7 +74,8 @@ func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	requireStatus(t, request(t, a, "GET", route+"/"+id+"/results?view=bad", nil, cookie, ""), 400)
 	w = request(t, a, "GET", route+"/"+id+"/download", nil, cookie, "")
 	requireStatus(t, w, 200)
-	if w.Body.String() != string(artifact) || !strings.Contains(w.Header().Get("Content-Disposition"), "attachment;") {
+	disposition, params, err := mime.ParseMediaType(w.Header().Get("Content-Disposition"))
+	if w.Body.String() != string(artifact) || err != nil || disposition != "attachment" || params["filename"] != expectedFilename {
 		t.Fatal("wrong artifact response")
 	}
 	requireStatus(t, request(t, a, "POST", route+"/"+id+"/download", map[string]string{}, cookie, csrf), 405)

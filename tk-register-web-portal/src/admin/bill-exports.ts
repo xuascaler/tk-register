@@ -1,6 +1,7 @@
 export type BillExportUser = { id: string; email: string };
 export type BillExportJob = {
   id: string;
+  download_filename: string;
   status: 'queued' | 'fetching' | 'filtering' | 'completed' | 'failed' | 'expired';
   user: BillExportUser;
   start_date: string;

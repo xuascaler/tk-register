@@ -218,7 +218,7 @@ export default function BillExports() {
       if (controller.signal.aborted) return;
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url; link.download = `claude-bills-user-${job.user.id}-${job.start_date}-${job.end_date}.xlsx`;
+      link.href = url; link.download = job.download_filename;
       document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (cause) { if (!controller.signal.aborted) setDownloadError(errorMessage(cause)); }
     finally { if (mounted.current) setDownloading(false); }
