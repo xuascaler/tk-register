@@ -60,11 +60,13 @@
 .bill-result-tabs > button { font-size: 13px; padding-top: 12px; padding-bottom: 14px; }
 .bill-result-tabs .bill-review-count { background: #fbf2dd; color: #9a742f; }
 .bill-table-wrap { min-height: 100px; }
-.bill-exports .bill-summary-table th:first-child { width: 34%; }
-.bill-exports .bill-summary-table th:nth-child(2) { width: 15%; }
-.bill-exports .bill-summary-table th:nth-child(3) { width: 12%; text-align: right; }
-.bill-exports .bill-summary-table th:nth-child(4) { width: 17%; text-align: right; }
-.bill-exports .bill-summary-table th:nth-child(5) { width: 22%; }
+.bill-exports .bill-summary-table th:first-child { width: 28%; }
+.bill-exports .bill-summary-table th:nth-child(2) { width: 12%; }
+.bill-exports .bill-summary-table th:nth-child(3) { width: 18%; }
+.bill-exports .bill-summary-table th:nth-child(4) { width: 9%; text-align: right; }
+.bill-exports .bill-summary-table th:nth-child(5) { width: 15%; text-align: right; }
+.bill-exports .bill-summary-table th:nth-child(6) { width: 18%; }
+.bill-submitted-time { font-variant-numeric: tabular-nums; }
 .bill-exports .admin-table th { padding-top: 13px; padding-bottom: 13px; }
 .bill-exports .admin-table td { padding-top: 17px; padding-bottom: 17px; }
 .bill-exports .admin-table tbody tr:hover,.bill-details-table tbody tr:hover { background: #fafcff; }

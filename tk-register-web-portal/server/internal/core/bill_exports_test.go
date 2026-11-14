@@ -90,6 +90,9 @@ func TestBillExportFreezesAllCurrentUserClaudeAccountsAndSnapshotIDs(t *testing.
 	for _, row := range rows {
 		if row.LocalAccountID == first.ID {
 			found = true
+			if row.LatestSubmittedAt == nil || !row.LatestSubmittedAt.Equal(now.Add(time.Minute)) {
+				t.Fatalf("latest resubmission time missing from export snapshot: %+v", row)
+			}
 			if row.PlatformAccountID == nil || *row.PlatformAccountID != currentID || row.RemoteID == nil || *row.RemoteID == currentID {
 				t.Fatalf("wrong ID namespace/fallback %+v", row)
 			}
@@ -101,13 +104,16 @@ func TestBillExportFreezesAllCurrentUserClaudeAccountsAndSnapshotIDs(t *testing.
 	if !found {
 		t.Fatal("first account missing")
 	}
-	// Later ownership or ID changes never change the previously frozen selection.
-	if err := s.DB.Model(&first).Updates(map[string]any{"user_id": admin.ID, "platform_account_id": "new-platform", "account": "changed@example.com"}).Error; err != nil {
+	// Later ownership, submission time, or ID changes never change the previously frozen selection.
+	if err := s.DB.Model(&first).Updates(map[string]any{"user_id": admin.ID, "platform_account_id": "new-platform", "account": "changed@example.com", "latest_submitted_at": now.Add(time.Hour)}).Error; err != nil {
 		t.Fatal(err)
 	}
 	frozen, err := s.BillExportAccounts(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if frozen[0].LatestSubmittedAt == nil || !frozen[0].LatestSubmittedAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("submission time was not frozen: %+v", frozen[0])
 	}
 	if frozen[0].AccountEmail != "account-00@example.com" || frozen[0].PlatformAccountID == nil || *frozen[0].PlatformAccountID != currentID {
 		t.Fatalf("selection was not frozen: %+v", frozen[0])
@@ -243,5 +249,22 @@ func TestBillExportPayloadColumnTypesArePortable(t *testing.T) {
 		if got := postgresDialect.DataTypeOf(field); got != check.postgresType {
 			t.Errorf("PostgreSQL %s: %s", check.field, got)
 		}
+	}
+}
+
+func TestBillExportMissingSubmissionTimeRemainsNull(t *testing.T) {
+	s, user, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	syncSubmission(t, s, user.ID, vendor.ID, version.ID, "legacy@example.com", "claude/cc-pro", "accepted", "1000", now)
+	if err := s.DB.Model(&SyncedAccount{}).Where("user_id = ?", user.ID).Update("latest_submitted_at", time.Time{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.CreateBillExport(ctx, admin.ID, user.ID, "2026-11-11", "2026-11-11", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.BillExportAccounts(ctx, job.ID)
+	if err != nil || len(rows) != 1 || rows[0].LatestSubmittedAt != nil {
+		t.Fatalf("missing submission time must stay null: %+v %v", rows, err)
 	}
 }

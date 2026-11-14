@@ -278,7 +278,7 @@ func (a *app) processBillExport(parent context.Context) error {
 	}
 	accounts := make([]billing.Account, 0, len(selection))
 	for _, row := range selection {
-		accounts = append(accounts, billing.Account{LocalAccountID: strconv.FormatUint(row.LocalAccountID, 10), Account: row.AccountEmail, Plan: row.Plan, PlatformAccountID: billString(row.PlatformAccountID), SupplierRecordID: billString(row.SupplierRecordID), RemoteID: billString(row.RemoteID), IdentityKey: row.IdentityKey})
+		accounts = append(accounts, billing.Account{LocalAccountID: strconv.FormatUint(row.LocalAccountID, 10), Account: row.AccountEmail, Plan: row.Plan, PlatformAccountID: billString(row.PlatformAccountID), SupplierRecordID: billString(row.SupplierRecordID), RemoteID: billString(row.RemoteID), IdentityKey: row.IdentityKey, LatestSubmittedAt: row.LatestSubmittedAt})
 	}
 	report, err := billing.Filter(raw, accounts)
 	raw = nil

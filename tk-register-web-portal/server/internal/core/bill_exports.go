@@ -70,6 +70,7 @@ type BillExportAccount struct {
 	PlatformAccountID *string       `gorm:"size:32"`
 	SupplierRecordID  *string       `gorm:"size:32"`
 	RemoteID          *string       `gorm:"size:32"`
+	LatestSubmittedAt *time.Time
 }
 
 type BillExportResult struct {
@@ -145,7 +146,7 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		// Use the newest snapshot only for the current accepted account lifetime.
 		// This is the same fallback as the Accounts screen's displayed platform ID.
 		var accounts []BillExportAccount
-		err := tx.Table("synced_accounts AS a").Select(`a.id AS local_account_id, a.identity_key, a.account AS account_email, a.plan, a.remote_id, a.supplier_record_id,
+		err := tx.Table("synced_accounts AS a").Select(`a.id AS local_account_id, a.identity_key, a.account AS account_email, a.plan, a.remote_id, a.supplier_record_id, a.latest_submitted_at,
    COALESCE(NULLIF(a.platform_account_id, ''), (SELECT snap.platform_account_id FROM account_snapshots snap WHERE snap.account_id = a.id AND snap.identity_key = a.identity_key ORDER BY snap.collected_at DESC, snap.id DESC LIMIT 1)) AS platform_account_id`).
 			Where("a.user_id = ? AND a.vendor_id = ? AND a.deleted_at IS NULL AND a.plan LIKE ?", userID, vendor.ID, "claude/%").Order("a.id ASC").Limit(20001).Scan(&accounts).Error
 		if err != nil {
@@ -163,6 +164,14 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		}
 		for i := range accounts {
 			accounts[i].JobID = job.ID
+			if submitted := accounts[i].LatestSubmittedAt; submitted != nil {
+				if submitted.IsZero() {
+					accounts[i].LatestSubmittedAt = nil
+				} else {
+					utc := submitted.UTC()
+					accounts[i].LatestSubmittedAt = &utc
+				}
+			}
 		}
 		return tx.CreateInBatches(accounts, 200).Error
 	})

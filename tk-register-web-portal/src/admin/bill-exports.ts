@@ -20,6 +20,7 @@ export type BillExportJob = {
 export type BillExportSummary = {
   account: string;
   platform_account_id: string;
+  latest_submitted_at?: string | null;
   plan: string;
   row_count: number;
   amount_cny: string | null;
@@ -67,4 +68,16 @@ export function billAmount(value: string | null | undefined) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
   return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(number);
+}
+
+export function billSubmittedTime(value: string | null | undefined) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (!Number.isFinite(date.valueOf()) || date.getUTCFullYear() < 1900) return '—';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: string) => parts.find(item => item.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
 }

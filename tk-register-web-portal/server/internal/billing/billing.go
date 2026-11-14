@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -17,6 +18,9 @@ import (
 const MaxRows = 50000
 const maxInputBytes = 16 << 20
 const maxUnzippedBytes = 64 << 20
+const submittedLayout = "2006-01-02 15:04:05"
+
+var beijing = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 var ErrFormat = errors.New("The supplier bill export has an unsupported format. No report was generated.")
 var sourceColumns = []string{"邮箱", "平台账号ID", "模型", "输入Token", "输出Token", "缓存读Token", "缓存写Token", "消费(人民币/元)", "备注"}
@@ -31,15 +35,17 @@ type Account struct {
 	SupplierRecordID  string
 	RemoteID          string
 	IdentityKey       string
+	LatestSubmittedAt *time.Time
 }
 type Summary struct {
-	Account           string  `json:"account"`
-	PlatformAccountID string  `json:"platform_account_id"`
-	Plan              string  `json:"plan"`
-	RowCount          int     `json:"row_count"`
-	AmountCNY         *string `json:"amount_cny"`
-	Status            string  `json:"status"`
-	Reason            string  `json:"reason,omitempty"`
+	Account           string     `json:"account"`
+	PlatformAccountID string     `json:"platform_account_id"`
+	LatestSubmittedAt *time.Time `json:"latest_submitted_at"`
+	Plan              string     `json:"plan"`
+	RowCount          int        `json:"row_count"`
+	AmountCNY         *string    `json:"amount_cny"`
+	Status            string     `json:"status"`
+	Reason            string     `json:"reason,omitempty"`
 }
 type Review struct {
 	Account           string `json:"account"`
@@ -82,8 +88,16 @@ func amount(v *big.Rat) string {
 	return s
 }
 
+func submittedTime(value *time.Time) string {
+	if value == nil || value.IsZero() {
+		return "—"
+	}
+	return value.In(beijing).Format(submittedLayout)
+}
+
 func Filter(data []byte, accounts []Account) (Report, error) {
-	out := Report{Summary: []Summary{}, Details: [][]string{}, Columns: append([]string(nil), sourceColumns[:8]...), Review: []Review{}, TotalCNY: "0.00", Currency: "CNY"}
+	columns := append([]string{sourceColumns[0], sourceColumns[1], "Submitted"}, sourceColumns[2:8]...)
+	out := Report{Summary: []Summary{}, Details: [][]string{}, Columns: columns, Review: []Review{}, TotalCNY: "0.00", Currency: "CNY"}
 	if len(data) == 0 || len(data) > maxInputBytes {
 		return out, ErrFormat
 	}
@@ -247,10 +261,12 @@ func Filter(data []byte, accounts []Account) (Report, error) {
 		totals[i].Add(totals[i], value)
 		total.Add(total, value)
 		counts[i]++
+		// Add local metadata only after validating the unchanged supplier contract.
+		row = append([]string{row[0], row[1], submittedTime(selected[i].LatestSubmittedAt)}, row[2:]...)
 		out.Details = append(out.Details, row)
 	}
 	for i, a := range selected {
-		s := Summary{Account: a.Account, PlatformAccountID: strings.TrimSpace(a.PlatformAccountID), Plan: a.Plan, RowCount: counts[i]}
+		s := Summary{Account: a.Account, PlatformAccountID: strings.TrimSpace(a.PlatformAccountID), LatestSubmittedAt: a.LatestSubmittedAt, Plan: a.Plan, RowCount: counts[i]}
 		if reason := conflicts[i]; reason != "" {
 			s.Status = "needs_review"
 			s.Reason = reason
@@ -296,6 +312,11 @@ func Workbook(r Report) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	dateFormat := "yyyy-mm-dd hh:mm:ss"
+	dateStyle, err := f.NewStyle(&excelize.Style{CustomNumFmt: &dateFormat})
+	if err != nil {
+		return nil, err
+	}
 	titleStyle, err := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true, Color: "1C426F", Size: 15}})
 	if err != nil {
 		return nil, err
@@ -317,6 +338,21 @@ func Workbook(r Report) ([]byte, error) {
 			return e
 		}
 		return f.SetCellDefault(sheet, cell, value)
+	}
+	dateCell := func(sheet, cell, value string) error {
+		if value == "—" {
+			return nil // Already written as a literal missing value.
+		}
+		// Excel dates have no timezone. Store the already-converted Beijing wall
+		// clock as a numeric date so sorting works without another UTC conversion.
+		wallClock, e := time.Parse(submittedLayout, value)
+		if e != nil {
+			return ErrFormat
+		}
+		if e = f.SetCellValue(sheet, cell, wallClock); e != nil {
+			return e
+		}
+		return f.SetCellStyle(sheet, cell, cell, dateStyle)
 	}
 	setup := func(sheet string, headers []string) error {
 		if e := write(sheet, 1, []string{"Claude bill export"}); e != nil {
@@ -358,7 +394,7 @@ func Workbook(r Report) ([]byte, error) {
 		}
 		return f.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 6, TopLeftCell: "A7", ActivePane: "bottomLeft"})
 	}
-	if err = setup("Account summary", []string{"Account", "Platform account ID", "Plan", "Bill rows", "Total (CNY)", "Result", "Notes"}); err != nil {
+	if err = setup("Account summary", []string{"Account", "Platform account ID", "Submitted", "Plan", "Bill rows", "Total (CNY)", "Result", "Notes"}); err != nil {
 		return nil, err
 	}
 	for i, s := range r.Summary {
@@ -367,43 +403,49 @@ func Workbook(r Report) ([]byte, error) {
 		if s.AmountCNY != nil {
 			v = *s.AmountCNY
 		}
-		if err = write("Account summary", row, []string{s.Account, s.PlatformAccountID, s.Plan, fmt.Sprint(s.RowCount), v, s.Status, s.Reason}); err != nil {
+		if err = write("Account summary", row, []string{s.Account, s.PlatformAccountID, submittedTime(s.LatestSubmittedAt), s.Plan, fmt.Sprint(s.RowCount), v, s.Status, s.Reason}); err != nil {
+			return nil, err
+		}
+		if err = dateCell("Account summary", fmt.Sprintf("C%d", row), submittedTime(s.LatestSubmittedAt)); err != nil {
 			return nil, err
 		}
 		if v != "" {
-			if err = numeric("Account summary", fmt.Sprintf("E%d", row), v); err != nil {
+			if err = numeric("Account summary", fmt.Sprintf("F%d", row), v); err != nil {
 				return nil, err
 			}
-			_ = f.SetCellStyle("Account summary", fmt.Sprintf("E%d", row), fmt.Sprintf("E%d", row), moneyStyle)
+			_ = f.SetCellStyle("Account summary", fmt.Sprintf("F%d", row), fmt.Sprintf("F%d", row), moneyStyle)
 		}
 	}
 	totalRow := len(r.Summary) + 8
 	if err = write("Account summary", totalRow, []string{"Filtered total (CNY)"}); err != nil {
 		return nil, err
 	}
-	if err = numeric("Account summary", fmt.Sprintf("E%d", totalRow), r.TotalCNY); err != nil {
+	if err = numeric("Account summary", fmt.Sprintf("F%d", totalRow), r.TotalCNY); err != nil {
 		return nil, err
 	}
-	_ = f.SetCellStyle("Account summary", fmt.Sprintf("E%d", totalRow), fmt.Sprintf("E%d", totalRow), moneyStyle)
+	_ = f.SetCellStyle("Account summary", fmt.Sprintf("F%d", totalRow), fmt.Sprintf("F%d", totalRow), moneyStyle)
 	if err = setup("Bill details", r.Columns); err != nil {
 		return nil, err
 	}
 	for i, row := range r.Details {
-		if len(row) != 8 {
+		if len(row) != 9 {
 			return nil, ErrFormat
 		}
 		if err = write("Bill details", i+7, row); err != nil {
 			return nil, err
 		}
-		for c := 3; c < 8; c++ {
+		if err = dateCell("Bill details", fmt.Sprintf("C%d", i+7), row[2]); err != nil {
+			return nil, err
+		}
+		for c := 4; c < 9; c++ {
 			cell, _ := excelize.CoordinatesToCellName(c+1, i+7)
-			if c < 7 && len(row[c]) > 15 {
+			if c < 8 && len(row[c]) > 15 {
 				continue
 			}
 			if err = numeric("Bill details", cell, row[c]); err != nil {
 				return nil, err
 			}
-			if c == 7 {
+			if c == 8 {
 				_ = f.SetCellStyle("Bill details", cell, cell, moneyStyle)
 			}
 		}

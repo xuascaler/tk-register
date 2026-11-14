@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { beijingDate, billAmount, exportDateError, offsetDate } from '../src/admin/bill-exports.ts';
+import { beijingDate, billAmount, billSubmittedTime, exportDateError, offsetDate } from '../src/admin/bill-exports.ts';
 
 test('bill export dates use the Beijing day even before UTC midnight', () => {
   assert.equal(beijingDate(new Date('2026-11-11T16:01:00Z')), '2026-11-12');
@@ -29,4 +29,12 @@ test('missing bill amounts are not displayed as zero', () => {
   assert.equal(billAmount('0'), '0.00');
   assert.equal(billAmount('14076.57'), '14,076.57');
   assert.equal(billAmount('not-a-number'), '—');
+});
+
+test('bill submission times use Beijing time and preserve missing values in old exports', () => {
+  assert.equal(billSubmittedTime('2026-11-13T16:00:05Z'), '2026-11-14 00:00:05');
+  assert.equal(billSubmittedTime('2026-11-13T23:15:29-07:00'), '2026-11-14 14:15:29');
+  for (const value of [null, undefined, '', 'bad', '0001-01-01T00:00:00Z']) {
+    assert.equal(billSubmittedTime(value), '—');
+  }
 });
