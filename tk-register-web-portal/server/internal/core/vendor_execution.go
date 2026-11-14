@@ -676,13 +676,28 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 	secrets := []string{token}
 	collectSecretStrings(input["password"], &secrets)
 	collectAuthSecrets(input["auth_json"], &secrets)
-	// Only bounded, allow-listed response fields are stored. No raw upstream error body.
+	// Public result fields remain allow-listed. Raw diagnostics are stored separately, encrypted.
 	resultJSON, e := redactedResult(result.data, secrets)
 	if e != nil {
 		return SubmissionDetail{}, e
 	}
 	now := time.Now().UTC()
 	updates := map[string]any{"status": result.status, "http_status": result.httpStatus, "result_json": resultJSON, "finished_at": now}
+
+	if result.status != "succeeded" {
+		safeBody, truncated, omitted := safeVendorErrorBody(result, input, token)
+		updates["error_body"] = safeBody
+		updates["error_body_truncated"] = truncated
+		updates["error_body_incomplete"] = result.responseIncomplete
+		updates["error_body_omitted_reason"] = omitted
+		if len(result.responseBody) > 0 {
+			encrypted, err := v.Store.encrypt("execution-error:"+idString(execution.ID), string(result.responseBody))
+			if err != nil {
+				return SubmissionDetail{}, err
+			}
+			updates["error_body_ciphertext"] = encrypted
+		}
+	}
 	if result.code != "" {
 		updates["error_code"] = result.code
 	}

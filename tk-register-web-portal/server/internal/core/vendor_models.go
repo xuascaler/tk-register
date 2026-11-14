@@ -103,22 +103,27 @@ type Submission struct {
 	UpdatedAt                  time.Time
 }
 type ProtocolExecution struct {
-	ID                uint64          `gorm:"primaryKey"`
-	SubmissionID      uint64          `gorm:"not null;index"`
-	Submission        Submission      `gorm:"foreignKey:SubmissionID;constraint:OnDelete:RESTRICT"`
-	ProtocolVersionID uint64          `gorm:"not null;index"`
-	ProtocolVersion   ProtocolVersion `gorm:"foreignKey:ProtocolVersionID;constraint:OnDelete:RESTRICT"`
-	RequestID         string          `gorm:"size:64;not null;uniqueIndex"`
-	Operation         string          `gorm:"size:24;not null"`
-	Status            string          `gorm:"size:24;not null;index"`
-	RemoteIDSnapshot  *string         `gorm:"size:32"`
-	RequestJSON       string          `gorm:"type:text;not null"`
-	ResultJSON        string          `gorm:"type:text"`
-	HTTPStatus        *int
-	ErrorCode         *string `gorm:"size:80"`
-	Message           *string `gorm:"size:255"`
-	CreatedAt         time.Time
-	FinishedAt        *time.Time
+	ID                     uint64          `gorm:"primaryKey"`
+	SubmissionID           uint64          `gorm:"not null;index"`
+	Submission             Submission      `gorm:"foreignKey:SubmissionID;constraint:OnDelete:RESTRICT"`
+	ProtocolVersionID      uint64          `gorm:"not null;index"`
+	ProtocolVersion        ProtocolVersion `gorm:"foreignKey:ProtocolVersionID;constraint:OnDelete:RESTRICT"`
+	RequestID              string          `gorm:"size:64;not null;uniqueIndex"`
+	Operation              string          `gorm:"size:24;not null"`
+	Status                 string          `gorm:"size:24;not null;index"`
+	RemoteIDSnapshot       *string         `gorm:"size:32"`
+	RequestJSON            string          `gorm:"type:text;not null"`
+	ResultJSON             string          `gorm:"type:text"`
+	ErrorBodyCiphertext    string          `gorm:"type:mediumtext" json:"-"`
+	ErrorBody              string          `gorm:"type:text"`
+	ErrorBodyTruncated     bool
+	ErrorBodyIncomplete    bool
+	ErrorBodyOmittedReason string `gorm:"size:80"`
+	HTTPStatus             *int
+	ErrorCode              *string `gorm:"size:80"`
+	Message                *string `gorm:"size:255"`
+	CreatedAt              time.Time
+	FinishedAt             *time.Time
 }
 
 type ParameterDTO struct {
@@ -169,18 +174,22 @@ type SubmissionDTO struct {
 	StatusCheckedAt   *time.Time     `json:"status_checked_at"`
 }
 type ExecutionDTO struct {
-	ID              string     `json:"id"`
-	RequestID       string     `json:"request_id"`
-	Operation       string     `json:"operation"`
-	ProtocolName    string     `json:"protocol_name"`
-	ProtocolVersion int        `json:"protocol_version"`
-	Status          string     `json:"status"`
-	HTTPStatus      *int       `json:"http_status"`
-	ErrorCode       *string    `json:"error_code"`
-	Message         *string    `json:"message"`
-	Result          any        `json:"result"`
-	CreatedAt       time.Time  `json:"created_at"`
-	FinishedAt      *time.Time `json:"finished_at"`
+	ErrorBody              string     `json:"error_body,omitempty"`
+	ErrorBodyTruncated     bool       `json:"error_body_truncated,omitempty"`
+	ErrorBodyIncomplete    bool       `json:"error_body_incomplete,omitempty"`
+	ErrorBodyOmittedReason string     `json:"error_body_omitted_reason,omitempty"`
+	ID                     string     `json:"id"`
+	RequestID              string     `json:"request_id"`
+	Operation              string     `json:"operation"`
+	ProtocolName           string     `json:"protocol_name"`
+	ProtocolVersion        int        `json:"protocol_version"`
+	Status                 string     `json:"status"`
+	HTTPStatus             *int       `json:"http_status"`
+	ErrorCode              *string    `json:"error_code"`
+	Message                *string    `json:"message"`
+	Result                 any        `json:"result"`
+	CreatedAt              time.Time  `json:"created_at"`
+	FinishedAt             *time.Time `json:"finished_at"`
 }
 type SubmissionDetail struct {
 	Submission SubmissionDTO  `json:"submission"`
@@ -456,7 +465,7 @@ func (s *Store) SubmissionDetail(ctx context.Context, userID, id uint64) (Submis
 				return out, e
 			}
 		}
-		out.Executions = append(out.Executions, ExecutionDTO{ID: idString(x.ID), RequestID: x.RequestID, Operation: x.Operation, ProtocolName: version.Protocol.Name, ProtocolVersion: version.Version, Status: x.Status, HTTPStatus: x.HTTPStatus, ErrorCode: x.ErrorCode, Message: x.Message, Result: result, CreatedAt: x.CreatedAt.UTC(), FinishedAt: x.FinishedAt})
+		out.Executions = append(out.Executions, ExecutionDTO{ErrorBody: x.ErrorBody, ErrorBodyTruncated: x.ErrorBodyTruncated, ErrorBodyIncomplete: x.ErrorBodyIncomplete, ErrorBodyOmittedReason: x.ErrorBodyOmittedReason, ID: idString(x.ID), RequestID: x.RequestID, Operation: x.Operation, ProtocolName: version.Protocol.Name, ProtocolVersion: version.Version, Status: x.Status, HTTPStatus: x.HTTPStatus, ErrorCode: x.ErrorCode, Message: x.Message, Result: result, CreatedAt: x.CreatedAt.UTC(), FinishedAt: x.FinishedAt})
 	}
 	if record.MetricsJSON != "" {
 		if e = common.Unmarshal([]byte(record.MetricsJSON), &out.Metrics); e != nil {

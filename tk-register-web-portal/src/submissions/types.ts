@@ -37,6 +37,10 @@ export type Submission = {
   status_checked_at: string | null;
 };
 export type Execution = {
+  error_body?: string;
+  error_body_truncated?: boolean;
+  error_body_incomplete?: boolean;
+  error_body_omitted_reason?: string;
   id: string;
   request_id: string;
   operation: 'push' | 'metrics' | 'bills';

@@ -652,6 +652,9 @@ export default function SubmissionDetails({
                           <Fact label='Error code'>{execution.error_code}</Fact>
                         )}
                       </dl>
+                      {execution.error_body && <div className='execution-error-body'><strong>Upstream error</strong><pre>{execution.error_body}</pre></div>}
+                      {(execution.error_body_truncated || execution.error_body_incomplete) && <p className='muted small'>The error response was truncated or incomplete.</p>}
+                      {execution.error_body_omitted_reason && !execution.error_body && <p className='muted small'>No safe error details are available for display.</p>}
                     </details>
                   </li>
                 ))}

@@ -82,12 +82,28 @@ func TestVendorFailureBodyLoggedWithoutLeakingIntoAPI(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(string(encoded), "Unsupported register_location") || strings.Contains(string(encoded), "access-log-test-secret") {
+			if !strings.Contains(string(encoded), "Unsupported register_location") || strings.Contains(string(encoded), "access-log-test-secret") {
 				t.Fatal("diagnostic body escaped into public detail")
 			}
 			var saved ProtocolExecution
 			if err := store.DB.Where("request_id = ?", detail.Executions[0].RequestID).First(&saved).Error; err != nil {
 				t.Fatal(err)
+			}
+
+			if saved.ErrorBodyCiphertext == "" || strings.Contains(saved.ErrorBodyCiphertext, "access-log-test-secret") {
+				t.Fatal("raw error must be encrypted")
+			}
+			raw, err := store.decrypt("execution-error:"+idString(saved.ID), saved.ErrorBodyCiphertext)
+			if err != nil || raw != string(response) {
+				t.Fatal("raw response did not survive persistence")
+			}
+			if !strings.Contains(saved.ErrorBody, "Unsupported register_location") {
+				t.Fatal("missing safe diagnostic")
+			}
+			for _, secret := range []string{token, "password-log-test-secret", "access-log-test-secret", "refresh-log-test-secret", "proxy-log-test-secret"} {
+				if strings.Contains(string(encoded), secret) || strings.Contains(saved.ErrorBody, secret) {
+					t.Fatal("public diagnostic leaked secret")
+				}
 			}
 			if saved.ResultJSON != "" {
 				t.Fatal("raw diagnostic body was persisted into public result")
