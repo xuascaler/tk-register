@@ -111,6 +111,7 @@ type AccountDTO struct {
 	VendorName          string              `json:"vendor_name"`
 	CurrentSubmissionID *string             `json:"current_submission_id"`
 	LatestSubmissionID  string              `json:"latest_submission_id"`
+	LatestSubmittedAt   *time.Time          `json:"latest_submitted_at"`
 	SubmissionStatus    string              `json:"submission_status"`
 	RemoteID            *string             `json:"remote_id"`
 	PlatformAccountID   *string             `json:"platform_account_id"`
@@ -284,6 +285,10 @@ func snapshotDTO(row AccountSnapshot) AccountSnapshotDTO {
 }
 func (s *Store) accountDTO(ctx context.Context, row SyncedAccount) (AccountDTO, error) {
 	out := AccountDTO{DeletionStatus: row.DeletionStatus, ID: idString(row.ID), Account: row.Account, Plan: row.Plan, VendorID: idString(row.VendorID), LatestSubmissionID: idString(row.LatestSubmissionID), SubmissionStatus: row.SubmissionStatus, RemoteID: row.RemoteID, PlatformAccountID: row.PlatformAccountID, LastSuccessAt: row.LastSuccessAt, LastAttemptAt: row.LastAttemptAt, LastError: row.LastError, SupplierRecordID: row.SupplierRecordID, AuthJSONUpdatedAt: row.AuthJSONUpdatedAt}
+	if !row.LatestSubmittedAt.IsZero() {
+		submittedAt := row.LatestSubmittedAt.UTC()
+		out.LatestSubmittedAt = &submittedAt
+	}
 	if row.DeletionOperationID != nil {
 		v := idString(*row.DeletionOperationID)
 		out.DeletionOperationID = &v

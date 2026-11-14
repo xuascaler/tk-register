@@ -28,6 +28,7 @@ export type SyncedAccount = {
   vendor_name: string;
   current_submission_id: string | null;
   latest_submission_id: string;
+  latest_submitted_at?: string | null;
   submission_status: string;
   remote_id: string | null;
   platform_account_id: string | null;

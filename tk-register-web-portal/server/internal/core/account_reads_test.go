@@ -13,7 +13,7 @@ import (
 func TestAccountReadsWorkWithDatabaseWritesDisabled(t *testing.T) {
 	s, owner, vendor, version := syncFixture(t)
 	ctx := context.Background()
-	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "read-only@example.com", "claude/cc-pro", "accepted", "9001", time.Now().Add(-time.Hour))
+	submission := syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "read-only@example.com", "claude/cc-pro", "accepted", "9001", time.Now().Add(-time.Hour))
 	targets, err := s.CollectionTargets(ctx, owner.ID, 0)
 	if err != nil || len(targets) != 1 {
 		t.Fatal(targets, err)
@@ -33,14 +33,14 @@ func TestAccountReadsWorkWithDatabaseWritesDisabled(t *testing.T) {
 	}{
 		{"member list", func() error {
 			p, e := s.ListSyncedAccounts(ctx, owner.ID, 1, "read-only", "active")
-			if e == nil && (p.Total != 1 || len(p.Items) != 1 || p.Items[0].Snapshot == nil) {
+			if e == nil && (p.Total != 1 || len(p.Items) != 1 || p.Items[0].Snapshot == nil || p.Items[0].LatestSubmittedAt == nil || !p.Items[0].LatestSubmittedAt.Equal(submission.CreatedAt)) {
 				return fmt.Errorf("missing member account")
 			}
 			return e
 		}},
 		{"admin list", func() error {
 			p, e := s.ListAdminSyncedAccounts(ctx, 1, owner.Email, "")
-			if e == nil && (p.Total != 1 || len(p.Items) != 1 || p.Items[0].UserEmail != owner.Email) {
+			if e == nil && (p.Total != 1 || len(p.Items) != 1 || p.Items[0].UserEmail != owner.Email || p.Items[0].LatestSubmittedAt == nil || !p.Items[0].LatestSubmittedAt.Equal(submission.CreatedAt)) {
 				return fmt.Errorf("missing account owner")
 			}
 			return e

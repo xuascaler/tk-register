@@ -24,6 +24,15 @@ function UsageWindow({ value, label }: { value: number | null | undefined; label
   </div>;
 }
 
+function SubmittedTime({ value }: { value: string | null | undefined }) {
+  if (!value || !Number.isFinite(Date.parse(value))) return <span className='usage-date'>—</span>;
+  const date = new Date(value);
+  return <time className='usage-submitted-time' dateTime={value} title={formatTime(value)}>
+    {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)}
+    <span>{new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit' }).format(date)}</span>
+  </time>;
+}
+
 export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string) => void; admin?: boolean }) {
   const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountPage | null>(null);
@@ -125,7 +134,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
     {!data ? (loading ? <Loading label='Loading accounts…' /> : null) : <div className={`usage-list-shell ${loading ? 'usage-list-loading' : ''}`} aria-busy={loading}>
       <div className='usage-table-scroll'><table className={`usage-accounts-table ${admin ? 'usage-admin-table' : ''}`}>
         <caption className='sr-only'>{admin ? 'Accounts across all users and their latest successfully collected data' : 'Your accounts and their latest successfully collected data'}</caption>
-        <thead><tr><th scope='col'>Account / plan</th>{admin && <th scope='col'>User</th>}<th scope='col'>Status</th><th scope='col'>Usage windows</th><th scope='col' className='usage-total-cell'>Total spent</th><th scope='col'>Last updated</th><th scope='col' className='usage-sync-heading'>Actions</th></tr></thead>
+        <thead><tr><th scope='col'>Account / plan</th>{admin && <th scope='col'>User</th>}<th scope='col'>Status</th><th scope='col'>Usage windows</th><th scope='col' className='usage-total-cell'>Total spent</th><th scope='col' title='Most recent submission time'>Submitted</th><th scope='col'>Last updated</th><th scope='col' className='usage-sync-heading'>Actions</th></tr></thead>
         <tbody>{data?.items.map(account => {
           const refresh = rowResults[account.id];
           const busy = syncingID === account.id;
@@ -141,6 +150,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
           <td data-label='Status'><Status account={account} />{stale && account.snapshot && <span className='usage-small'>Last known</span>}</td>
           <td data-label='Usage windows'><UsageWindow label='5 hours' value={account.snapshot?.usage_5h_percent} /><UsageWindow label='7 days' value={account.snapshot?.usage_7d_percent} /></td>
           <td data-label='Total spent' className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total_usd, 'USD')}</strong>{stale && account.snapshot && <span className='usage-small'>Last known total</span>}</td>
+          <td data-label='Submitted'><SubmittedTime value={account.latest_submitted_at} /></td>
           <td data-label='Last updated'><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>
             <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>Updating account…</span> : !eligible ? <span className='usage-small'>Awaiting acceptance</span> : failure ? <details className='usage-sync-error'><summary>{rateLimited ? 'Rate limited' : 'Sync failed'}</summary><p>{failure}</p><span>{account.snapshot ? 'Showing the last successful data.' : 'No data has been collected yet.'}</span></details> : refresh?.status === 'skipped' ? <details className='usage-sync-error'><summary>Not updated</summary><p>{refresh.message}</p></details> : refresh?.status === 'updated' ? <span className='usage-row-success'>Updated</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</div>
           </td>
