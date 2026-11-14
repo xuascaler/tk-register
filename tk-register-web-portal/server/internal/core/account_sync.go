@@ -104,6 +104,8 @@ type AccountSnapshotDTO struct {
 	AccountSnapshotValues
 }
 type AccountDTO struct {
+	AccountSource       *AccountSource      `json:"account_source,omitempty"`
+	CanManage           *bool               `json:"can_manage,omitempty"`
 	DeletionStatus      string              `json:"deletion_status,omitempty"`
 	DeletionOperationID *string             `json:"deletion_operation_id,omitempty"`
 	ID                  string              `json:"id"`
@@ -345,13 +347,15 @@ func (s *Store) ListAdminSyncedAccounts(ctx context.Context, page int, search, s
 	return s.listSyncedAccounts(ctx, 0, page, search, status, true)
 }
 
-func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int, search, status string, includeOwner bool) (AccountPage, error) {
+func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int, search, status string, includeOwner bool, visibility ...*UserVisibility) (AccountPage, error) {
 	out := AccountPage{Items: []AccountDTO{}, Page: page, PageSize: 20}
 	if err := validAccountFilter(page, search, status); err != nil {
 		return out, err
 	}
 	q := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("deleted_at IS NULL")
-	if !includeOwner {
+	if len(visibility) > 0 {
+		q = q.Where("user_id IN (?)", visibility[0].Owners(s.DB.WithContext(ctx)))
+	} else if !includeOwner {
 		q = q.Where("user_id = ?", userID)
 	}
 	if strings.TrimSpace(search) != "" {
@@ -378,6 +382,12 @@ func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int,
 		dto, err := s.accountDTO(ctx, row)
 		if err == nil && includeOwner {
 			err = s.accountOwner(ctx, row.UserID, &dto)
+		}
+		if err != nil {
+			return out, err
+		}
+		if err == nil && len(visibility) > 0 {
+			err = s.decorateVisibleAccount(ctx, visibility[0].ViewerID, row.UserID, &dto)
 		}
 		if err != nil {
 			return out, err

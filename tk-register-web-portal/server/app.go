@@ -145,6 +145,9 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	route := strings.TrimPrefix(r.URL.Path, basePath+"/api/")
+	if a.memberRoutes(w, r, route) {
+		return
+	}
 	if a.billExportRoutes(w, r, route) {
 		return
 	}
@@ -493,7 +496,7 @@ func (a *app) sendVerificationCode(w http.ResponseWriter, r *http.Request, email
 		return
 	}
 	if administrator && err == nil {
-		fail(w, 409, "EMAIL_ALREADY_REGISTERED", "This email is already registered. Use Add admin to change its role.")
+		fail(w, 409, "EMAIL_ALREADY_REGISTERED", "This email is already registered. An existing user cannot be created again.")
 		return
 	}
 	send := in.Purpose == "register" && errors.Is(err, gorm.ErrRecordNotFound) || in.Purpose == "login" && err == nil && u.Status == "active" && u.Role == "member"
@@ -517,7 +520,8 @@ func (a *app) register(w http.ResponseWriter, r *http.Request) {
 // Creating a user and signing that user in are deliberately separate. The
 // administrator entry point shares every registration check without replacing
 // the administrator's session with the newly created member's session.
-func (a *app) registerVerifiedUser(w http.ResponseWriter, r *http.Request, actor *core.User) (*core.User, core.Values, bool) {
+func (a *app) registerVerifiedUser(w http.ResponseWriter, r *http.Request, actor *core.User, memberCreation ...bool) (*core.User, core.Values, bool) {
+	member := len(memberCreation) > 0 && memberCreation[0]
 	var in struct {
 		Email    string `json:"email"`
 		Username string `json:"username"`
@@ -543,7 +547,7 @@ func (a *app) registerVerifiedUser(w http.ResponseWriter, r *http.Request, actor
 	existing, err := a.store.GetUserByEmail(r.Context(), in.Email)
 	if err == nil && existing != nil {
 		if actor != nil {
-			fail(w, 409, "EMAIL_ALREADY_REGISTERED", "This email is already registered. Use Add admin to change its role.")
+			fail(w, 409, "EMAIL_ALREADY_REGISTERED", "This email is already registered. An existing user cannot be created again.")
 		} else {
 			fail(w, 400, "REGISTRATION_FAILED", "This registration could not be completed. Check the email and code or sign in.")
 		}
@@ -574,6 +578,8 @@ func (a *app) registerVerifiedUser(w http.ResponseWriter, r *http.Request, actor
 	user := &core.User{Email: in.Email, PasswordHash: string(hash), Role: role, Status: "active", EmailVerifiedAt: time.Now().UTC()}
 	if actor == nil {
 		err = a.store.CreateUser(r.Context(), user)
+	} else if member {
+		err = a.store.CreateMemberByUser(r.Context(), actor.ID, actor.AuthVersion, user)
 	} else {
 		err = a.store.CreateMemberByAdmin(r.Context(), actor.ID, actor.AuthVersion, user)
 	}

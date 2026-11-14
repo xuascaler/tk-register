@@ -28,6 +28,8 @@ import (
 var ErrNotFound = gorm.ErrRecordNotFound
 
 type User struct {
+	ParentUserID    *uint64   `gorm:"index" json:"-"`
+	ParentUser      *User     `gorm:"foreignKey:ParentUserID;constraint:OnDelete:RESTRICT" json:"-"`
 	ID              uint64    `gorm:"primaryKey" json:"id"`
 	Email           string    `gorm:"size:50;not null;uniqueIndex" json:"email"`
 	Role            string    `gorm:"size:16;not null" json:"role"`
@@ -158,6 +160,10 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, errors.New("could not migrate TK Register database")
 	}
+	if err = s.migrateMembers(); err != nil {
+		s.Close()
+		return nil, err
+	}
 	if err = s.migrateAPITokenReadScope(); err != nil {
 		s.Close()
 		return nil, errors.New("could not migrate API token permissions")
@@ -232,6 +238,13 @@ func ValidEmail(email string) bool {
 }
 
 func (s *Store) CreateUser(ctx context.Context, user *User) error {
+	if user.ParentUserID != nil {
+		return errors.New("use member creation to assign a parent")
+	}
+	return s.createHierarchyUser(ctx, user)
+}
+
+func (s *Store) createHierarchyUser(ctx context.Context, user *User) error {
 	user.Email = NormalizeEmail(user.Email)
 	if !ValidEmail(user.Email) || user.PasswordHash == "" || user.EmailVerifiedAt.IsZero() {
 		return errors.New("a verified email and password are required")
@@ -245,7 +258,30 @@ func (s *Store) CreateUser(ctx context.Context, user *User) error {
 	if user.Status != "active" {
 		return errors.New("invalid new user status")
 	}
-	return s.DB.WithContext(ctx).Create(user).Error
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Omit("ParentUser").Create(user).Error; err != nil {
+			return err
+		}
+		links := []UserHierarchy{{AncestorUserID: user.ID, DescendantUserID: user.ID, Depth: 0}}
+		if user.ParentUserID != nil {
+			var ancestors []UserHierarchy
+			if err := tx.Where("descendant_user_id = ?", *user.ParentUserID).Find(&ancestors).Error; err != nil {
+				return err
+			}
+			if len(ancestors) == 0 {
+				return errors.New("parent hierarchy is unavailable")
+			}
+			for _, parent := range ancestors {
+				source := parent.SourceUserID
+				if parent.Depth == 0 {
+					id := user.ID
+					source = &id
+				}
+				links = append(links, UserHierarchy{AncestorUserID: parent.AncestorUserID, DescendantUserID: user.ID, Depth: parent.Depth + 1, SourceUserID: source})
+			}
+		}
+		return tx.Omit("AncestorUser", "DescendantUser", "SourceUser").Create(&links).Error
+	})
 }
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	var user User

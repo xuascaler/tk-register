@@ -15,7 +15,8 @@ func (s *Store) PageSyncTargets(ctx context.Context, userID uint64, ids []uint64
 func (s *Store) pageAccountRows(ctx context.Context, userID uint64, ids []uint64, admin bool) ([]SyncedAccount, error) {
 	q := s.DB.WithContext(ctx).Where("id IN ?", ids)
 	if !admin {
-		q = q.Where("user_id = ?", userID)
+		scope := &UserVisibility{ViewerID: userID, All: true}
+		q = q.Where("user_id IN (?)", scope.Owners(s.DB.WithContext(ctx)))
 	}
 	var rows []SyncedAccount
 	if err := q.Find(&rows).Error; err != nil {
@@ -47,6 +48,9 @@ func (s *Store) PageSyncedAccountDTOs(ctx context.Context, userID uint64, ids []
 		dto, err := s.accountDTO(ctx, row)
 		if err == nil && admin {
 			err = s.accountOwner(ctx, row.UserID, &dto)
+		}
+		if err == nil && !admin {
+			err = s.decorateVisibleAccount(ctx, userID, row.UserID, &dto)
 		}
 		if err != nil {
 			return nil, nil, err

@@ -75,7 +75,12 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 					return true
 				}
 			}
-			items, e := a.store.Submissions(r.Context(), user.ID, page, r.URL.Query().Get("search"), r.URL.Query().Get("status"))
+			scope, scopeErr := a.store.ResolveVisibility(r.Context(), user.ID, r.URL.Query().Get("sources"))
+			if scopeErr != nil {
+				vendorFailure(w, scopeErr)
+				return true
+			}
+			items, e := a.store.Submissions(r.Context(), user.ID, page, r.URL.Query().Get("search"), r.URL.Query().Get("status"), scope)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {
@@ -140,7 +145,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			return true
 		}
 		if len(parts) == 1 && r.Method == "GET" {
-			result, e := a.store.SubmissionDetail(r.Context(), user.ID, id)
+			result, e := a.store.VisibleSubmissionDetail(r.Context(), user.ID, id)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {

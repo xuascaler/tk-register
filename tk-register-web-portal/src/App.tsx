@@ -23,6 +23,8 @@ import {
   type User,
 } from './api';
 import Auth from './Auth';
+import Members from './members/Members';
+import { MemberScopeProvider } from './members/MemberScope';
 import Config from './Config';
 import { ErrorNotice, Loading } from './ui';
 import SubmitAccount from './submissions/SubmitAccount';
@@ -33,15 +35,20 @@ import APIToken from './account/APIToken';
 import { AccountUsageDetails, MemberAccounts } from './accounts/Accounts';
 import APIDocumentation, { type DocTopic, type DocSection } from './docs/APIDocumentation';
 
-function Account({ user, status }: { user: User; status: AuthStatus }) {
+function Account({ user, status, tab, onTab, onViewAccounts }: { user: User; status: AuthStatus; tab: 'general' | 'members'; onTab: (tab: 'general' | 'members') => void; onViewAccounts: () => void }) {
   return (
     <>
       <div className='title-row'>
         <div>
           <h1>Account settings</h1>
-          <p className='subtitle'>Your identity and sign-in details.</p>
+          <p className='subtitle'>Your profile, sign-in details, and members.</p>
         </div>
       </div>
+      <div className='member-settings-tabs' role='tablist' aria-label='Account settings'>
+        {(['general', 'members'] as const).map(value => <button key={value} role='tab' id={`account-tab-${value}`} aria-selected={tab === value} aria-controls={`account-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => onTab(value)} onKeyDown={event => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'general' : event.key === 'End' ? 'members' : tab === 'general' ? 'members' : 'general'; onTab(next); requestAnimationFrame(() => document.getElementById(`account-tab-${next}`)?.focus()); } }}>{value === 'general' ? 'General' : 'Members'}</button>)}
+      </div>
+      <div role='tabpanel' id={`account-panel-${tab}`} aria-labelledby={`account-tab-${tab}`}>
+      {tab === 'members' ? <Members onViewAccounts={onViewAccounts} /> : <>
       <section className='account-section' aria-labelledby='profile-title'>
         <h2 id='profile-title'>Profile</h2>
         <div className='account-row'>
@@ -85,6 +92,8 @@ function Account({ user, status }: { user: User; status: AuthStatus }) {
         </div>
       </section>
       <APIToken key={user.id} />
+      </>}
+      </div>
     </>
   );
 }
@@ -93,6 +102,7 @@ type Route = {
   page: 'submit' | 'accounts' | 'account-usage' | 'history' | 'account' | 'docs' | 'config' | 'detail' | 'pool-accounts' | 'pool-account' | 'pool-account-usage' | 'pool-history' | 'pool-submission';
   id?: string;
   config?: string;
+  settingsTab?: 'general' | 'members';
   backAccount?: string;
   backAccountUsage?: boolean;
   docTopic?: DocTopic;
@@ -117,13 +127,14 @@ function readRoute(): Route {
   }
   if (segments[0] === 'accounts') return segments[1] ? { page: 'account-usage', id: segments[1] } : { page: 'accounts' };
   if (segments[0] === 'submissions') return segments[1] ? { page: 'detail', id: segments[1], backAccount: new URLSearchParams(query).get('account') || undefined } : { page: 'history' };
-  if (segments[0] === 'account') return { page: 'account' };
+  if (segments[0] === 'account') return { page: 'account', settingsTab: segments[1] === 'members' ? 'members' : 'general' };
   if (segments[0] === 'config') return {
     page: 'config', config: ['email', 'access', 'verification', 'sessions', 'vendors', 'account_sync', 'users', 'bill_exports'].includes(segments[1]) ? segments[1] : 'email',
   };
   return { page: 'submit' };
 }
 function routeHash(route: Route) {
+  if (route.page === 'account') return route.settingsTab === 'members' ? '#/account/members' : '#/account';
   if (route.page === 'docs') return `#/docs${route.docTopic ? `/${route.docTopic}` : ''}${route.docTopic && route.docTopic !== 'getting-started' && route.docSection && route.docSection !== 'parameters' ? `/${route.docSection}` : ''}`;
   if (route.page === 'pool-account-usage') return `#/account-pool/accounts/${encodeURIComponent(route.id || '')}/usage`;
   if (route.page === 'pool-accounts' || route.page === 'pool-account') return `#/account-pool/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
@@ -360,7 +371,7 @@ export default function App() {
           <Auth status={status} onSession={acceptSession} message={message} />
         </div>
       ) : (
-        <div className='workspace'>
+        <MemberScopeProvider key={user.id}><div className='workspace'>
           {menuOpen && (
             <div
               className='sidebar-backdrop'
@@ -490,7 +501,7 @@ export default function App() {
             ) : page === 'account-usage' && route.id ? (
               <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => navigate({ page: 'accounts' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
             ) : page === 'account' ? (
-              <Account user={user} status={status} />
+              <Account user={user} status={status} tab={route.settingsTab || 'general'} onTab={settingsTab => navigate({ page:'account', settingsTab })} onViewAccounts={() => navigate({ page:'accounts' })} />
             ) : page === 'docs' ? (
               <APIDocumentation
                 topic={route.docTopic}
@@ -523,7 +534,7 @@ export default function App() {
               />
             )}
           </main>
-        </div>
+        </div></MemberScopeProvider>
       )}
     </div>
   );

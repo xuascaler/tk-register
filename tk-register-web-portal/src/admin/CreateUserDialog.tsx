@@ -2,16 +2,19 @@ import { Check, Mail, UserRound, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type MutableRefObject } from 'react';
 import { APIError, errorMessage, request, type AuthStatus, type CodeDelivery } from '../api';
 import { ErrorNotice, Loading, PasswordField } from '../ui';
-import { passwordWithinLimit, validCode, validEmail } from '../validation';
+import { passwordWithinLimit, validEmail } from '../validation';
 import type { AdminUser } from './types';
 
 type Field = 'email' | 'code' | 'password' | 'confirmation';
 
-export default function CreateUserDialog({ deadlines, onClose, onSaved }: {
+export default function CreateUserDialog({ deadlines, onClose, onSaved, memberMode = false }: {
+  memberMode?: boolean;
   deadlines: MutableRefObject<Record<string, number>>;
   onClose: () => void;
   onSaved: (user: AdminUser) => void;
 }) {
+  const endpoint = memberMode ? '/members' : '/admin/users';
+  const title = memberMode ? 'Create user' : 'Create account';
   const dialog = useRef<HTMLDialogElement>(null);
   const form = useRef<HTMLFormElement>(null);
   const emailInput = useRef<HTMLInputElement>(null);
@@ -96,7 +99,7 @@ export default function CreateUserDialog({ deadlines, onClose, onSaved }: {
         return;
       }
       if (cause.code === 'EMAIL_ALREADY_REGISTERED') {
-        invalid('email', 'This email is already registered. Use Add admin to grant administrator access.');
+        invalid('email', memberMode ? 'This email is already registered. Use a new email address to create a member.' : 'This email is already registered. Use Add admin to grant administrator access.');
         return;
       }
       if (cause.code === 'INVALID_CODE') {
@@ -117,7 +120,7 @@ export default function CreateUserDialog({ deadlines, onClose, onSaved }: {
     setSent(null);
     inFlight.current = true; setSending(true);
     try {
-      const result = await request<CodeDelivery>('/admin/users/registration-code', { method: 'POST', body: { email: deliveryEmail } });
+      const result = await request<CodeDelivery>(`${endpoint}/registration-code`, { method: 'POST', body: { email: deliveryEmail } });
       if (!mounted.current) return;
       cooldown(result.retry_after || status!.email_send_cooldown_seconds, deliveryEmail);
       setSent({ email: deliveryEmail, expiresAt: Date.now() + result.expires_in * 1000, expiresIn: result.expires_in });
@@ -140,13 +143,13 @@ export default function CreateUserDialog({ deadlines, onClose, onSaved }: {
     if (inFlight.current || disabled) return;
     setError(''); setFieldError({});
     if (!validEmail(normalizedEmail)) { invalid('email', 'Enter a valid email address of 50 characters or fewer.'); return; }
-    if (!validCode(code.trim())) { invalid('code', 'Enter the 6-character code from the email. Letters and numbers are accepted.'); return; }
     if (Array.from(password).length < 8) { invalid('password', 'Use a password with at least 8 characters.'); return; }
     if (!passwordWithinLimit(password)) { invalid('password', 'Password must be at most 72 UTF-8 bytes. Use a shorter password.'); return; }
     if (password !== confirmation) { invalid('confirmation', 'The passwords do not match.'); return; }
+    if (!code.trim()) { invalid('code', 'Enter the verification code from the email.'); return; }
     inFlight.current = true; setBusy(true); setEmail(normalizedEmail);
     try {
-      const result = await request<{ user: AdminUser }>('/admin/users', {
+      const result = await request<{ user: AdminUser }>(endpoint, {
         method: 'POST', body: { username: normalizedEmail, email: normalizedEmail, password, code: code.trim() },
       });
       if (mounted.current) onSaved(result.user);
@@ -160,28 +163,19 @@ export default function CreateUserDialog({ deadlines, onClose, onSaved }: {
   const inputError = (field: Field) => fieldError[field] && <p className='field-error' id={`create-user-${field}-error`} role='alert'>{fieldError[field]}</p>;
   return <dialog ref={dialog} className='admin-create-dialog' aria-labelledby='create-user-title' aria-describedby='create-user-description' onCancel={event => { event.preventDefault(); close(); }}>
     <header className='admin-create-heading'>
-      <div><h2 id='create-user-title'>Create account</h2><p id='create-user-description'>Register a new member with email verification.</p></div>
-      <button className='admin-dialog-close' type='button' aria-label='Close create account' disabled={busy || sending} onClick={close}><X aria-hidden='true' /></button>
+      <div><h2 id='create-user-title'>{title}</h2><p id='create-user-description'>{memberMode ? 'Create a member with their own email and sign-in.' : 'Register a new member with email verification.'}</p></div>
+      <button className='admin-dialog-close' type='button' aria-label={`Close ${title.toLowerCase()}`} disabled={busy || sending} onClick={close}><X aria-hidden='true' /></button>
     </header>
     <form ref={form} onSubmit={create} noValidate aria-busy={busy || sending}>
       <div className='admin-create-fields'>
         {statusLoading && <Loading label='Loading registration settings…' />}
         {statusError && <div><ErrorNotice>{statusError}</ErrorNotice><button type='button' className='text-button' onClick={() => setAttempt(value => value + 1)}>Try again</button></div>}
-        {registrationClosed && <div className='notice information' role='status'>Registration is currently disabled. Enable it in Config → Access to create an account.</div>}
+        {registrationClosed && <div className='notice information' role='status'>{memberMode ? 'New user registration is currently disabled. Contact an administrator.' : 'Registration is currently disabled. Enable it in Config → Access to create an account.'}</div>}
         <div className='field'>
           <label htmlFor='create-user-email'>Email address</label>
           <input ref={emailInput} id='create-user-email' name='email' type='email' autoComplete='off' autoCapitalize='none' spellCheck={false} maxLength={50} required value={email} disabled={disabled} placeholder='name@example.com' aria-invalid={!!fieldError.email} aria-describedby={`create-user-email-help${fieldError.email ? ' create-user-email-error' : ''}`} onChange={event => { setEmail(event.target.value); setCode(''); setSent(null); clearError('email'); clearError('code'); }} />
           <p className='admin-create-help' id='create-user-email-help'>This email address will be the username.</p>
           {inputError('email')}
-        </div>
-        <div className='field'>
-          <label htmlFor='create-user-code'>Verification code</label>
-          <div className='code-row'>
-            <input ref={codeInput} id='create-user-code' name='code' type='text' autoComplete='one-time-code' autoCapitalize='none' autoCorrect='off' spellCheck={false} maxLength={6} required value={code} disabled={disabled} placeholder='6-character code' aria-invalid={!!fieldError.code} aria-describedby={fieldError.code ? 'create-user-code-error' : undefined} onChange={event => { setCode(event.target.value.replace(/[^a-zA-Z0-9]/g, '')); clearError('code'); }} />
-            <button className='button pale' type='button' disabled={disabled || remaining > 0 || !validEmail(normalizedEmail)} onClick={sendCode}><Mail aria-hidden='true' />{sending ? 'Sending…' : remaining ? `Resend in ${remaining}s` : sent?.email === normalizedEmail ? 'Resend code' : 'Send code'}</button>
-          </div>
-          {sent?.email === normalizedEmail && <p className='code-status' role='status'><Check aria-hidden='true' />{now >= sent.expiresAt ? 'The code has expired. Request a new code.' : `Code sent to this email. Valid for ${Math.ceil(sent.expiresIn / 60)} minutes.`}</p>}
-          {inputError('code')}
         </div>
         <div>
           <PasswordField label='Password' name='password' required autoComplete='new-password' value={password} disabled={disabled} placeholder='At least 8 characters' aria-invalid={!!fieldError.password} aria-describedby={fieldError.password ? 'create-user-password-error' : undefined} onChange={event => { setPassword(event.target.value); clearError('password'); }} />
@@ -191,10 +185,19 @@ export default function CreateUserDialog({ deadlines, onClose, onSaved }: {
           <PasswordField label='Confirm password' name='confirmation' required autoComplete='new-password' value={confirmation} disabled={disabled} placeholder='Re-enter password' aria-invalid={!!fieldError.confirmation} aria-describedby={fieldError.confirmation ? 'create-user-confirmation-error' : undefined} onChange={event => { setConfirmation(event.target.value); clearError('confirmation'); }} />
           {inputError('confirmation')}
         </div>
+        <div className='field'>
+          <label htmlFor='create-user-code'>Verification code</label>
+          <div className='code-row'>
+            <input ref={codeInput} id='create-user-code' name='code' type='text' autoComplete='one-time-code' autoCapitalize='none' autoCorrect='off' spellCheck={false} required value={code} disabled={disabled} placeholder='Enter code' aria-invalid={!!fieldError.code} aria-describedby={fieldError.code ? 'create-user-code-error' : undefined} onChange={event => { setCode(event.target.value); clearError('code'); }} />
+            <button className='button pale' type='button' disabled={disabled || remaining > 0 || !validEmail(normalizedEmail)} onClick={sendCode}><Mail aria-hidden='true' />{sending ? 'Sending…' : remaining ? `Resend in ${remaining}s` : sent?.email === normalizedEmail ? 'Resend code' : 'Send code'}</button>
+          </div>
+          {sent?.email === normalizedEmail && <p className='code-status' role='status'><Check aria-hidden='true' />{now >= sent.expiresAt ? 'The code has expired. Request a new code.' : `Code sent to this email. Valid for ${Math.ceil(sent.expiresIn / 60)} minutes.`}</p>}
+          {inputError('code')}
+        </div>
         <ErrorNotice>{error}</ErrorNotice>
-        <div className='admin-create-note'><UserRound aria-hidden='true' /><p>New accounts are created as members.<br />Your administrator session stays signed in.</p></div>
+        <div className='admin-create-note'><UserRound aria-hidden='true' /><p>{memberMode ? 'Added as your direct member. You’ll be able to view the accounts available to them.' : <>New accounts are created as members.<br />Your administrator session stays signed in.</>}</p></div>
       </div>
-      <footer className='admin-create-actions'><button type='button' className='button secondary' disabled={busy || sending} onClick={close}>Cancel</button><button type='submit' className='button primary' disabled={disabled}>{busy ? 'Creating…' : 'Create account'}</button></footer>
+      <footer className='admin-create-actions'><button type='button' className='button secondary' disabled={busy || sending} onClick={close}>Cancel</button><button type='submit' className='button primary' disabled={disabled}>{busy ? 'Creating…' : title}</button></footer>
     </form>
   </dialog>;
 }

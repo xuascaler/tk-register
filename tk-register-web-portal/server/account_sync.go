@@ -99,7 +99,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 	}
 	base := "accounts"
 	lookupAccount := func(id uint64) (core.AccountDTO, error) {
-		return a.store.SyncedAccountForUser(r.Context(), user.ID, id)
+		return a.store.VisibleAccount(r.Context(), user.ID, id)
 	}
 	if adminAccounts {
 		base = "admin/synced-accounts"
@@ -121,7 +121,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		if adminAccounts {
 			result, err = a.store.ListAdminSyncedAccounts(r.Context(), page, r.URL.Query().Get("search"), r.URL.Query().Get("status"))
 		} else {
-			result, err = a.store.ListSyncedAccounts(r.Context(), user.ID, page, r.URL.Query().Get("search"), r.URL.Query().Get("status"))
+			result, err = a.store.ListVisibleAccounts(r.Context(), user.ID, page, r.URL.Query().Get("search"), r.URL.Query().Get("status"), r.URL.Query().Get("sources"))
 		}
 		if core.IsValidationError(err) {
 			fail(w, 400, "INVALID_FILTER", err.Error())
@@ -158,6 +158,10 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "auth-json" {
+		if !adminAccounts && account.CanManage != nil && !*account.CanManage {
+			vendorFailure(w, core.ErrNotFound)
+			return true
+		}
 		a.accountAuthJSON(w, r, user, id, adminAccounts, lookupAccount)
 		return true
 	}
@@ -188,8 +192,8 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
 		collectionUserID := user.ID
-		if adminAccounts {
-			// The account ID has already passed administrator authorization. Keep
+		if adminAccounts || (account.CanManage != nil && !*account.CanManage) {
+			// The account ID has already passed visibility authorization. Keep
 			// the acting administrator's rate limit without filtering by its owner.
 			collectionUserID = 0
 		}

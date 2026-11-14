@@ -153,6 +153,8 @@ type VendorDTO struct {
 	CredentialUpdatedAt *time.Time    `json:"credential_updated_at"`
 }
 type SubmissionDTO struct {
+	AccountSource     *AccountSource `json:"account_source,omitempty"`
+	CanManage         *bool          `json:"can_manage,omitempty"`
 	ID                string         `json:"id"`
 	Source            string         `json:"source"`
 	SubmitMode        string         `json:"submit_mode"`
@@ -479,7 +481,7 @@ func (s *Store) SubmissionDetail(ctx context.Context, userID, id uint64) (Submis
 	}
 	return out, nil
 }
-func (s *Store) Submissions(ctx context.Context, userID uint64, page int, search, status string) (SubmissionPage, error) {
+func (s *Store) Submissions(ctx context.Context, userID uint64, page int, search, status string, visibility ...*UserVisibility) (SubmissionPage, error) {
 	out := SubmissionPage{Items: []SubmissionDTO{}, Page: page, PageSize: 20}
 	if page < 1 || page > 100000 || len(search) > 254 {
 		return out, vendorError(400, "INVALID_FILTER", "Invalid history filter.")
@@ -487,7 +489,12 @@ func (s *Store) Submissions(ctx context.Context, userID uint64, page int, search
 	if status != "" && status != "running" && status != "accepted" && status != "failed" && status != "unknown" {
 		return out, vendorError(400, "INVALID_FILTER", "Invalid submission status.")
 	}
-	q := s.DB.WithContext(ctx).Model(&Submission{}).Where("user_id = ?", userID)
+	q := s.DB.WithContext(ctx).Model(&Submission{})
+	if len(visibility) > 0 {
+		q = q.Where("user_id IN (?)", visibility[0].Owners(s.DB.WithContext(ctx)))
+	} else {
+		q = q.Where("user_id = ?", userID)
+	}
 	if status != "" {
 		q = q.Where("status = ?", status)
 	}
@@ -510,6 +517,11 @@ func (s *Store) Submissions(ctx context.Context, userID uint64, page int, search
 		dto, e := s.submissionDTO(ctx, r)
 		if e != nil {
 			return out, e
+		}
+		if len(visibility) > 0 {
+			if e = s.decorateVisibleSubmission(ctx, visibility[0].ViewerID, r.UserID, &dto); e != nil {
+				return out, e
+			}
 		}
 		out.Items = append(out.Items, dto)
 	}

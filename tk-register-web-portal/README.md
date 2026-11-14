@@ -290,3 +290,52 @@ All endpoints below require an active administrator session. POST additionally r
 | `GET /admin/bill-exports/:id/download` | Download only the filtered `.xlsx`; expired files return HTTP 410. |
 
 Jobs persist in `bill_export_jobs`; the frozen account selection is in `bill_export_accounts`. A distributed export gate and token-fenced database leases prevent two workers from publishing the same job. Interrupted reads may safely restart after lease expiry. Supplier login/query cooldowns defer jobs without busy retries. Export work does not hold a SQL transaction during HTTP calls or block the request handler. Reports have bounded source/row/output sizes; unsupported input formats fail explicitly. Filtered JSON is limited to 4 MiB and XLSX to 8 MiB; use a shorter date range if the result exceeds those limits. Creation is limited to five requests/minute per administrator, with at most five active jobs per administrator and 20 globally.
+
+## Members and recursive account visibility
+
+Signed-in members can create a new member in **Account settings → Members**.
+Creation uses the existing registration switches, SMTP delivery, verification
+expiry and password rules. The browser asks for password confirmation, accepts
+verification codes as text, and preserves the creator's current session. The
+new user's normalized email is their username, their role is always `member`,
+and an existing user cannot be attached to a creator through this workflow.
+Administrator creation in Config → Users continues to create independent users.
+
+`users.parent_user_id` records the immutable direct parent. The `user_hierarchy`
+closure table records `(ancestor_user_id, descendant_user_id, source_user_id,
+depth)`, with foreign keys to `users.id`. Every user has a self row (depth zero,
+NULL source). The source of a deeper descendant is the ancestor's immediate child
+on that branch. User creation and closure insertion share one transaction.
+Startup adds self rows for pre-existing users; it does not infer parentage.
+
+Browser Accounts, account usage/history and Submission history include the
+viewer's own data plus descendant data. Source filters default to all and accept
+`myself` or direct-member IDs; `none` is an explicitly empty selection. Branch
+filtering happens before pagination. Response `account_source` exposes only
+`myself` or the immediate child, and `can_manage` is true only for the real owner.
+Members sees only directly created users. A parent may read saved descendant data
+and manually Sync an account, but cannot edit credentials or delete it. Admin
+Account pool and personal Bearer API ownership checks keep their existing scope.
+Account ownership, submissions and collection history are not copied or moved.
+
+Session-authenticated routes under `/tk-register/api`:
+
+- `GET /members?page=1&search=`: paginated direct members and visible-account counts.
+- `GET /members/sources`: `myself` and direct-member choices (no deeper identities).
+- `POST /members/registration-code`: send the new user's registration code.
+- `POST /members`: verified creation with `email`, `username`, `password`, `code`.
+- `GET /accounts?sources=myself,123` and `GET /submissions?sources=123`: selected
+  visible branches; absent `sources` means all. Detail and Sync routes recheck
+  visibility by local account ID. Mutations still require the true owner.
+
+Member creation and send-code attempts share a per-creator limit of 10 requests
+per minute, in addition to existing mailbox/IP delivery and verification limits.
+Both POST routes require the session, CSRF token and same-origin validation.
+The registration-disabled switch applies to both administrator and member forms.
+
+Validation: `go test ./...` in `server`, `npm test`, `npm run build`.
+The opt-in `TestMembersBrowserFixture` uses isolated SQLite, mock mail and a
+simulated supplier. Bind it to loopback using
+`TK_MEMBERS_BROWSER_TEST_ADDRESS=127.0.0.1:39165`; run
+`node tests/members.browser.mjs` against that fixture. No production accounts or
+real emails are needed for the browser test.

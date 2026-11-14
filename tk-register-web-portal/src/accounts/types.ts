@@ -21,6 +21,8 @@ export type AccountSnapshot = {
 };
 
 export type SyncedAccount = {
+  account_source?: { id: string; label: string };
+  can_manage?: boolean;
   id: string;
   user_id?: string;
   user_email?: string;

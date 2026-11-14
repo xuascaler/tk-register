@@ -219,6 +219,7 @@ export default function SubmissionDetails({
   const submission = detail?.submission;
   const available = Boolean(
     submission &&
+      submission.can_manage !== false &&
       canCheckStatus(submission) &&
       vendor?.configured &&
       vendor.enabled,
@@ -253,7 +254,7 @@ export default function SubmissionDetails({
             {endpointPrefix === '/admin/submissions' ? <div className='admin-detail-status'>
               <span className='admin-cell-note'>Current account{detail.current_submission ? ` · Submission #${detail.current_submission.id}` : ''}</span>
               <CurrentAccountStatus current={detail.current_submission || null} latest={submission} refresh={currentRefresh} />
-              {detail.current_submission && <button className='button secondary' disabled={Boolean(busy) || !vendor?.enabled || !vendor.configured} onClick={() => void refreshCurrentStatus()}>
+              {submission.can_manage !== false && detail.current_submission && <button className='button secondary' disabled={Boolean(busy) || !vendor?.enabled || !vendor.configured} onClick={() => void refreshCurrentStatus()}>
                 <RefreshCw className={currentRefresh.checking ? 'spin' : ''} aria-hidden='true' />{currentRefresh.checking ? 'Checking…' : 'Refresh account status'}
               </button>}
             </div> : <AccountStatus
@@ -263,6 +264,7 @@ export default function SubmissionDetails({
           </div>
           <div className='detail-summary'>
             <span>{submission.vendor_name}</span>
+            {submission.account_source && <span>Source {submission.account_source.label}</span>}
             {detail.user && <span className='admin-email'>Submitted by {detail.user.email}</span>}
             {endpointPrefix === '/admin/submissions' && <span>Submission #{submission.id}</span>}
             <span>Submitted {dateTime(submission.created_at)}</span>

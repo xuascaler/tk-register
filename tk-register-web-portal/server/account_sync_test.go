@@ -333,6 +333,11 @@ func TestAdminSyncedAccountsAuthorizationAndOwnerParity(t *testing.T) {
 	}
 	delete(adminAccount, "user_email")
 	delete(adminAccount, "user_id")
+	if ownerAccount["can_manage"] != true || ownerAccount["account_source"].(map[string]any)["label"] != "myself" {
+		t.Fatal("incorrect owner visibility metadata")
+	}
+	delete(ownerAccount, "can_manage")
+	delete(ownerAccount, "account_source")
 	if !reflect.DeepEqual(ownerData, adminData) {
 		t.Fatalf("admin view differs beyond owner fields: owner=%+v admin=%+v", ownerData, adminData)
 	}

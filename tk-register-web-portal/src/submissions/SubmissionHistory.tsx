@@ -11,6 +11,8 @@ import { errorMessage, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import { dateTime, Empty, StateBadge } from './shared';
 import Select from './Select';
+import SourceFilter from '../members/SourceFilter';
+import { useMemberScope } from '../members/MemberScope';
 import type { SubmissionList } from './types';
 
 export default function SubmissionHistory({
@@ -20,6 +22,7 @@ export default function SubmissionHistory({
   onOpen: (id: string) => void;
   onSubmit: () => void;
 }) {
+  const { selection: sources } = useMemberScope();
   const [list, setList] = useState<SubmissionList | null>(null);
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
@@ -46,6 +49,7 @@ export default function SubmissionHistory({
       page: String(page),
       search: query,
       status,
+      sources,
     });
     request<SubmissionList>(`/submissions?${params}`, { signal: abort.signal })
       .then((data) => {
@@ -60,7 +64,7 @@ export default function SubmissionHistory({
         }
       });
     return () => abort.abort();
-  }, [page, query, status, attempt]);
+  }, [page, query, status, attempt, sources]);
   return (
     <div className='history-page'>
       <div className='title-row'>
@@ -75,7 +79,7 @@ export default function SubmissionHistory({
           Submit account
         </button>
       </div>
-      <div className='history-toolbar'>
+      <div className='history-toolbar member-history-toolbar'>
         <div className='search-field'>
           <Search aria-hidden='true' />
           <label className='sr-only' htmlFor='history-search'>
@@ -89,11 +93,12 @@ export default function SubmissionHistory({
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        <SourceFilter id='history-source' onChange={() => setPage(1)} />
         <div className='history-filter'>
           <Select
             id='history-status'
             label='Submission status'
-            hiddenLabel
+            hiddenLabel={false}
             value={status}
             onChange={(value) => {
               setStatus(value);
@@ -147,10 +152,11 @@ export default function SubmissionHistory({
                   : 'Your account submissions will appear here.'}
               </Empty>
             ) : (
-              <table className='history-table'>
+              <table className='history-table member-history-table'>
                 <thead>
                   <tr>
                     <th>Account / plan</th>
+                    <th>Source</th>
                     <th className='account-id-heading'>Account ID</th>
                     <th>Submission</th>
                     <th>Submitted</th>
@@ -190,6 +196,7 @@ export default function SubmissionHistory({
                             .join(' · ')}
                         </span>
                       </td>
+                      <td data-label='Source' className='member-history-source'>{item.account_source?.label || 'myself'}</td>
                       <td data-label='Account ID' className='account-id-cell'>
                         {item.remote_id ? (
                           <span className='remote-account-id'>{item.remote_id}</span>
