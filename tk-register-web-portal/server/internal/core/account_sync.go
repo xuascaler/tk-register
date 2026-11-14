@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"goapi-tk-register/server/internal/safemessage"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -43,7 +45,7 @@ type SyncedAccount struct {
 	SnapshotStatus             *string `gorm:"size:80;index"`
 	LastSuccessAt              *time.Time
 	LastAttemptAt              *time.Time
-	LastError                  string `gorm:"size:255;not null;default:''"`
+	LastError                  string `gorm:"type:text;not null"`
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }
@@ -51,6 +53,8 @@ type SyncedAccount struct {
 // AccountSnapshotValues preserves absent values as SQL NULL and JSON null.
 // Cumulative counters are observations; resets must not become negative usage.
 type AccountSnapshotValues struct {
+	UpstreamStatusRaw         *string    `gorm:"size:128" json:"upstream_status_raw"`
+	UpstreamErrorMessage      *string    `gorm:"type:text" json:"upstream_error_message"`
 	CollectionIntervalSeconds *int       `json:"collection_interval_seconds,omitempty"`
 	PlatformAccountID         *string    `gorm:"size:32" json:"platform_account_id"`
 	SourceUpdatedAt           *time.Time `json:"source_updated_at"`
@@ -321,7 +325,7 @@ func validAccountFilter(page int, search, status string) error {
 		return validationErrorf("invalid account list filter")
 	}
 	switch status {
-	case "", "all", "active", "offline", "banned", "unknown", "pending", "limited", "sync_failed":
+	case "", "all", "active", "offline", "banned", "unknown", "pending", "limited", "sync_failed", "login_failed", "re_login_failed", "bound_failed", "cooking_failed":
 	default:
 		return validationErrorf("invalid account status")
 	}
@@ -483,6 +487,9 @@ func (s *Store) CollectionTargets(ctx context.Context, userID, accountID uint64)
 }
 
 func validateSnapshot(v AccountSnapshotValues) error {
+	if v.UpstreamStatusRaw != nil && (len(*v.UpstreamStatusRaw) > 128 || strings.ContainsAny(*v.UpstreamStatusRaw, "\r\n\x00")) {
+		return validationErrorf("invalid upstream status")
+	}
 	if v.PlatformAccountID != nil && (len(*v.PlatformAccountID) > 32 || strings.ContainsAny(*v.PlatformAccountID, "\r\n\x00")) {
 		return validationErrorf("invalid platform account ID")
 	}
@@ -518,6 +525,10 @@ func validateSnapshot(v AccountSnapshotValues) error {
 }
 
 func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, expectedIdentity string, values AccountSnapshotValues, at time.Time, timezone string) error {
+	if values.UpstreamErrorMessage != nil {
+		clean := safemessage.Text(*values.UpstreamErrorMessage)
+		values.UpstreamErrorMessage = &clean
+	}
 	if err := validateSnapshot(values); err != nil {
 		return err
 	}
@@ -533,6 +544,19 @@ func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, exp
 		}
 		if !account.AvailableForMutation() || account.IdentityKey != expectedIdentity || account.CurrentSubmissionID == nil {
 			return ErrAccountIdentityChanged
+		}
+		// Scheduled list reads do not fetch reasons. Retain the last reported
+		// reason only for the same identity and exact supplier state. An explicit
+		// empty reason (manual lookup found none) clears it; recovery clears it too.
+		if values.UpstreamErrorMessage == nil && values.UpstreamStatusRaw != nil && values.AccountStatus != nil && *values.AccountStatus != "active" {
+			var previous AccountSnapshot
+			e := tx.Where("account_id = ? AND identity_key = ? AND collected_at <= ?", account.ID, expectedIdentity, at).Order("collected_at DESC, id DESC").First(&previous).Error
+			if e != nil && !errors.Is(e, gorm.ErrRecordNotFound) {
+				return e
+			}
+			if e == nil && previous.UpstreamStatusRaw != nil && *previous.UpstreamStatusRaw == *values.UpstreamStatusRaw {
+				values.UpstreamErrorMessage = previous.UpstreamErrorMessage
+			}
 		}
 		// Store the cadence with the observation so later configuration changes
 		// cannot turn valid historical intervals into apparent collection gaps.
@@ -566,15 +590,12 @@ func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, exp
 }
 
 // Callers supply a safe, user-facing message, not a vendor response or exception
-// containing credentials. The database limits this to one compact status line.
+// containing credentials. Keep bounded, sanitized detail for the error popover.
 func (s *Store) RecordAccountFailure(ctx context.Context, accountID uint64, expectedIdentity, message string, at time.Time) error {
 	if at.IsZero() {
 		return validationErrorf("invalid collection time")
 	}
-	message = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ", "\x00", "").Replace(message))
-	if len(message) > 255 {
-		message = "Account collection failed. Please check the administrator sync settings."
-	}
+	message = safemessage.Text(message)
 	if message == "" {
 		message = "Account collection failed. Please try again."
 	}

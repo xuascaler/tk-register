@@ -23,9 +23,10 @@ const (
 
 // AccountResult is ordered like the input; Account and Err are mutually exclusive.
 type AccountResult struct {
-	Target  Target
-	Account *Account
-	Err     error
+	Target      Target
+	Account     *Account
+	Err         error
+	ReasonError error
 }
 
 // CollectTargets reads only the supplied current-page accounts, reusing a session,
@@ -91,6 +92,9 @@ func (c *Client) CollectTargets(ctx context.Context, username, password string, 
 						account, err = parseAccount(row.rawAccount)
 						if err == nil {
 							result.Account = &account
+							if ctx.Value(statusReasonsKey{}) == true && account.Status != nil && (*account.Status == "banned" || *account.Status == "offline") {
+								result.Account.UpstreamErrorMessage, result.ReasonError = batch.statusReason(targetCtx, row.rawAccount, account.ID, username, password)
+							}
 						}
 					}
 					result.Err = err
@@ -150,6 +154,9 @@ func collectionTransportError(ctx context.Context, err error) error {
 	return safeError(CodeUnavailable)
 }
 func validTargetPath(path string) bool {
+	if validStatusReasonPath(path) {
+		return true
+	}
 	query, err := url.ParseQuery(strings.TrimPrefix(path, apiPrefix+"/accounts?"))
 	return strings.HasPrefix(path, apiPrefix+"/accounts?") && err == nil && strings.TrimSpace(query.Get("keyword")) != "" && query.Get("provider") == "claude" && query.Get("account_type") == "2"
 }

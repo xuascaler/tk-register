@@ -70,7 +70,7 @@ test('deleted and pending accounts block account actions while failed operations
 });
 
 test('upstream sync_failed remains distinct from unknown and is shown as a failure', () => {
-  assert.equal(statusLabel('sync_failed'), 'Upstream sync failed');
+  assert.equal(statusLabel('sync_failed'), 'Sync error');
   assert.equal(statusTone('sync_failed'), 'negative');
   assert.equal(statusLabel('unknown'), 'Unknown');
   assert.equal(statusTone('unknown'), 'neutral');

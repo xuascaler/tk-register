@@ -35,8 +35,8 @@ try {
       return ok({ items, page: 1, page_size: 20, total: items.length });
     }
     if (path === '/accounts/100' || path === '/admin/synced-accounts/100') return ok({ account, snapshots: [snapshot], snapshot_count: 1, snapshot_page: 1, snapshot_page_size: 50, trend_reduced: false, trend: Object.fromEntries(['cost_total_usd', 'input_tokens_total', 'output_tokens_total'].map(metric => [metric, [[{ snapshot_id: snapshot.id, collected_at: snapshot.collected_at, value: snapshot[metric] }]]])), interval_seconds: 300, timezone: 'Asia/Shanghai' });
-    if (path === '/admin/synced-accounts/100/sync' || path === '/accounts/100/sync') {
-      assert.equal(req.method(), 'POST'); assert.equal(req.headers()['x-csrf-token'], 'fixture-csrf'); return ok({ account });
+    if (path === '/admin/synced-accounts/sync' || path === '/accounts/sync') {
+      assert.equal(req.method(), 'POST'); assert.equal(req.headers()['x-csrf-token'], 'fixture-csrf'); return ok({ accounts: [account], results: [{ account_id: account.id, status: "updated" }] });
     }
     // Exercise the back link without involving upstream status/billing calls.
     if (path === '/admin/submissions/22' || path === '/submissions/22' || path === '/admin/accounts/42') return fail(404);
@@ -45,7 +45,7 @@ try {
   await mkdir('test-results', { recursive: true });
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/account-pool/accounts`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Actions']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Actions']);
   assert.equal(await page.locator('.usage-owner-email').first().textContent(), 'owner@example.com');
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'alice@example.com' }).textContent(), /171\.47 \$/);
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /0\.00 \$/);
@@ -109,7 +109,7 @@ try {
   assert.match(page.url(), /account-pool\/accounts\/42$/);
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Status', 'Usage windows', 'Total spent', 'Last updated', 'Actions']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Actions']);
   assert.equal(await page.locator('.usage-owner-email').count(), 0);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).click();
   await page.getByRole('button', { name: 'Sync now', exact: true }).waitFor();

@@ -42,14 +42,14 @@ export function statusLabel(status: string | null | undefined) {
   const labels: Record<string, string> = {
     active: 'Active', in_use: 'Active', using: 'Active', '使用中': 'Active', '正常': 'Active',
     offline: 'Offline', disabled: 'Disabled', banned: 'Banned', '已封禁': 'Banned',
-    pending: 'Pending', sync_failed: 'Upstream sync failed', unknown: 'Unknown', expired: 'Expired', idle: 'Idle',
+    pending: 'Pending', sync_failed: 'Sync error', login_failed: 'Login failed', re_login_failed: 'Re-login failed', bound_failed: 'Binding failed', cooking_failed: 'Setup failed', unknown: 'Unknown', expired: 'Expired', idle: 'Idle',
   };
   return labels[status.toLowerCase()] || status.replaceAll('_', ' ');
 }
 
 export function statusTone(status: string | null | undefined) {
   const label = statusLabel(status);
-  return label === 'Active' ? 'positive' : ['Banned', 'Expired', 'Upstream sync failed'].includes(label) ? 'negative' : label === 'Pending' ? 'pending' : 'neutral';
+  return label === 'Active' ? 'positive' : ['Banned', 'Expired', 'Sync error', 'Login failed', 'Re-login failed', 'Binding failed', 'Setup failed'].includes(label) ? 'negative' : label === 'Pending' ? 'pending' : 'neutral';
 }
 
 // Spend uses the server's USD value. Missing conversions and reset counters are gaps, never zeros.

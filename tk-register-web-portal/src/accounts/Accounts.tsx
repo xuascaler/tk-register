@@ -6,6 +6,7 @@ import Select from '../submissions/Select';
 import { AdminBadge } from '../admin/shared';
 import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statusLabel, statusTone, type Metric } from './helpers';
 import type { AccountDetails, AccountPage, SyncedAccount } from './types';
+import { ErrorPopover } from './ErrorPopover';
 import { UsageTrend } from './UsageTrend';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
 import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
@@ -14,7 +15,14 @@ import { DeleteAccountDialog } from './DeleteAccountDialog';
 import { deletionInProgress, type AccountDeletionResult } from './delete-account';
 
 function Status({ account }: { account: SyncedAccount }) {
-  return <span className={`usage-status ${statusTone(account.snapshot?.account_status)}`}>{statusLabel(account.snapshot?.account_status)}</span>;
+  const snapshot = account.snapshot;
+  const label = statusLabel(snapshot?.account_status);
+  const className = `usage-status ${statusTone(snapshot?.account_status)}`;
+  if (!snapshot || !snapshot.account_status || snapshot.account_status === 'active') return <span className={className}>{label}</span>;
+  return <ErrorPopover label={label} title={`Supplier status · ${label}`} className={className}
+    message={snapshot.upstream_error_message?.trim() || 'The supplier did not provide an additional reason.'}
+    detail={snapshot.upstream_status_raw ? `Supplier status: ${snapshot.upstream_status_raw}` : undefined}
+    note={snapshot.upstream_error_message?.trim() ? 'Last reported supplier reason. Manual Sync checks for an updated reason when available.' : 'This is the supplier account status, separate from whether TK Register collected the data successfully.'} />;
 }
 
 function UsageWindow({ value, label }: { value: number | null | undefined; label: string }) {
@@ -126,7 +134,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
     <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Saved account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>
     <div className='usage-toolbar'>
       <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>Search accounts</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder={admin ? 'Search account or user email' : 'Search by account email'} maxLength={254} /></label>
-      <Select id='usage-account-status' label='Account status' hiddenLabel value={status} onChange={value => { setStatus(value); setPage(1); }} options={[{ value: '', label: 'All account statuses' }, { value: 'active', label: 'Active' }, { value: 'offline', label: 'Offline' }, { value: 'banned', label: 'Banned' }, { value: 'sync_failed', label: 'Upstream sync failed' }, { value: 'unknown', label: 'Unknown' }]} />
+      <Select id='usage-account-status' label='Account status' hiddenLabel value={status} onChange={value => { setStatus(value); setPage(1); }} options={[{ value: '', label: 'All account statuses' }, { value: 'active', label: 'Active' }, { value: 'offline', label: 'Offline' }, { value: 'banned', label: 'Banned' }, { value: 'sync_failed', label: 'Sync error' }, { value: 'login_failed', label: 'Login failed' }, { value: 're_login_failed', label: 'Re-login failed' }, { value: 'bound_failed', label: 'Binding failed' }, { value: 'cooking_failed', label: 'Setup failed' }, { value: 'pending', label: 'Pending' }, { value: 'unknown', label: 'Unknown' }]} />
     </div>
     <ErrorNotice>{error}</ErrorNotice>
     {notice && <p className='notice success' role='status'>{notice}</p>}
@@ -152,7 +160,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
           <td data-label='Total spent' className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total_usd, 'USD')}</strong>{stale && account.snapshot && <span className='usage-small'>Last known total</span>}</td>
           <td data-label='Submitted'><SubmittedTime value={account.latest_submitted_at} /></td>
           <td data-label='Last updated'><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>
-            <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>Updating account…</span> : !eligible ? <span className='usage-small'>Awaiting acceptance</span> : failure ? <details className='usage-sync-error'><summary>{rateLimited ? 'Rate limited' : 'Sync failed'}</summary><p>{failure}</p><span>{account.snapshot ? 'Showing the last successful data.' : 'No data has been collected yet.'}</span></details> : refresh?.status === 'skipped' ? <details className='usage-sync-error'><summary>Not updated</summary><p>{refresh.message}</p></details> : refresh?.status === 'updated' ? <span className='usage-row-success'>Updated</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</div>
+            <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>Updating account…</span> : !eligible ? <span className='usage-small'>Awaiting acceptance</span> : failure ? <ErrorPopover label={rateLimited ? 'Rate limited' : 'Sync failed'} title='Account synchronization failed' className='usage-sync-error' message={failure} note={account.snapshot ? 'Showing the last successful data.' : 'No data has been collected yet.'} detail={account.last_attempt_at ? `Last saved attempt: ${formatTime(account.last_attempt_at)}` : undefined} /> : refresh?.status === 'skipped' ? <ErrorPopover label='Not updated' title='Account was not updated' className='usage-sync-error' message={refresh.message || 'Another sync is in progress. Try again shortly.'} /> : refresh?.status === 'updated' ? refresh.message ? <ErrorPopover label='Details unavailable' title='Account updated' className='usage-sync-error' message={refresh.message} /> : <span className='usage-row-success'>Updated</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</div>
           </td>
           <td className='usage-sync-cell'><div className='usage-row-actions'><button className='button pale usage-sync-button' type='button' aria-label={`Sync ${account.account}`} disabled={loading || loadedScope !== scope || syncingID !== null || deleting || !eligible || retryIn > 0} onClick={() => void sync(account)}><RefreshCw className={busy ? 'usage-spinning' : ''} aria-hidden='true' />{busy ? 'Syncing' : 'Sync'}</button><button className='button account-delete-button usage-delete-button' type='button' aria-label={`Delete ${account.account}`} disabled={loading || loadedScope !== scope || syncingID !== null || deleting} onClick={() => { setNotice(''); setDeletingAccount(account); }}><Trash2 aria-hidden='true' />Del</button></div>{deleting && <span className='usage-small usage-deletion-feedback'>Deleting… {account.deletion_operation_id && <button className='usage-deletion-progress-link' type='button' onClick={() => setDeletingAccount(account)}>View progress</button>}</span>}{retryIn > 0 && !deleting && <span className='usage-sync-cooldown'>{syncRetryLabel(retryIn, refresh?.retryStage)}</span>}</td>
         </tr>; })}</tbody>
@@ -209,9 +217,13 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
     const controller = new AbortController(); pending.current = controller;
     setSyncing(true); setError(''); setNotice(''); setRefreshWarning(''); setSyncRetry(null);
     try {
-      const result = await request<{ account: SyncedAccount }>(`${endpoint}/${encodeURIComponent(id)}/sync`, { method: 'POST', body: {}, signal: controller.signal });
+      if (!data?.account) return;
+      const result = await syncAccountRow(endpoint, data.account, controller.signal);
       if (!controller.signal.aborted) {
-        if (result.account.last_error) setError(result.account.last_error);
+        if (result.status !== 'updated') {
+          setError(result.message || 'The account could not be updated.');
+          if (result.retryAfter) setSyncRetry({ until: Date.now() + result.retryAfter * 1000, stage: result.retryStage });
+        } else if (result.message) setRefreshWarning(result.message);
         else setNotice('Account data updated.');
       }
     } catch (cause) {
@@ -264,7 +276,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       {notice && <p className='notice success' role='status'>{notice}</p>}
       {refreshWarning && <p className='notice account-auth-refresh-warning' role='status'>{refreshWarning}</p>}
       {syncRetryIn > 0 && <p className='usage-small' role='status'>{syncRetryLabel(syncRetryIn, syncRetry?.stage)}. Saved account data is retained.</p>}
-      {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><details><summary>View details</summary><p>{account.last_error}</p><span>Attempted {formatTime(account.last_attempt_at, data.timezone)}</span></details></div>}
+      {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><ErrorPopover label='Sync failed' title='Account synchronization failed' className='usage-sync-error' message={account.last_error} detail={`Last saved attempt: ${formatTime(account.last_attempt_at, data.timezone)}`} /></div>}
       <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} />
       <div className='usage-metrics'>
         <div><span>Total spent</span><strong>{formatCost(snapshot?.cost_total_usd, 'USD')}</strong><small>{account.last_error && snapshot ? 'Last known cumulative total' : 'Cumulative total'}</small></div>

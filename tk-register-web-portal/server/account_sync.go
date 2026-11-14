@@ -518,10 +518,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 			}
 			continue
 		}
-		values := core.AccountSnapshotValues{AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
-		if record.PlatformAccountID != "" {
-			values.PlatformAccountID = &record.PlatformAccountID
-		}
+		values := supplierAccountSnapshot(record)
 		e := a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, values, at, v.String("account_sync_timezone"))
 		if core.IsValidationError(e) {
 			failures++

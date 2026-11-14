@@ -5,6 +5,8 @@ export type AccountSnapshot = {
   collected_at: string;
   source_updated_at: string | null;
   account_status: string | null;
+  upstream_status_raw?: string | null;
+  upstream_error_message?: string | null;
   input_tokens_total: number | null;
   output_tokens_total: number | null;
   cost_total: number | null;

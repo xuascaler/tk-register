@@ -47,7 +47,7 @@ func pageTargetKey(target supplier.Target) string {
 }
 
 func supplierAccountSnapshot(record *supplier.Account) core.AccountSnapshotValues {
-	snapshot := core.AccountSnapshotValues{AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
+	snapshot := core.AccountSnapshotValues{UpstreamStatusRaw: record.UpstreamStatusRaw, UpstreamErrorMessage: record.UpstreamErrorMessage, AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
 	if record.PlatformAccountID != "" {
 		snapshot.PlatformAccountID = &record.PlatformAccountID
 	}
@@ -61,6 +61,8 @@ func pageCollectionError(err error) string {
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
 		switch upstream.Code {
+		case supplier.CodeContractMismatch:
+			return upstream.Message
 		case supplier.CodeTimeout:
 			return "The supplier website timed out. Previously collected data is retained."
 		case supplier.CodeRateLimited:
@@ -237,7 +239,7 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 			_ = releaseSend.Run(release, a.redis, []string{accountSyncLeaseKey}, token).Err()
 		}()
 		collection, cancelCollect := context.WithTimeout(ctx, 40*time.Second)
-		records, collectionErr := a.pageCollector().CollectTargets(collection, username, password, selections)
+		records, collectionErr := a.pageCollector().CollectTargets(supplier.WithStatusReasons(collection), username, password, selections)
 		if collectionErr != nil {
 			summary.ErrorKind = syncDiagnosticError(collectionErr)
 		}
@@ -293,6 +295,9 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 			if rowErr == nil {
 				out.Results[i].Status = "updated"
 				out.Results[i].Message = ""
+				if result.ReasonError != nil {
+					out.Results[i].Message = "Account data updated, but the supplier reason could not be retrieved. " + pageCollectionError(result.ReasonError)
+				}
 				continue
 			}
 			out.Results[i].Status = "failed"

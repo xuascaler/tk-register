@@ -213,3 +213,13 @@ The list sends a one-ID batch for each manual Sync click. Batch clients must ins
 ## Verification
 
 Run `npm test` and `npm run build` in `tk-register-web-portal`. Frontend account tests cover missing-versus-zero values, unavailable currencies, gaps, counter resets and chronology without mutating input data. Mock browser checks cover desktop/mobile layout, manual collection failure reporting, testing without saving and clearing the password field after save. They do not contact the supplier or require real credentials.
+
+## Account status and error details
+
+`account_snapshots` adds nullable `upstream_status_raw` (VARCHAR(128)) and `upstream_error_message` (TEXT). The latter stores a bounded, sanitized supplier explanation, not raw response bodies or credentials. `synced_accounts.last_error` changes from VARCHAR(255) to TEXT so safe collection diagnostics are not replaced by a generic message. No table is added. Migration is additive for snapshots; existing rows remain NULL and are not backfilled.
+
+Confirmed supplier states `login_failed`, `re_login_failed`, `bound_failed`, and `cooking_failed` retain distinct canonical meanings. `sync_failed` is displayed as **Sync error**. An unrecognized state remains **Unknown**, with its original value available in the detail popover.
+
+Explicit manual Sync from the list or account detail page uses the bounded targeted collector. After an exact account match, banned and offline accounts perform one additional GET of `/supplier-account/api/supplier/accounts/{supplier_record_id}/claude-status-reason`, using the website record ID and the existing cached session, pacing, retry and cooldown mechanisms. This response is parsed as `{found, content}` and sanitized before persistence. Scheduled and post-write collection do not request reasons. An unchanged supplier state carries forward the last reported reason; a changed state or recovery clears it. An explicit successful lookup with `found: false` also clears it. A failed supplementary lookup preserves successfully collected metrics and returns a separate warning to the initiating browser.
+
+Status badges and collection-failure messages open an overlay on hover or click; click pins it. Keyboard activation, Escape, outside-click dismissal and copy are supported. The overlay lives outside the table scroll container and does not expand rows. Supplier account failure and TK Register collection failure remain separate: a successful collection may report a banned account, while a failed collection retains the last successful account data. Account lookup responses include the new snapshot fields without requesting upstream data.

@@ -196,6 +196,8 @@ func LogRequest(ctx context.Context, e RequestEvent) {
 		path, stage, method = e.Path, "login", "POST"
 	case e.Method == "GET" && e.Path == "/supplier-account/api/supplier/bill/claude-export":
 		path, stage, method = e.Path, "bill_export", "GET"
+	case e.Method == "GET" && strings.HasPrefix(e.Path, "/supplier-account/api/supplier/accounts/") && strings.HasSuffix(e.Path, "/claude-status-reason"):
+		path, stage, method = "/supplier-account/api/supplier/accounts/:id/claude-status-reason", "account_reason", "GET"
 	case e.Method == "GET" && e.Path == "/supplier-account/api/supplier/accounts":
 		path, stage, method = e.Path, "accounts", "GET"
 	}

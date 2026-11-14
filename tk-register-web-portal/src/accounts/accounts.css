@@ -11,9 +11,6 @@
 .usage-row-success { display: block; color: #43866b; font-size: 12px; margin-top: 5px; }
 .usage-load-retry { margin-bottom: 18px; }
 .usage-sync-error { color: #98702e; font-size: 12px; line-height: 1.6; margin-top: 5px; overflow-wrap: anywhere; }
-.usage-sync-error summary { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-.usage-sync-error p { margin: 7px 0 4px; }
-.usage-sync-error > span { color: var(--muted); }
 .usage-accounts-table .usage-sync-heading, .usage-sync-cell { text-align: center; }
 .workspace .usage-sync-button { width: 78px; min-width: 78px; height: 36px; min-height: 36px; padding: 0 8px; gap: 6px; font-size: 12px; border-radius: 7px; color: var(--navy); background: #edf4fc; border-color: #d0e0f3; }
 .workspace .usage-sync-button:hover:not(:disabled) { background: #e3eefc; border-color: #9dbbe0; }
@@ -213,3 +210,26 @@
   .usage-chart-bottom { flex-wrap: wrap; }
   .usage-sync-status dl { grid-template-columns: 1fr 1fr; }
 }
+
+/* Error details overlay the table; opening them never changes the row height. */
+.account-detail-trigger { display: inline-flex; align-items: center; gap: 5px; border: 0; font: inherit; cursor: pointer; text-align: left; white-space: nowrap; }
+.account-detail-trigger > svg { width: 13px; height: 13px; flex: none; }
+.account-detail-trigger:focus-visible { outline: 2px solid #7399c8; outline-offset: 3px; }
+.account-detail-trigger.usage-status { font-size: 12px; }
+.account-detail-trigger.usage-sync-error { padding: 0; background: none; color: #9b702d; font-size: 12px; line-height: 1.5; }
+.account-detail-trigger.usage-sync-error:hover { text-decoration: underline; text-underline-offset: 3px; }
+.usage-accounts-table:not(.usage-admin-table) th:nth-child(2), .usage-accounts-table.usage-admin-table th:nth-child(3) { width: 160px; }
+.account-detail-trigger.usage-status { max-width: none; }
+.account-detail-trigger.usage-sync-error > span { color: inherit; }
+.account-error-popover { position: fixed; z-index: 1200; box-sizing: border-box; width: min(350px, calc(100vw - 24px)); max-height: min(460px, calc(100dvh - 24px)); overflow-y: auto; padding: 16px; color: #283b52; background: #fff; border: 1px solid #dae4ef; border-radius: 10px; box-shadow: 0 8px 28px #1c365620; font-family: inherit; font-size: 13px; line-height: 1.6; text-align: left; }
+.account-error-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.account-error-heading strong { font-size: 14px; font-weight: 600; }
+.account-error-heading button { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; margin: -5px -5px 0 0; padding: 5px; color: #7d8fa6; background: transparent; border: 0; border-radius: 5px; cursor: pointer; }
+.account-error-heading button:hover { background: #f1f5fa; }
+.account-error-popover svg { width: 16px; height: 16px; flex: none; }
+.account-error-message { margin: 10px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.account-error-meta { margin: 10px 0 0; color: #71829a; font-size: 12px; overflow-wrap: anywhere; }
+.account-error-note { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid #e6edf5; color: #71829a; font-size: 12px; }
+.account-error-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; color: #577e68; font-size: 12px; }
+.account-error-footer button { display: inline-flex; gap: 5px; align-items: center; flex-shrink: 0; padding: 4px 0; background: transparent; border: 0; color: #214a78; font: inherit; cursor: pointer; }
+.account-error-popover button:focus-visible { outline: 2px solid #7399c8; outline-offset: 2px; }

@@ -458,3 +458,62 @@ func TestLookupSyncedAccountUsesExactOwnerVendorIdentityAndSavedSnapshot(t *test
 		t.Fatal("lookup created or erased snapshots", snapshots, err)
 	}
 }
+
+func TestSnapshotReasonsAndFailureDetails(t *testing.T) {
+	s, owner, vendor, version := syncFixture(t)
+	ctx := context.Background()
+	at := time.Now().UTC().Add(-time.Hour)
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "reason@example.com", "claude/cc-pro", "accepted", "123", at)
+	var account SyncedAccount
+	if err := s.DB.First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	status, raw, reason := "banned", "ban", "Supplier disabled the account. access_token=secret-123 温州润晨"
+	save := func(v AccountSnapshotValues, n int) {
+		t.Helper()
+		if err := s.RecordAccountSnapshot(ctx, account.ID, account.IdentityKey, v, at.Add(time.Duration(n)*time.Minute), "Asia/Shanghai"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latest := func() AccountSnapshot {
+		t.Helper()
+		var snap AccountSnapshot
+		if err := s.DB.Where("account_id = ?", account.ID).Order("collected_at DESC").First(&snap).Error; err != nil {
+			t.Fatal(err)
+		}
+		return snap
+	}
+	save(AccountSnapshotValues{AccountStatus: &status, UpstreamStatusRaw: &raw, UpstreamErrorMessage: &reason}, 1)
+	snap := latest()
+	if snap.UpstreamErrorMessage == nil || strings.Contains(*snap.UpstreamErrorMessage, "secret-123") || strings.Contains(*snap.UpstreamErrorMessage, "温州润晨") {
+		t.Fatal("unsafe reason")
+	}
+	save(AccountSnapshotValues{AccountStatus: &status, UpstreamStatusRaw: &raw}, 2)
+	if latest().UpstreamErrorMessage == nil {
+		t.Fatal("scheduled collection lost last reason")
+	}
+	empty := ""
+	save(AccountSnapshotValues{AccountStatus: &status, UpstreamStatusRaw: &raw, UpstreamErrorMessage: &empty}, 3)
+	if latest().UpstreamErrorMessage == nil || *latest().UpstreamErrorMessage != "" {
+		t.Fatal("explicit no reason not saved")
+	}
+	save(AccountSnapshotValues{AccountStatus: &status, UpstreamStatusRaw: &raw, UpstreamErrorMessage: &reason}, 4)
+	recovered, using := "active", "using"
+	save(AccountSnapshotValues{AccountStatus: &recovered, UpstreamStatusRaw: &using}, 5)
+	if latest().UpstreamErrorMessage != nil {
+		t.Fatal("recovery kept stale reason")
+	}
+	detail := strings.Repeat("Collection diagnostic. ", 30)
+	if err := s.RecordAccountFailure(ctx, account.ID, account.IdentityKey, detail, at.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.First(&account, account.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.LastError != strings.TrimSpace(detail) {
+		t.Fatal("failure detail was discarded")
+	}
+	if latest().AccountStatus == nil || *latest().AccountStatus != "active" {
+		t.Fatal("collection failure changed account status")
+	}
+}

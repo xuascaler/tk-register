@@ -44,7 +44,7 @@ export async function syncAccountRow(
       return { account: previous, status: 'failed', message: 'The update result was incomplete. Showing saved data.' };
     }
     if (result.status === 'updated' && account && !account.last_error) {
-      return { account, status: 'updated' };
+      return { account, status: 'updated', message: result.message || undefined };
     }
     // An unsuccessful attempt never clears a successful snapshot or changes its
     // timestamp. Keep the original identity too if a submission changed mid-sync.

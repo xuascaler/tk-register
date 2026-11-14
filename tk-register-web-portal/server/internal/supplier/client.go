@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net"
@@ -45,7 +46,7 @@ const (
 	CodeSessionBusy        = "supplier_session_busy"
 )
 
-// Error contains only fixed, public-safe messages. Upstream response bodies,
+// Error contains only public-safe diagnostics built from fixed text and counters. Upstream response bodies,
 // credentials, tokens, and transport errors are never included in its text.
 type Error struct {
 	Code              string
@@ -73,24 +74,31 @@ func safeError(code string) *Error {
 	return &Error{Code: code, Message: messages[code]}
 }
 
+// Details must be developer-authored descriptions, never raw upstream content.
+func contractError(page int, detail string) *Error {
+	return &Error{Code: CodeContractMismatch, Message: fmt.Sprintf("Supplier account response could not be processed (page %d): %s. Last successful data is retained.", page, detail)}
+}
+
 // Account is an explicit allowlist. In particular, it cannot contain the
 // password or authentication JSON included in some supplier account responses.
 // All usage metrics are nullable: absent values must not turn into zero usage.
 type Account struct {
-	ID                string
-	PlatformAccountID string
-	Account           string
-	Plan              string
-	Status            *string
-	InputTokensTotal  *int64
-	OutputTokensTotal *int64
-	CostTotal         *float64
-	Currency          *string
-	Usage5HPercent    *float64
-	Usage7DPercent    *float64
-	Reset5HAt         *time.Time
-	Reset7DAt         *time.Time
-	SourceUpdatedAt   *time.Time
+	ID                   string
+	PlatformAccountID    string
+	Account              string
+	Plan                 string
+	Status               *string
+	UpstreamStatusRaw    *string
+	UpstreamErrorMessage *string
+	InputTokensTotal     *int64
+	OutputTokensTotal    *int64
+	CostTotal            *float64
+	Currency             *string
+	Usage5HPercent       *float64
+	Usage7DPercent       *float64
+	Reset5HAt            *time.Time
+	Reset7DAt            *time.Time
+	SourceUpdatedAt      *time.Time
 }
 
 type Client struct {
@@ -201,20 +209,23 @@ func (c *Client) Collect(ctx context.Context, username, password string) ([]Acco
 			Total json.RawMessage `json:"total"`
 		}
 		if common.Unmarshal(body, &result) != nil {
-			return nil, safeError(CodeContractMismatch)
+			return nil, contractError(page, "invalid response envelope")
 		}
 		total, err := optionalInt(result.Total)
 		if err != nil || total == nil || *total > maxPages*pageSize || len(result.List) == 0 || strings.TrimSpace(string(result.List)) == "null" {
-			return nil, safeError(CodeContractMismatch)
+			return nil, contractError(page, "missing or invalid total/list, or inventory exceeds the supported limit")
 		}
 		var rows []rawAccount
 		if common.Unmarshal(result.List, &rows) != nil || len(rows) > pageSize {
-			return nil, safeError(CodeContractMismatch)
+			return nil, contractError(page, "invalid list or too many rows")
 		}
-		for _, row := range rows {
+		for index, row := range rows {
 			account, err := parseAccount(row)
-			if err != nil || seen[account.ID] {
-				return nil, safeError(CodeContractMismatch)
+			if err != nil {
+				return nil, contractError(page, fmt.Sprintf("row %d contains invalid account or usage fields", index+1))
+			}
+			if seen[account.ID] {
+				return nil, contractError(page, "an account record was repeated across pages; the supplier inventory may have changed during pagination")
 			}
 			seen[account.ID] = true
 			accounts = append(accounts, account)
@@ -223,14 +234,14 @@ func (c *Client) Collect(ctx context.Context, username, password string) ([]Acco
 			return accounts, nil
 		}
 		if len(rows) == 0 {
-			return nil, safeError(CodeContractMismatch)
+			return nil, contractError(page, "an empty page was returned before the reported total")
 		}
 	}
-	return nil, safeError(CodeContractMismatch)
+	return nil, contractError(maxPages, "pagination limit reached before the reported total")
 }
 
 func (s *session) request(ctx context.Context, method, path string, payload any) (int, []byte, error) {
-	queryRequest := method == http.MethodGet && strings.SplitN(path, "?", 2)[0] == apiPrefix+"/accounts"
+	queryRequest := method == http.MethodGet && (strings.SplitN(path, "?", 2)[0] == apiPrefix+"/accounts" || validStatusReasonPath(path))
 	if s.cache != nil && queryRequest {
 		if err := s.cache.cooldown(ctx, "accounts"); err != nil {
 			return 0, nil, err
@@ -538,8 +549,8 @@ func canonicalStatus(status string) string {
 		return "banned"
 	case "offline":
 		return "offline"
-	case "sync_failed":
-		return "sync_failed"
+	case "sync_failed", "login_failed", "re_login_failed", "bound_failed", "cooking_failed":
+		return status
 	case "wait_check", "init", "bound", "cooking", "ready", "re_login", "pending_activation":
 		return "pending"
 	default:
@@ -563,9 +574,11 @@ func parseAccount(raw rawAccount) (Account, error) {
 		return a, safeError(CodeContractMismatch)
 	}
 	if status := strings.ToLower(strings.TrimSpace(raw.Status)); status != "" {
-		if len(status) > 64 {
+		if len(status) > 128 || strings.ContainsAny(status, "\r\n\x00") {
 			return a, safeError(CodeContractMismatch)
 		}
+		rawStatus := strings.TrimSpace(raw.Status)
+		a.UpstreamStatusRaw = &rawStatus
 		status = canonicalStatus(status)
 		a.Status = &status
 	}
