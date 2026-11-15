@@ -37,8 +37,9 @@ export default function AccountsOverview() {
   const statuses = useMemo(() => [...overviewStatuses, ...Object.keys(total.statuses).filter(key => !overviewStatuses.includes(key)).sort()], [total]);
   const periodRows = useMemo(() => data?.rows.filter(row => selected.includes(row.model)) || [], [data, selected]);
   const periodTotals = useMemo(() => dailyTotals(periodRows), [periodRows]);
-  const incomplete = !!data?.days.some(day => day.status !== 'complete');
-  const knownPeriod = !!data?.days.some(day => day.collected > 0) && selected.length > 0;
+  const incomplete = !!data?.days.some(day => day.collected === 0);
+  const hasCollectedData = !!data?.days.some(day => day.collected > 0);
+  const knownPeriod = hasCollectedData && (selected.length > 0 || models.length === 0);
   function chooseDays(days: number) { const next = recentDailyRange(days); setAllTime(false); setRange(next); }
   function costFor(source: OverviewSource, modelList: string[]) { return formatCost(data ? overviewModelCosts(data, source, modelList) : null, 'USD'); }
   return <section className='accounts-overview' aria-label='Accounts overview'>
@@ -58,7 +59,7 @@ export default function AccountsOverview() {
         {total.cost_known < total.total && total.total > 0 && <p className='overview-note'>Cumulative spend is available for {total.cost_known.toLocaleString()} of {total.total.toLocaleString()} accounts. Unavailable values are not counted as zero.</p>}
         <section className='overview-model-summary' aria-labelledby='overview-model-heading'><div className='overview-section-heading'><div><h2 id='overview-model-heading'>Model costs</h2><p>{data.start_date} – {data.end_date} · selected period</p></div><strong className='overview-period-total'>{knownPeriod ? dailyMoney(periodTotals.cost) : '—'}</strong></div>
         <div className='overview-model-grid'>{selected.map(model => <div key={model}><span><i style={{ background: overviewColors[models.indexOf(model) % overviewColors.length] }} />{model}</span><strong>{costFor(total, [model])}</strong></div>)}</div>
-        {!selected.length && <p className='overview-note'>{models.length ? 'Select one or more models to view costs.' : 'No model bill lines have been collected for this period.'}</p>}
+        {!selected.length && <p className='overview-note'>{models.length ? 'Select one or more models to view costs.' : knownPeriod ? 'Successfully collected accounts have no model bill lines for this period.' : 'No model bill lines have been collected for this period.'}</p>}
       </section>
       </section>
       <section className='overview-sources' aria-labelledby='overview-sources-heading'><div className='overview-section-heading'><div className='overview-source-title'><h2 id='overview-sources-heading'>Accounts by source</h2><span className='overview-source-info' tabIndex={0} aria-label='How source totals are calculated' aria-describedby='overview-source-explanation'><Info aria-hidden='true' /><span id='overview-source-explanation' role='tooltip'>myself includes your own accounts. Each direct member includes accounts available through them, including their sub-users. Each account is counted once.</span></span></div><div className='usage-metric-tabs' role='group' aria-label='Source breakdown'><button type='button' aria-pressed={table === 'status'} onClick={() => setTable('status')}>Status</button><button type='button' aria-pressed={table === 'models'} onClick={() => setTable('models')}>Model costs</button></div></div>
@@ -71,9 +72,9 @@ export default function AccountsOverview() {
       </section>
       <section className='daily-compact overview-usage' aria-labelledby='overview-usage-heading'><div className='overview-section-heading'><div><h2 id='overview-usage-heading'>Daily usage</h2><p>{data.start_date} – {data.end_date} · Asia/Shanghai</p></div><span className='overview-note'>{data.days.length > 14 ? 'Daily trend' : 'Daily breakdown'}</span></div>
         <div className='overview-chart-controls'><div className='usage-metric-tabs' role='group' aria-label='Daily chart metric'>{([['cost_usd', 'Cost'], ['input_tokens', 'Input tokens'], ['output_tokens', 'Output tokens']] as const).map(([key, label]) => <button key={key} type='button' aria-pressed={metric === key} onClick={() => setMetric(key)}>{label}</button>)}</div><div className='overview-chart-total'><strong>{knownPeriod ? metric === 'cost_usd' ? dailyMoney(periodTotals.cost) : dailyTokens(metric === 'input_tokens' ? periodTotals.input : periodTotals.output) : '—'}</strong><span>Selected period</span></div></div>
-        {incomplete && <p className='daily-data-notice'>{knownPeriod ? 'Some daily bills are incomplete or unavailable. Totals show collected data only; missing days remain gaps.' : 'Daily bills are not available for every day in this period. Missing data is shown as —.'}</p>}
+        {incomplete && <p className='daily-data-notice'>{hasCollectedData ? 'Totals include successfully collected accounts. Dates with no collected data remain gaps.' : 'No daily bills have been collected for this period. Missing data is shown as —.'}</p>}
         <OverviewChart data={data} models={selected} metric={metric} />
-        <p className='usage-footnote daily-footnote'><Clock3 aria-hidden='true' /><span>Complete days through {data.end_date} · Collected daily at 03:00 · Asia/Shanghai</span></p>
+        <p className='usage-footnote daily-footnote'><Clock3 aria-hidden='true' /><span>Usage through {data.end_date} · Collected daily at 03:00 · Asia/Shanghai</span></p>
       </section>
     </>}
   </section>;

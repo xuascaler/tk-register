@@ -19,7 +19,7 @@ export function overviewTotals(sources: OverviewSource[]): OverviewSource {
 export function overviewModels(data: OverviewData | null) { return [...new Set(data?.rows.map(row => row.model) || [])].sort(); }
 export function selectedOverviewModels(data: OverviewData, selection: ModelSelection) { const models = overviewModels(data); return selection === null ? models : models.filter(model => selection.includes(model)); }
 export function overviewModelCosts(data: OverviewData, source: OverviewSource, models: string[]) {
-  if (!source.collected_days || !models.length) return null;
+  if (!source.collected_days || (!models.length && overviewModels(data).length > 0)) return null;
   return data.model_costs.filter(row => (source.id === 'total' || row.source_id === source.id) && models.includes(row.model)).reduce((sum, row) => sum + row.cost_usd, 0);
 }
 export function validOverviewRange(start: string, end: string, now = new Date()) {
@@ -27,14 +27,18 @@ export function validOverviewRange(start: string, end: string, now = new Date())
     && start >= '1970-01-01' && start <= end && end <= recentDailyRange(1, now).end;
 }
 export function overviewSeries(data: OverviewData, models: string[], metric: DailyMetric) {
+  // A successfully collected period may have no model rows at all. Keep its
+  // zero total visible, without inventing a model or overriding deselection.
+  const aggregateOnly = !models.length && !overviewModels(data).length;
   const byDate = new Map<string, Map<string, DailyRow>>();
   for (const row of data.rows) { if (!models.includes(row.model)) continue; if (!byDate.has(row.date)) byDate.set(row.date, new Map()); byDate.get(row.date)!.set(row.model, row); }
   return data.days.map(day => {
     const rows = models.map(model => byDate.get(day.date)?.get(model)).filter((row): row is DailyRow => !!row);
-    const values = models.map(model => {
+    const values = aggregateOnly ? [day.collected > 0 ? 0 : null] : models.map(model => {
       const row = byDate.get(day.date)?.get(model);
-      // A missing bill/model is only a zero once the whole day is collected.
-      return row ? Number(row[metric]) : day.status === 'complete' ? 0 : null;
+      // Show the successfully collected accounts, including confirmed zero bills.
+      // Older responses may still mark these days as partial.
+      return day.collected > 0 ? row ? Number(row[metric]) : 0 : null;
     });
     return { ...day, rows, values, value: values.some(v => v !== null) ? values.reduce<number>((sum, value) => sum + (value || 0), 0) : null };
   });

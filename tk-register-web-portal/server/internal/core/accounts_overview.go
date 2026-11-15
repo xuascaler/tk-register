@@ -202,10 +202,10 @@ func (s *Store) AccountsOverview(ctx context.Context, viewerID uint64, rawSource
 			out.Sources[i].CollectedDays = row.Count
 		}
 	}
-	// Coverage is counted from collection markers, including confirmed zero days,
-	// not from the presence of bill lines. Newly created accounts don't make older
-	// complete days look missing. This query is grouped by date, never per account.
-	dateExpr := "DATE(DATE_ADD(a.created_at, INTERVAL 8 HOUR))"
+	// Collection markers include successful days with no bill lines. Any saved
+	// successful collection makes a day available; another account's failure must
+	// not hide that day's collected totals. Expected counts are informational only.
+	dateExpr := "DATE_FORMAT(DATE_ADD(a.created_at, INTERVAL 8 HOUR), '%Y-%m-%d')"
 	if s.DB.Dialector.Name() == "sqlite" {
 		dateExpr = "DATE(a.created_at, '+8 hours')"
 	}
@@ -222,9 +222,8 @@ func (s *Store) AccountsOverview(ctx context.Context, viewerID uint64, rawSource
 	var coverage []struct {
 		Date      string
 		Collected int64
-		Stale     int64
 	}
-	if err = days().Select("d.usage_date AS date, SUM(CASE WHEN d.last_success_at IS NOT NULL THEN 1 ELSE 0 END) AS collected, SUM(CASE WHEN d.last_error <> '' AND d.last_success_at IS NOT NULL THEN 1 ELSE 0 END) AS stale").Where("d.usage_date BETWEEN ? AND ?", start, end).Group("d.usage_date").Scan(&coverage).Error; err != nil {
+	if err = days().Select("d.usage_date AS date, SUM(CASE WHEN d.last_success_at IS NOT NULL THEN 1 ELSE 0 END) AS collected").Where("d.usage_date BETWEEN ? AND ?", start, end).Group("d.usage_date").Scan(&coverage).Error; err != nil {
 		return out, err
 	}
 	coverageByDate := map[string]int{}
@@ -247,9 +246,6 @@ func (s *Store) AccountsOverview(ctx context.Context, viewerID uint64, rawSource
 			day.Collected = c.Collected
 			if c.Collected > 0 {
 				day.Status = "complete"
-				if c.Collected < expected || c.Stale > 0 {
-					day.Status = "partial"
-				}
 			}
 		}
 		out.Days = append(out.Days, day)

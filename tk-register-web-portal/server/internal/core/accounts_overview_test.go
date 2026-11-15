@@ -91,7 +91,7 @@ func TestAccountsOverviewScopeAggregationCoverageAndRate(t *testing.T) {
 	if len(out.Rows) != 2 || out.Rows[0].CostUSD != 30 || out.Rows[0].InputTokens != "27021597764222979" {
 		t.Fatalf("aggregation/precision wrong: %+v", out.Rows)
 	}
-	if out.Days[5].Status != "partial" || out.Days[5].Collected != 3 || out.Days[6].Status != "complete" || out.Days[6].Collected != 4 || out.Days[0].Status != "missing" {
+	if out.Days[5].Status != "complete" || out.Days[5].Collected != 3 || out.Days[6].Status != "complete" || out.Days[6].Collected != 4 || out.Days[0].Status != "missing" {
 		t.Fatalf("bad coverage %+v", out.Days)
 	}
 	raw, _ := json.Marshal(out)
@@ -117,6 +117,65 @@ func TestAccountsOverviewScopeAggregationCoverageAndRate(t *testing.T) {
 	branch, err := s.AccountsOverview(ctx, owner.ID, idString(b.ID), "", "", false, now)
 	if err != nil || len(branch.Sources) != 1 || branch.Sources[0].Total != 1 {
 		t.Fatal("deleted account counted", branch, err)
+	}
+}
+
+func TestAccountsOverviewAnySuccessfulAccountMakesDayAvailable(t *testing.T) {
+	s, owner, vendor, version := syncFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	created := now.AddDate(0, 0, -5)
+	for i := 0; i < 4; i++ {
+		account := "available-" + idString(uint64(i+1)) + "@example.com"
+		syncSubmission(t, s, owner.ID, vendor.ID, version.ID, account, "claude/cc-pro", "accepted", idString(uint64(i+100)), created.Add(time.Duration(i)*time.Second))
+		var a SyncedAccount
+		if err := s.DB.Where("account = ?", account).First(&a).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DB.Model(&a).Update("created_at", created).Error; err != nil {
+			t.Fatal(err)
+		}
+		for _, date := range []string{"2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15"} {
+			day := AccountUsageDay{AccountID: a.ID, IdentityKey: a.IdentityKey, UsageDate: date, LastAttemptAt: now, LastError: "Platform account ID is missing or invalid."}
+			// No successes on the 12th. Only one account succeeds on later days,
+			// with no bill lines on the 13th and 15th.
+			if i == 0 && date != "2026-11-12" {
+				day.LastSuccessAt = &now
+				day.LastError = ""
+				if date == "2026-11-14" {
+					day.LastError = "A later refresh failed; saved bills remain available."
+				}
+			}
+			if err := s.DB.Create(&day).Error; err != nil {
+				t.Fatal(err)
+			}
+			if i == 0 && date == "2026-11-14" {
+				row := AccountDailyUsage{DayID: day.ID, Model: "claude-sonnet", InputTokens: "10", OutputTokens: "20", CacheReadTokens: "0", CacheWriteTokens: "0", CostCNY: "72"}
+				if err := s.DB.Create(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	out, err := s.AccountsOverview(ctx, owner.ID, "myself", "2026-11-12", "2026-11-15", false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Days) != 4 || len(out.Rows) != 1 || out.Rows[0].CostCNY != "72" {
+		t.Fatalf("unexpected saved usage: %+v", out)
+	}
+	for i, day := range out.Days {
+		status, collected := "complete", int64(1)
+		if i == 0 {
+			status, collected = "missing", 0
+		}
+		if day.Status != status || day.Collected != collected || day.Expected != 4 {
+			t.Fatalf("incorrect availability: %+v", day)
+		}
+	}
+	var failures int64
+	if err := s.DB.Model(&AccountUsageDay{}).Where("last_error = ?", "Platform account ID is missing or invalid.").Count(&failures).Error; err != nil || failures != 13 {
+		t.Fatalf("account-specific errors were changed: count=%d err=%v", failures, err)
 	}
 }
 
