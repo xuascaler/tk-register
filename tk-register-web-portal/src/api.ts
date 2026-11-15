@@ -32,7 +32,7 @@ export type Setting = {
   key: string;
   value: SettingValue;
   category: string;
-  type: 'string' | 'email' | 'secret' | 'boolean' | 'integer' | 'enum';
+  type: 'string' | 'email' | 'secret' | 'boolean' | 'integer' | 'decimal' | 'enum';
   description: string;
   secret?: boolean;
   configured?: boolean;

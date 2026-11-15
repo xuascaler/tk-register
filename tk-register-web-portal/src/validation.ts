@@ -39,6 +39,11 @@ export function settingsPayload(
 export function validateSetting(setting: Setting, value: SettingValue): string {
   if (setting.read_only || setting.secret || setting.type === 'secret')
     return '';
+  if (setting.type === 'decimal') {
+    const number = Number(value);
+    if (!/^[0-9]{1,5}(\.[0-9]{1,6})?$/.test(String(value)) || !Number.isFinite(number) || number <= 0 || number > (setting.max ?? 10000))
+      return 'Enter a number greater than 0 and at most 10000, with up to 6 decimal places.';
+  }
   if (setting.type === 'integer') {
     const number = Number(value);
     if (String(value).trim() === '' || !Number.isSafeInteger(number))

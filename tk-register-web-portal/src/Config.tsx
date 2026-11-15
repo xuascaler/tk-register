@@ -30,6 +30,7 @@ const groups = [
   ['account_sync', 'Account sync'],
   ['users', 'Users'],
   ['bill_exports', 'Bill exports'],
+  ['exchange_rate', 'Exchange rate'],
 ] as const;
 function initialDraft(settings: Setting[]) {
   return Object.fromEntries(
@@ -199,7 +200,8 @@ export default function Config({
         />
       );
     const secret = setting.secret || setting.type === 'secret';
-    const numeric = setting.type === 'integer';
+    const decimal = setting.type === 'decimal';
+    const numeric = setting.type === 'integer' || decimal;
     return (
       <>
         <div
@@ -221,7 +223,8 @@ export default function Config({
             autoComplete={secret ? 'new-password' : 'off'}
             min={numeric ? (setting.min ?? 1) : undefined}
             max={numeric ? setting.max : undefined}
-            step={numeric ? 1 : undefined}
+            step={decimal ? 'any' : numeric ? 1 : undefined}
+            inputMode={decimal ? 'decimal' : undefined}
             value={String(value ?? '')}
             placeholder={secret ? 'Enter new password' : undefined}
             onChange={(event) => update(setting, event.target.value)}

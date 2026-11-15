@@ -9,9 +9,9 @@ import (
 	"goapi-tk-register/server/internal/core"
 )
 
-func assertSnapshotCurrencyContract(t *testing.T, snapshot map[string]any, cost *float64, currency string) {
+func assertSnapshotCurrencyContract(t *testing.T, snapshot map[string]any, cost *float64, currency string, rate float64) {
 	t.Helper()
-	if snapshot["currency"] != currency || snapshot["exchange_rate_cny_per_usd"] != 7.2 {
+	if snapshot["currency"] != currency || snapshot["exchange_rate_cny_per_usd"] != rate {
 		t.Fatalf("currency or rate missing: %+v", snapshot)
 	}
 	if cost == nil {
@@ -29,7 +29,7 @@ func assertSnapshotCurrencyContract(t *testing.T, snapshot map[string]any, cost 
 		if usd != nil {
 			t.Fatal("unavailable USD amount became a value", snapshot)
 		}
-	} else if usd != *cost/7.2 {
+	} else if usd != *cost/rate {
 		t.Fatal("incorrect or prematurely rounded USD amount", snapshot)
 	}
 }
@@ -49,6 +49,10 @@ func TestAccountCurrencyContractAcrossListsDetailsHistoryAndPublicLookup(t *test
 		currency string
 	}{{&cost, "CNY"}, {&zero, "CNY"}, {nil, "CNY"}, {&cost, "USD"}}
 	for i, sample := range samples {
+		rate := []float64{7.2, 8, 7.35, 8.25}[i]
+		if err := a.store.PatchSettings(context.Background(), map[string]string{"exchange_rate_cny_per_usd": fmt.Sprint(rate)}, admin.ID); err != nil {
+			t.Fatal(err)
+		}
 		if err := a.store.RecordAccountSnapshot(context.Background(), target.ID, target.IdentityKey, core.AccountSnapshotValues{CostTotal: sample.cost, Currency: &sample.currency}, base.Add(time.Duration(i)*time.Minute), "UTC"); err != nil {
 			t.Fatal(err)
 		}
@@ -63,21 +67,21 @@ func TestAccountCurrencyContractAcrossListsDetailsHistoryAndPublicLookup(t *test
 			if len(items) != 1 {
 				t.Fatal("unexpected account list length", len(items))
 			}
-			assertSnapshotCurrencyContract(t, items[0].(map[string]any)["snapshot"].(map[string]any), sample.cost, sample.currency)
+			assertSnapshotCurrencyContract(t, items[0].(map[string]any)["snapshot"].(map[string]any), sample.cost, sample.currency, rate)
 			detailResponse := request(t, a, "GET", path+"/"+fmt.Sprint(target.ID)+"?days=7", nil, cookie, "")
 			requireStatus(t, detailResponse, 200)
 			detail := data(t, detailResponse)
-			assertSnapshotCurrencyContract(t, detail["account"].(map[string]any)["snapshot"].(map[string]any), sample.cost, sample.currency)
+			assertSnapshotCurrencyContract(t, detail["account"].(map[string]any)["snapshot"].(map[string]any), sample.cost, sample.currency, rate)
 			history := detail["snapshots"].([]any)
 			if len(history) != i+1 {
 				t.Fatal("history dropped observations", len(history))
 			}
 			for j, snapshot := range history {
-				assertSnapshotCurrencyContract(t, snapshot.(map[string]any), samples[j].cost, samples[j].currency)
+				assertSnapshotCurrencyContract(t, snapshot.(map[string]any), samples[j].cost, samples[j].currency, rate)
 			}
 		}
 		publicResponse := apiRequest(t, a, "GET", lookupURL(owner.Email, target.Account), token.PlaintextToken, "", "")
 		requireStatus(t, publicResponse, 200)
-		assertSnapshotCurrencyContract(t, data(t, publicResponse)["snapshot"].(map[string]any), sample.cost, sample.currency)
+		assertSnapshotCurrencyContract(t, data(t, publicResponse)["snapshot"].(map[string]any), sample.cost, sample.currency, rate)
 	}
 }

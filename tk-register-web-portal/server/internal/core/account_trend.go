@@ -60,8 +60,12 @@ func (s *Store) AccountSnapshotPage(ctx context.Context, accountID uint64, days,
 	if err = query.Order("collected_at DESC, id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
 		return out, err
 	}
+	rate, err := s.ExchangeRate(ctx)
+	if err != nil {
+		return out, err
+	}
 	for i := len(rows) - 1; i >= 0; i-- {
-		out.Items = append(out.Items, snapshotDTO(rows[i]))
+		out.Items = append(out.Items, snapshotDTO(rows[i], rate))
 	}
 	return out, nil
 }
@@ -88,6 +92,12 @@ func (s *Store) AccountTrend(ctx context.Context, accountID uint64, days, interv
 	if hours := (Values{"hours": legacy.Value}).Int("hours"); hours >= 1 && hours <= 168 {
 		legacyInterval = hours * 3600
 	}
+	// Resolve configuration before opening the streaming cursor: no nested SQL
+	// queries while it holds a connection (including single-connection pools).
+	rate, err := s.ExchangeRate(ctx)
+	if err != nil {
+		return out, err
+	}
 	rows, err := query.Select("id, collected_at, cost_total, currency, input_tokens_total, output_tokens_total, collection_interval_seconds").Order("collected_at ASC, id ASC").Rows()
 	if err != nil {
 		return out, err
@@ -106,7 +116,7 @@ func (s *Store) AccountTrend(ctx context.Context, accountID uint64, days, interv
 			cadence = *row.CollectionIntervalSeconds
 		}
 		gap := time.Duration(cadence) * time.Second * 5 / 2
-		values := []*float64{snapshotDTO(row).CostTotalUSD, tokenTrendValue(row.InputTokensTotal), tokenTrendValue(row.OutputTokensTotal)}
+		values := []*float64{snapshotDTO(row, rate).CostTotalUSD, tokenTrendValue(row.InputTokensTotal), tokenTrendValue(row.OutputTokensTotal)}
 		for i, value := range values {
 			series[i].add(row.ID, row.CollectedAt, value, gap)
 		}

@@ -29,7 +29,7 @@ func TestSnapshotUSDConversionPreservesOriginalAndMissingValues(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			row := AccountSnapshot{AccountSnapshotValues: AccountSnapshotValues{CostTotal: test.cost, Currency: test.currency}}
-			out := snapshotDTO(row)
+			out := snapshotDTO(row, 7.2)
 			if out.CostTotal != test.cost || out.Currency != test.currency {
 				t.Fatal("conversion changed the original observation")
 			}

@@ -158,8 +158,8 @@ All identifiers are JSON strings. All times shown below are examples.
 | `output_tokens_total` | number or null | Cumulative output-token counter. |
 | `cost_total` | number or null | Original cumulative spending in the accompanying `currency`, already normalized from supplier micro-units into currency units. Retained unchanged for compatibility. |
 | `currency` | string or null | Currency of the original `cost_total`, such as `CNY`. |
-| `cost_total_usd` | number or null | Cumulative spending in USD, calculated as `cost_total / 7.2` when `currency` is `CNY`. Null when the original amount is unavailable or the currency is missing or not CNY. A known zero remains `0`. |
-| `exchange_rate_cny_per_usd` | number | Fixed conversion rate, always `7.2`: CNY per USD. Present even when `cost_total_usd` is null. |
+| `cost_total_usd` | number or null | Cumulative spending in USD, calculated as `cost_total / exchange_rate_cny_per_usd` when `currency` is `CNY`. Null when the original amount is unavailable or the currency is missing or not CNY. A known zero remains `0`. |
+| `exchange_rate_cny_per_usd` | number | CNY per USD used to calculate this response. The example above uses `7.2`. Present even when `cost_total_usd` is null. |
 | `usage_5h_percent` | number or null | Usage percentage in the five-hour window, such as `15` for 15%. |
 | `reset_5h_at` | RFC3339 string or null | Five-hour window reset time. |
 | `usage_7d_percent` | number or null | Usage percentage in the seven-day window. |

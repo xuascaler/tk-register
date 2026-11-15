@@ -8,6 +8,8 @@ import {
   type DocSection, type DocTopic, type EndpointTopic, type ErrorDefinition, type FieldDefinition,
 } from './data';
 import './api-docs.css';
+import { errorMessage, request } from '../api';
+import { ErrorNotice, Loading } from '../ui';
 
 export type { DocSection, DocTopic } from './data';
 
@@ -238,14 +240,38 @@ function CurlExample({ topic, baseURL, onFeedback }: { topic: EndpointTopic; bas
   </>;
 }
 
-function LookupResponse({ onFeedback }: { onFeedback: CopyFeedback }) {
+function CurrencyDocumentation({ children }: { children: (rate: number) => ReactNode }) {
+  const [rate, setRate] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setRate(null);
+    setError('');
+    request<{ exchange_rate_cny_per_usd: number }>('/exchange-rate', { signal: controller.signal })
+      .then(data => {
+        const value = data.exchange_rate_cny_per_usd;
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error('Could not load the exchange rate.');
+        if (!controller.signal.aborted) setRate(value);
+      })
+      .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); });
+    const refresh = () => setAttempt(value => value + 1);
+    window.addEventListener('focus', refresh);
+    return () => { controller.abort(); window.removeEventListener('focus', refresh); };
+  }, [attempt]);
+  if (error) return <><ErrorNotice>{error}</ErrorNotice><button type='button' className='button pale' onClick={() => setAttempt(value => value + 1)}>Try again</button></>;
+  if (rate === null) return <Loading label='Loading response documentation…' />;
+  return children(rate);
+}
+
+function LookupResponse({ onFeedback, rate }: { onFeedback: CopyFeedback; rate: number }) {
   return <>
     <section className='api-docs-content-block'><h3>200 · Account found</h3>
       <p>Returns the latest saved account data. IDs are strings. A successful lookup means the local account was found; it does not mean the vendor account is active.</p>
-      <CodeBlock title='JSON · Example response' text={JSON.stringify(lookupResponse, null, 2)} onFeedback={onFeedback} />
+      <CodeBlock title='JSON · Example response' text={JSON.stringify(lookupResponse(rate), null, 2)} onFeedback={onFeedback} />
     </section>
     <details className='api-docs-disclosure'><summary>Response fields <span>data</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={lookupResponseFields} label='Fields in response data' /></div></details>
-    <details className='api-docs-disclosure'><summary>Snapshot fields <span>data.snapshot</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={snapshotFields} label='Fields in the saved snapshot' /></div></details>
+    <details className='api-docs-disclosure'><summary>Snapshot fields <span>data.snapshot</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={snapshotFields(rate)} label='Fields in the saved snapshot' /></div></details>
     <section className='api-docs-content-block'><h3>Freshness and missing data</h3>
       <ul className='api-docs-bullets'>
         <li><strong>No collection yet:</strong> <code>snapshot</code> is <code>null</code>. Show unavailable values as “—”; do not infer zero.</li>
@@ -282,11 +308,11 @@ function SubmissionResponse({ onFeedback }: { onFeedback: CopyFeedback }) {
   </>;
 }
 
-function AuthJSONUpdateResponse({ onNavigate, onFeedback }: Navigation & { onFeedback: CopyFeedback }) {
+function AuthJSONUpdateResponse({ onNavigate, onFeedback, rate }: Navigation & { onFeedback: CopyFeedback; rate: number }) {
   return <>
     <section className='api-docs-content-block'><h3>200 · Credentials updated</h3>
       <p>The supplier confirmed the replacement credentials. The server queues five collections of that account’s status, usage, and spend, starting ten seconds later, and returns without waiting. The example contains saved database data collected five minutes before the credential change, not an immediate post-update query result.</p>
-      <CodeBlock title='JSON · Example response' text={JSON.stringify(authJSONUpdateResponse, null, 2)} onFeedback={onFeedback} />
+      <CodeBlock title='JSON · Example response' text={JSON.stringify(authJSONUpdateResponse(rate), null, 2)} onFeedback={onFeedback} />
     </section>
     <details className='api-docs-disclosure'><summary>Response fields <span>data</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={authJSONUpdateResponseFields} label='Fields in Auth JSON update response data' /></div></details>
     <section className='api-docs-content-block'><h3>Handle the two outcomes separately</h3>
@@ -362,7 +388,7 @@ function EndpointDocumentation({ topic, section, baseURL, onNavigate, onFeedback
       id={`${tabPrefix}-panel-${tab.id}`} aria-labelledby={`${tabPrefix}-tab-${tab.id}`} hidden={section !== tab.id} tabIndex={0}>
       {section === tab.id && (tab.id === 'parameters' ? <Parameters topic={topic} onNavigate={onNavigate} />
         : tab.id === 'example' ? <CurlExample topic={topic} baseURL={baseURL} onFeedback={onFeedback} />
-        : tab.id === 'response' ? topic === 'account-lookup' ? <LookupResponse onFeedback={onFeedback} /> : topic === 'update-auth-json' ? <AuthJSONUpdateResponse onNavigate={onNavigate} onFeedback={onFeedback} /> : <SubmissionResponse onFeedback={onFeedback} />
+        : tab.id === 'response' ? topic === 'submit-account' ? <SubmissionResponse onFeedback={onFeedback} /> : <CurrencyDocumentation>{rate => topic === 'account-lookup' ? <LookupResponse rate={rate} onFeedback={onFeedback} /> : <AuthJSONUpdateResponse rate={rate} onNavigate={onNavigate} onFeedback={onFeedback} />}</CurrencyDocumentation>
         : <Errors topic={topic} onFeedback={onFeedback} />)}
     </div>)}
   </>;

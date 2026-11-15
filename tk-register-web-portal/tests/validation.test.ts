@@ -98,3 +98,13 @@ test('password length respects the backend UTF-8 byte limit', () => {
   assert.equal(passwordWithinLimit('密'.repeat(24)), true);
   assert.equal(passwordWithinLimit('密'.repeat(25)), false);
 });
+
+
+test('exchange rate validates positive decimals and preserves their precision', () => {
+  const setting: Setting = {key: 'exchange_rate_cny_per_usd', value: '7.2', category: 'exchange_rate', type: 'decimal', min: 0, max: 10000, description: ''};
+  for (const value of ['', ' ', '0', '-1', 'NaN', 'Infinity', '1e2', '10001', '7.1234567', '7.2 ', '.5'])
+    assert.notEqual(validateSetting(setting, value), '');
+  for (const value of ['0.000001', '7.2', '7.123456', '10000'])
+    assert.equal(validateSetting(setting, value), '');
+  assert.deepEqual(settingsPayload([setting], {exchange_rate_cny_per_usd: '7.123456'}), {exchange_rate_cny_per_usd: '7.123456'});
+});

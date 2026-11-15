@@ -42,6 +42,10 @@ func (s *Store) PageSyncedAccountDTOs(ctx context.Context, userID uint64, ids []
 	if err != nil {
 		return nil, nil, err
 	}
+	ctx, err = s.WithExchangeRate(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	identities := make(map[uint64]string, len(rows))
 	out := make([]AccountDTO, 0, len(rows))
 	for _, row := range rows {

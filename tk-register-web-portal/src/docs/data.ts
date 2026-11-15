@@ -128,7 +128,7 @@ export const lookupResponseFields: FieldDefinition[] = [
   { name: 'interval_seconds', type: 'integer', description: 'Current configured collection interval in seconds. Default: 300. This value alone does not indicate that collection is enabled.' },
 ];
 
-export const snapshotFields: FieldDefinition[] = [
+export const snapshotFields = (rate: number): FieldDefinition[] => [
   { name: 'id', type: 'string', description: 'Snapshot record ID.' },
   { name: 'account_id', type: 'string', description: 'Stable local account ID; matches data.id.' },
   { name: 'platform_account_id', type: 'string | null', description: 'Supplier website account ID associated with this snapshot, when available.' },
@@ -142,8 +142,8 @@ export const snapshotFields: FieldDefinition[] = [
   { name: 'output_tokens_total', type: 'number | null', description: 'Cumulative output-token counter.' },
   { name: 'cost_total', type: 'number | null', description: 'Original cumulative spend in the accompanying currency, already normalized from supplier micro-units. Use cost_total_usd for the USD amount.' },
   { name: 'currency', type: 'string | null', description: 'Currency of the original cost_total, such as CNY.' },
-  { name: 'cost_total_usd', type: 'number | null', description: 'Cumulative spend in USD: cost_total / 7.2 when currency is CNY. Null when the original amount is unavailable or its currency is not CNY; a known zero remains 0. Not rounded to two decimal places by the API.' },
-  { name: 'exchange_rate_cny_per_usd', type: 'number', description: 'Fixed conversion rate: 7.2 CNY per USD. Applies to current and historical snapshots; it is not a live or date-specific exchange rate.' },
+  { name: 'cost_total_usd', type: 'number | null', description: `Cumulative spend in USD: cost_total / ${rate} when currency is CNY. Null when the original amount is unavailable or its currency is not CNY; a known zero remains 0. Not rounded to two decimal places by the API.` },
+  { name: 'exchange_rate_cny_per_usd', type: 'number', description: `1 USD = ${rate} CNY. This rate applies to current and historical snapshots.` },
   { name: 'usage_5h_percent', type: 'number | null', description: 'Five-hour window usage percentage; 15 means 15%.' },
   { name: 'reset_5h_at', type: 'string | null', description: 'Five-hour window reset time as an RFC3339 timestamp.' },
   { name: 'usage_7d_percent', type: 'number | null', description: 'Seven-day window usage percentage.' },
@@ -259,7 +259,7 @@ export function curlExample(topic: EndpointTopic, baseURL: string) {
   ].join('\n');
 }
 
-export const lookupResponse = {
+export const lookupResponse = (rate: number) => ({
   success: true,
   data: {
     id: '1001',
@@ -282,8 +282,8 @@ export const lookupResponse = {
       output_tokens_total: 240000,
       cost_total: 123.45,
       currency: 'CNY',
-      cost_total_usd: 17.145833333333332,
-      exchange_rate_cny_per_usd: 7.2,
+      cost_total_usd: 123.45 / rate,
+      exchange_rate_cny_per_usd: rate,
       usage_5h_percent: 15,
       reset_5h_at: '2026-11-01T06:00:00+08:00',
       usage_7d_percent: 42,
@@ -295,9 +295,9 @@ export const lookupResponse = {
     last_error: null,
     interval_seconds: 300,
   },
-};
+});
 
-export const authJSONUpdateResponse = {
+export const authJSONUpdateResponse = (rate: number) => ({
   success: true,
   data: {
     updated: true,
@@ -306,8 +306,8 @@ export const authJSONUpdateResponse = {
     refresh_status: 'pending',
     refresh_message: 'Auth JSON updated. Five account refreshes are scheduled, starting after ten seconds and continuing ten seconds after each refresh completes.',
     account: {
-      ...lookupResponse.data,
-      snapshot: { ...lookupResponse.data.snapshot, account_status: 'offline' },
+      ...lookupResponse(rate).data,
+      snapshot: { ...lookupResponse(rate).data.snapshot, account_status: 'offline' },
     },
   },
-};
+});

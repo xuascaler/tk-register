@@ -49,6 +49,7 @@ type settingSpec struct {
 }
 
 var specs = []settingSpec{
+	{exchangeRateSettingKey, "exchange_rate", "decimal", defaultExchangeRate, "CNY per 1 USD. Used for current and historical account amounts, charts, and API responses. Default: 7.2. Greater than 0, up to 10000 and 6 decimal places.", 0, 10000, nil},
 	{"smtp_host", "email", "string", "", "SMTP server hostname.", 0, 253, nil},
 	{"smtp_port", "email", "integer", "587", "SMTP server port.", 1, 65535, nil},
 	{"smtp_tls_mode", "email", "enum", "starttls", "Use STARTTLS or TLS from the beginning of the connection.", 0, 0, []string{"starttls", "tls"}},
@@ -132,7 +133,7 @@ func (s *Store) Descriptors(ctx context.Context) ([]SettingDescriptor, error) {
 		if d.Secret {
 			d.Value = ""
 		}
-		if spec.Type == "integer" {
+		if spec.Type == "integer" || spec.Type == "decimal" {
 			min, max := spec.Min, spec.Max
 			d.Min = &min
 			d.Max = &max
@@ -156,6 +157,9 @@ func validate(spec settingSpec, value string) error {
 		if err != nil || n < spec.Min || n > spec.Max || strconv.Itoa(n) != value {
 			return fmt.Errorf("must be an integer from %d to %d", spec.Min, spec.Max)
 		}
+	case "decimal":
+		_, err := parseExchangeRate(value)
+		return err
 	case "enum":
 		for _, option := range spec.Options {
 			if value == option {

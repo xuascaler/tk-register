@@ -276,9 +276,7 @@ func ensureSyncedAccountTx(tx *gorm.DB, latest Submission) (SyncedAccount, error
 	return existing, err
 }
 
-const exchangeRateCNYPerUSD = 7.2
-
-func snapshotDTO(row AccountSnapshot) AccountSnapshotDTO {
+func snapshotDTO(row AccountSnapshot, exchangeRateCNYPerUSD float64) AccountSnapshotDTO {
 	out := AccountSnapshotDTO{ID: idString(row.ID), AccountID: idString(row.AccountID), SnapshotDate: row.SnapshotDate, CollectedAt: row.CollectedAt.UTC(), DataSource: row.DataSource, AccountSnapshotValues: row.AccountSnapshotValues, ExchangeRateCNYPerUSD: exchangeRateCNYPerUSD}
 	// Conversion is a response-only value. Keep the original observation and its
 	// currency intact, including for historical snapshots. Display rounding belongs
@@ -311,7 +309,11 @@ func (s *Store) accountDTO(ctx context.Context, row SyncedAccount) (AccountDTO, 
 	var snap AccountSnapshot
 	err := s.DB.WithContext(ctx).Where("account_id = ? AND identity_key = ?", row.ID, row.IdentityKey).Order("collected_at DESC, id DESC").First(&snap).Error
 	if err == nil {
-		dto := snapshotDTO(snap)
+		rate, err := s.ExchangeRate(ctx)
+		if err != nil {
+			return out, err
+		}
+		dto := snapshotDTO(snap, rate)
 		out.Snapshot = &dto
 		if out.PlatformAccountID == nil || *out.PlatformAccountID == "" {
 			out.PlatformAccountID = snap.PlatformAccountID
@@ -376,6 +378,10 @@ func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int,
 	}
 	var rows []SyncedAccount
 	if err := q.Order("latest_submitted_at DESC, id DESC").Limit(20).Offset((page - 1) * 20).Find(&rows).Error; err != nil {
+		return out, err
+	}
+	ctx, err := s.WithExchangeRate(ctx)
+	if err != nil {
 		return out, err
 	}
 	for _, row := range rows {
@@ -476,8 +482,12 @@ func (s *Store) AccountSnapshots(ctx context.Context, accountID uint64, days int
 	if err := s.DB.WithContext(ctx).Where("account_id = ? AND identity_key = ? AND collected_at >= ?", accountID, account.IdentityKey, time.Now().UTC().AddDate(0, 0, -days)).Order("collected_at ASC, id ASC").Find(&rows).Error; err != nil {
 		return out, err
 	}
+	rate, err := s.ExchangeRate(ctx)
+	if err != nil {
+		return out, err
+	}
 	for _, row := range rows {
-		out = append(out, snapshotDTO(row))
+		out = append(out, snapshotDTO(row, rate))
 	}
 	return out, nil
 }

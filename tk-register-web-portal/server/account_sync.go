@@ -97,6 +97,12 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 			return true
 		}
 	}
+	ctx, err := a.store.WithExchangeRate(r.Context())
+	if err != nil {
+		internal(w)
+		return true
+	}
+	r = r.WithContext(ctx)
 	base := "accounts"
 	lookupAccount := func(id uint64) (core.AccountDTO, error) {
 		return a.store.VisibleAccount(r.Context(), user.ID, id)

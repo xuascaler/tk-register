@@ -164,6 +164,8 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Method + " " + route {
+	case "GET exchange-rate":
+		a.exchangeRate(w, r)
 	case "GET auth/status":
 		a.status(w, r)
 	case "GET auth/me":
