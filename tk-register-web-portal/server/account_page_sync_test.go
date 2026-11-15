@@ -303,3 +303,34 @@ func TestPageSyncAllowsChangedClaudePlan(t *testing.T) {
 		t.Fatal("changed Claude plan incorrectly rejected", w.Body.String())
 	}
 }
+
+func TestPageSyncFailedStatusReasonsAreSavedAndReturned(t *testing.T) {
+	for _, status := range []string{"sync_failed", "login_failed", "re_login_failed", "bound_failed", "cooking_failed"} {
+		t.Run(status, func(t *testing.T) {
+			a, _, cookie, csrf, rows, fake := setupPageSync(t)
+			reason := "Supplier reason: " + status + " access_token=hidden-reason-token"
+			fake.run = func(ctx context.Context, targets []supplier.Target) ([]supplier.AccountResult, error) {
+				r := pageRecord(targets[0])
+				r.Account.Status = &status
+				r.Account.UpstreamStatusRaw = &status
+				r.Account.UpstreamErrorMessage = &reason
+				return []supplier.AccountResult{r}, nil
+			}
+			response := request(t, a, "POST", "accounts/sync", pageInput(rows[0]), cookie, csrf)
+			requireStatus(t, response, 200)
+			result := readPageResponse(t, response.Body.Bytes())
+			if len(result.Results) != 1 || result.Results[0].Status != "updated" || len(result.Accounts) != 1 || result.Accounts[0].Snapshot == nil {
+				t.Fatal("account not updated")
+			}
+			got := result.Accounts[0].Snapshot.UpstreamErrorMessage
+			if got == nil || !strings.Contains(*got, status) || strings.Contains(*got, "hidden-reason-token") || result.Accounts[0].LastError != "" {
+				t.Fatal("unsafe or absent supplier reason")
+			}
+			read := request(t, a, "GET", fmt.Sprintf("accounts/%d", rows[0].ID), nil, cookie, "")
+			requireStatus(t, read, 200)
+			if !strings.Contains(read.Body.String(), "Supplier reason: "+status) || strings.Contains(read.Body.String(), "hidden-reason-token") {
+				t.Fatal("saved detail response lost safe reason")
+			}
+		})
+	}
+}

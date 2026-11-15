@@ -145,7 +145,7 @@ func fields(ctx context.Context) traceFields {
 	t := TraceFrom(ctx)
 	return traceFields{
 		TraceID: boundedID(t.TraceID),
-		Source:  allowed(t.Source, "manual_sync", "scheduled_sync", "post_submit_sync", "auth_json_refresh", "auth_json_check", "auth_json_update", "account_delete", "test_login", "detail_sync", "bill_export", "daily_usage"),
+		Source:  allowed(t.Source, "manual_sync", "scheduled_sync", "post_submit_sync", "auth_json_refresh", "auth_json_check", "auth_json_update", "account_delete", "test_login", "detail_sync", "bill_export", "daily_usage", "status_reason_backfill"),
 		Vendor:  allowed(t.Vendor, "tk-register-0"),
 		ActorID: t.ActorID, AccountID: t.AccountID, JobID: t.JobID, Attempt: max(0, t.Attempt),
 	}
@@ -196,6 +196,8 @@ func LogRequest(ctx context.Context, e RequestEvent) {
 		path, stage, method = e.Path, "login", "POST"
 	case e.Method == "GET" && e.Path == "/supplier-account/api/supplier/bill/claude-export":
 		path, stage, method = e.Path, "bill_export", "GET"
+	case e.Method == "GET" && strings.HasPrefix(e.Path, "/supplier-account/api/supplier/accounts/") && strings.HasSuffix(e.Path, "/check-fail-reason"):
+		path, stage, method = "/supplier-account/api/supplier/accounts/:id/check-fail-reason", "account_reason", "GET"
 	case e.Method == "GET" && strings.HasPrefix(e.Path, "/supplier-account/api/supplier/accounts/") && strings.HasSuffix(e.Path, "/claude-status-reason"):
 		path, stage, method = "/supplier-account/api/supplier/accounts/:id/claude-status-reason", "account_reason", "GET"
 	case e.Method == "GET" && e.Path == "/supplier-account/api/supplier/accounts":

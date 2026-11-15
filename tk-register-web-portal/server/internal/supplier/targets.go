@@ -92,7 +92,7 @@ func (c *Client) CollectTargets(ctx context.Context, username, password string, 
 						account, err = parseAccount(row.rawAccount)
 						if err == nil {
 							result.Account = &account
-							if ctx.Value(statusReasonsKey{}) == true && account.Status != nil && (*account.Status == "banned" || *account.Status == "offline") {
+							if ctx.Value(statusReasonsKey{}) == true && needsStatusReason(account.Status) {
 								result.Account.UpstreamErrorMessage, result.ReasonError = batch.statusReason(targetCtx, row.rawAccount, account.ID, username, password)
 							}
 						}

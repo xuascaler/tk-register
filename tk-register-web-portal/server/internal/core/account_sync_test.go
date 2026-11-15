@@ -517,3 +517,43 @@ func TestSnapshotReasonsAndFailureDetails(t *testing.T) {
 		t.Fatal("collection failure changed account status")
 	}
 }
+
+func TestFailedStatusReasonsSurviveScheduledSyncAndChangeWithStatus(t *testing.T) {
+	for _, status := range []string{"sync_failed", "login_failed", "re_login_failed", "bound_failed", "cooking_failed"} {
+		t.Run(status, func(t *testing.T) {
+			s, owner, vendor, version := syncFixture(t)
+			ctx := context.Background()
+			at := time.Now().UTC().Add(-time.Hour)
+			syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "failed-reason@example.com", "claude/cc-pro", "accepted", "123", at)
+			var account SyncedAccount
+			if err := s.DB.First(&account).Error; err != nil {
+				t.Fatal(err)
+			}
+			reason := "Supplier reported " + status + "; access_token=hidden-secret 温州润晨"
+			save := func(values AccountSnapshotValues, minutes int) {
+				t.Helper()
+				if err := s.RecordAccountSnapshot(ctx, account.ID, account.IdentityKey, values, at.Add(time.Duration(minutes)*time.Minute), "Asia/Shanghai"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			save(AccountSnapshotValues{AccountStatus: &status, UpstreamStatusRaw: &status, UpstreamErrorMessage: &reason}, 1)
+			save(AccountSnapshotValues{AccountStatus: &status, UpstreamStatusRaw: &status}, 2)
+			dto, err := s.SyncedAccountForUser(ctx, owner.ID, account.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dto.Snapshot == nil || dto.Snapshot.UpstreamErrorMessage == nil || !strings.Contains(*dto.Snapshot.UpstreamErrorMessage, status) || strings.Contains(*dto.Snapshot.UpstreamErrorMessage, "hidden-secret") || strings.Contains(*dto.Snapshot.UpstreamErrorMessage, "温州润晨") {
+				t.Fatal("safe reason not preserved in account response")
+			}
+			if dto.LastError != "" {
+				t.Fatal("supplier failure status must not become a collection error")
+			}
+			next := "offline"
+			save(AccountSnapshotValues{AccountStatus: &next, UpstreamStatusRaw: &next}, 3)
+			dto, err = s.SyncedAccountForUser(ctx, owner.ID, account.ID)
+			if err != nil || dto.Snapshot == nil || dto.Snapshot.UpstreamErrorMessage != nil {
+				t.Fatal("reason crossed status boundary", err)
+			}
+		})
+	}
+}

@@ -40,6 +40,7 @@ type app struct {
 	vendorTransport                    http.RoundTripper
 	accountCollector                   accountCollector
 	accountPageCollector               accountPageCollector
+	accountReasonReader                accountReasonReader
 	accountAuthEditor                  accountAuthEditor
 	accountExpirer                     accountExpirer
 	supplierClient                     *supplier.Client

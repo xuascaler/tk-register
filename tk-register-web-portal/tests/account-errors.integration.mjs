@@ -13,6 +13,8 @@ try {
   const snapshot={id:'1',account_id:'100',collected_at:'2026-11-14T11:40:00Z',account_status:'banned',upstream_status_raw:'ban',upstream_error_message:'The supplier disabled this account after a policy review. <script>bad()</script>',cost_total_usd:81.95,input_tokens_total:10000,output_tokens_total:20000,usage_5h_percent:37,usage_7d_percent:6};
   const account={id:'100',account:'example@example.com',user_id:'7',user_email:'owner@example.com',plan:'claude/cc-max-20x',vendor_id:'1',vendor_name:'TK Register 0',current_submission_id:'1',latest_submission_id:'1',latest_submitted_at:'2026-11-14T09:47:00Z',submission_status:'accepted',platform_account_id:'22401',last_success_at:snapshot.collected_at,last_attempt_at:'2026-11-14T11:44:00Z',last_error:'Supplier account response could not be processed (page 9): an account record was repeated across pages. Last successful data is retained.',snapshot};
   const accounts=[account,{...account,id:'101',account:'login@example.com',last_error:'',snapshot:{...snapshot,id:'2',account_id:'101',account_status:'login_failed',upstream_status_raw:'login_failed',upstream_error_message:null}},{...account,id:'102',account:'active@example.com',last_error:'',snapshot:{...snapshot,id:'3',account_id:'102',account_status:'active',upstream_status_raw:'using',upstream_error_message:null}}];
+  const failedStates = [['101','login_failed','Login failed'],['103','sync_failed','Sync error'],['104','re_login_failed','Re-login failed'],['105','bound_failed','Binding failed'],['106','cooking_failed','Setup failed']];
+  for (const [id,status] of failedStates.filter(([id])=>id!=='101')) accounts.push({...account,id,account:`${status}@example.com`,last_error:'',snapshot:{...snapshot,id,account_id:id,account_status:status,upstream_status_raw:status,upstream_error_message:null}});
   let role='admin';
   await page.route('**/tk-register/api/**',async route=>{
     const req=route.request(),path=new URL(req.url()).pathname.replace('/tk-register/api','');
@@ -21,8 +23,14 @@ try {
     if(path==='/auth/status')return ok({registration_enabled:true,password_login_enabled:true,email_code_login_enabled:true});
     if(path==='/auth/me')return ok({user:{id:1,email:'admin@example.com',role},csrf_token:'test'});
     if(path==='/vendors')return ok({vendors:[]});
-    if(path==='/accounts'||path==='/admin/synced-accounts')return ok({items:accounts,total:3,page:1,page_size:20});
-    if(path.endsWith('/sync')) { assert.deepEqual(req.postDataJSON(),{account_ids:['100']});return ok({accounts:[{...account,last_error:'',snapshot}],results:[{account_id:'100',status:'updated',message:'Account data updated, but the supplier reason could not be retrieved. Please try later.'}]}); }
+    if(path==='/accounts'||path==='/admin/synced-accounts')return ok({items:accounts,total:accounts.length,page:1,page_size:20});
+    if(path.endsWith('/sync')) {
+      const input=req.postDataJSON();assert.equal(input.account_ids.length,1);const id=input.account_ids[0];
+      if(id==='100')return ok({accounts:[{...account,last_error:'',snapshot}],results:[{account_id:'100',status:'updated',message:'Account data updated, but the supplier reason could not be retrieved. Please try later.'}]});
+      const index=accounts.findIndex(a=>a.id===id);assert.ok(index>=0);
+      const current=accounts[index];accounts[index]={...current,snapshot:{...current.snapshot,upstream_error_message:`Supplier reason for ${current.snapshot.account_status}: credentials require attention.`}};
+      return ok({accounts:[accounts[index]],results:[{account_id:id,status:'updated',message:''}]});
+    }
     return route.fulfill({status:404,contentType:'application/json',body:'{"success":false}'});
   });
   await mkdir('test-results',{recursive:true});
@@ -44,12 +52,25 @@ try {
     const banned=page.getByRole('button',{name:'Banned details',exact:true});await banned.scrollIntoViewIfNeeded();await banned.focus();await page.keyboard.press('Enter');await page.getByRole('dialog').waitFor();
     assert.match(await page.getByRole('dialog').textContent(),/policy review/);assert.equal(await page.locator('.account-error-popover script').count(),0);
     await page.locator('h1').click();assert.equal(await page.getByRole('dialog').count(),0);
-    const login=page.getByRole('button',{name:'Login failed details',exact:true});await login.click();assert.match(await page.getByRole('dialog').textContent(),/did not provide/);await page.keyboard.press('Escape');
+    const login=page.getByRole('button',{name:'Login failed details',exact:true});await login.click();assert.match(await page.getByRole('dialog').textContent(),/No supplier error details have been collected yet/);await page.keyboard.press('Escape');
     assert.deepEqual(await heights(),before);
   }
   assert.equal(writes.length,0,'opening lists and details never calls sync');
   await page.setViewportSize({width:1440,height:1000});await page.locator('.usage-accounts-table tbody tr').first().getByRole('button',{name:'Sync example@example.com',exact:true}).click();
   await page.getByRole('button',{name:'Details unavailable details'}).waitFor();assert.equal(writes.length,1);
   assert.equal(await page.getByRole('button',{name:'Sync failed details',exact:true}).count(),0,'supplementary failure is not a metrics failure');
-  assert.deepEqual(errors,[]);console.log('Passed: member/admin, desktop/mobile, hover/click/keyboard/copy/escape/outside close, no row resize, no automatic sync, partial reason failure.');
+  for(const [id,status,label] of failedStates){
+    const row=page.locator('.usage-accounts-table tbody tr').filter({hasText:accounts.find(a=>a.id===id).account});
+    const before=(await row.boundingBox()).height;
+    await row.getByRole('button',{name:`Sync ${accounts.find(a=>a.id===id).account}`,exact:true}).click();
+    await row.getByText('Updated',{exact:true}).waitFor();
+    await row.getByRole('button',{name:`${label} details`,exact:true}).click();
+    await page.getByRole('dialog').waitFor();
+    assert.match(await page.getByRole('dialog').textContent(),new RegExp(`Supplier reason for ${status}`));
+    await page.keyboard.press('Escape');assert.equal((await row.boundingBox()).height,before,'reason cannot resize row');
+  }
+  await page.reload();await page.getByRole('button',{name:'Sync error details',exact:true}).click();
+  assert.match(await page.getByRole('dialog').textContent(),/Supplier reason for sync_failed/);
+  assert.equal(writes.length,1+failedStates.length);
+  assert.deepEqual(errors,[]);console.log('Passed: member/admin, desktop/mobile, hover/click/keyboard/copy/escape/outside close, no row resize, no automatic sync, partial reason failure; all five failed states show saved reasons after manual Sync and reload.');
 }finally{await browser?.close();server.kill();}

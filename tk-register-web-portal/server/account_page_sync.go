@@ -47,7 +47,7 @@ func pageTargetKey(target supplier.Target) string {
 }
 
 func supplierAccountSnapshot(record *supplier.Account) core.AccountSnapshotValues {
-	snapshot := core.AccountSnapshotValues{UpstreamStatusRaw: record.UpstreamStatusRaw, UpstreamErrorMessage: record.UpstreamErrorMessage, AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
+	snapshot := core.AccountSnapshotValues{SupplierRecordID: record.ID, UpstreamStatusRaw: record.UpstreamStatusRaw, UpstreamErrorMessage: record.UpstreamErrorMessage, AccountStatus: record.Status, InputTokensTotal: record.InputTokensTotal, OutputTokensTotal: record.OutputTokensTotal, CostTotal: record.CostTotal, Currency: record.Currency, Usage5hPercent: record.Usage5HPercent, Reset5hAt: record.Reset5HAt, Usage7dPercent: record.Usage7DPercent, Reset7dAt: record.Reset7DAt, SourceUpdatedAt: record.SourceUpdatedAt}
 	if record.PlatformAccountID != "" {
 		snapshot.PlatformAccountID = &record.PlatformAccountID
 	}

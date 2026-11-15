@@ -23,7 +23,7 @@ function Status({ account }: { account: SyncedAccount }) {
   const className = `usage-status ${statusTone(snapshot?.account_status)}`;
   if (!snapshot || !snapshot.account_status || snapshot.account_status === 'active') return <span className={className}>{label}</span>;
   return <ErrorPopover label={label} title={`Supplier status · ${label}`} className={className}
-    message={snapshot.upstream_error_message?.trim() || 'The supplier did not provide an additional reason.'}
+    message={snapshot.upstream_error_message?.trim() || (snapshot.upstream_error_message == null ? 'No supplier error details have been collected yet.' : 'The supplier did not provide an additional reason.')}
     detail={snapshot.upstream_status_raw ? `Supplier status: ${snapshot.upstream_status_raw}` : undefined}
     note={snapshot.upstream_error_message?.trim() ? 'Last reported supplier reason. Manual Sync checks for an updated reason when available.' : 'This is the supplier account status, separate from whether TK Register collected the data successfully.'} />;
 }

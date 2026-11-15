@@ -127,3 +127,16 @@ func TestDailyUsageDiagnosticSource(t *testing.T) {
 		t.Fatal(event)
 	}
 }
+
+func TestAccountReasonDiagnosticPathsMaskIDs(t *testing.T) {
+	t.Setenv("TK_REGISTER_SUPPLIER_DIAGNOSTICS", "all")
+	for _, suffix := range []string{"/check-fail-reason", "/claude-status-reason"} {
+		var output bytes.Buffer
+		ctx := WithLogger(context.Background(), log.New(&output, "", 0))
+		LogRequest(ctx, RequestEvent{StartedAt: time.Now(), Method: "GET", Path: "/supplier-account/api/supplier/accounts/466243" + suffix, HTTPStatus: 200, Outcome: "succeeded"})
+		event := decoded(t, strings.TrimSpace(output.String()), "TK_SUPPLIER_REQUEST")
+		if event["stage"] != "account_reason" || event["path"] != "/supplier-account/api/supplier/accounts/:id"+suffix || strings.Contains(output.String(), "466243") {
+			t.Fatal("reason diagnostic path not masked", event)
+		}
+	}
+}

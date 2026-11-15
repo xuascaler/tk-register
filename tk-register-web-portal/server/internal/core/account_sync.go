@@ -53,6 +53,8 @@ type SyncedAccount struct {
 // AccountSnapshotValues preserves absent values as SQL NULL and JSON null.
 // Cumulative counters are observations; resets must not become negative usage.
 type AccountSnapshotValues struct {
+	// Verified website row ID from this collection; stored on SyncedAccount only.
+	SupplierRecordID          string     `gorm:"-" json:"-"`
 	UpstreamStatusRaw         *string    `gorm:"size:128" json:"upstream_status_raw"`
 	UpstreamErrorMessage      *string    `gorm:"type:text" json:"upstream_error_message"`
 	CollectionIntervalSeconds *int       `json:"collection_interval_seconds,omitempty"`
@@ -545,6 +547,9 @@ func validateSnapshot(v AccountSnapshotValues) error {
 }
 
 func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, expectedIdentity string, values AccountSnapshotValues, at time.Time, timezone string) error {
+	if values.SupplierRecordID != "" && !validSupplierRecordID(values.SupplierRecordID) {
+		return validationErrorf("invalid supplier account ID")
+	}
 	if values.UpstreamErrorMessage != nil {
 		clean := safemessage.Text(*values.UpstreamErrorMessage)
 		values.UpstreamErrorMessage = &clean
@@ -605,7 +610,11 @@ func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, exp
 			}
 			return nil
 		}
-		return tx.Model(&account).Updates(map[string]any{"last_success_at": at, "last_attempt_at": at, "last_error": "", "snapshot_status": values.AccountStatus}).Error
+		updates := map[string]any{"last_success_at": at, "last_attempt_at": at, "last_error": "", "snapshot_status": values.AccountStatus}
+		if values.SupplierRecordID != "" {
+			updates["supplier_record_id"] = values.SupplierRecordID
+		}
+		return tx.Model(&account).Updates(updates).Error
 	})
 }
 
