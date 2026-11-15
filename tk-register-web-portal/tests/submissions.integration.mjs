@@ -265,27 +265,24 @@ try {
   );
   assert.equal(repeat.submission.id, id);
   assert.equal((await audit()).pushes, 1);
-  await page
-    .getByRole("button", { name: "Refresh status", exact: true })
-    .click();
-  await page.getByText("Online", { exact: true }).waitFor();
-  detail = await data(await api(page.request, `/submissions/${id}`));
-  assert.equal(detail.submission.platform_account_id, "10725");
-  assert.equal(detail.metrics.account.prompt_tokens, 1120273);
+  assert.deepEqual(await page.getByRole("tab").allTextContents(), ["Overview", "Submitted parameters"]);
+  assert.equal(await page.getByRole("heading", { name: "Account activity", exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Refresh status", exact: true }).count(), 0);
+  await page.getByRole("heading", { name: "Request history", exact: true }).waitFor();
   await screenshot("overview", 1440);
   await screenshot("overview", 390);
-  await page.getByRole("tab", { name: "Bills", exact: true }).click();
-  await page.getByRole("button", { name: "View bills", exact: true }).click();
-  await page.getByText(/CNY.*4,482\.04/).waitFor();
-  detail = await data(await api(page.request, `/submissions/${id}`));
+  // The removed UI does not remove the underlying APIs or stored execution history.
+  detail = await data(await api(page.request, `/submissions/${id}/status`, "POST", { force: true }, member.csrf_token));
+  assert.equal(detail.submission.platform_account_id, "10725");
+  assert.equal(detail.metrics.account.prompt_tokens, 1120273);
+  const endDate = new Date().toISOString().slice(0, 10);
+  const billDates = { start_ds: endDate, end_ds: endDate };
+  detail = await data(await api(page.request, `/submissions/${id}/bills`, "POST", billDates, member.csrf_token));
   assert.equal(detail.bills.currency, "CNY");
   assert.equal(detail.bills.account.cost, 4482.04);
-  await screenshot("bills", 390);
-  await screenshot("bills", 1440);
   await page.reload();
-  await page
-    .getByRole("heading", { name: "claude-fixture-account", exact: true })
-    .waitFor();
+  await page.getByRole("heading", { name: "account@example.com", exact: true }).waitFor();
+  assert.equal(await page.getByRole("tab", { name: "Bills", exact: true }).count(), 0);
   await page
     .getByRole("tab", { name: "Submitted parameters", exact: true })
     .click();
@@ -300,11 +297,8 @@ try {
   // A fresh empty vendor result clears the cached result, rather than keeping
   // stale usage or pretending missing values are zero.
   await mode("empty");
-  await page.getByRole("tab", { name: "Bills", exact: true }).click();
-  await page.getByRole("button", { name: "View bills", exact: true }).click();
-  await page
-    .getByRole("heading", { name: "No billing data for this period" })
-    .waitFor();
+  detail = await data(await api(page.request, `/submissions/${id}/bills`, "POST", billDates, member.csrf_token));
+  assert.equal(detail.bills.account, null);
   await mode("success");
   await go("submissions");
   await page

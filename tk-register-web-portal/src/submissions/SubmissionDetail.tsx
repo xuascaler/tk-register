@@ -9,18 +9,14 @@ import {
 import { errorMessage, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import type { SubmissionDetail as Detail, Vendor } from './types';
-import { billRange } from './validation';
 import {
   AccountStatus,
   Back,
   dateTime,
-  Empty,
   humanize,
-  number,
   StateBadge,
 } from './shared';
 import { canCheckStatus, executionError, type StatusRefresh } from './status';
-import Select from './Select';
 import type { AdminDetail } from '../admin/types';
 import { CurrentAccountStatus } from '../admin/shared';
 
@@ -73,20 +69,17 @@ export default function SubmissionDetails({
 }) {
   const [detail, setDetail] = useState<(Detail & Partial<AdminDetail>) | null>(null);
   const [vendor, setVendor] = useState<Vendor | null>(null);
-  const [tab, setTab] = useState<'overview' | 'bills' | 'parameters'>(
+  const [tab, setTab] = useState<'overview' | 'parameters'>(
     'overview',
   );
   const [error, setError] = useState('');
-  const [statusError, setStatusError] = useState('');
   const [currentRefresh, setCurrentRefresh] = useState<StatusRefresh>({});
-  const [busy, setBusy] = useState<'load' | 'metrics' | 'bills' | 'current-status' | ''>('load');
+  const [busy, setBusy] = useState<'load' | 'current-status' | ''>('load');
   const [attempt, setAttempt] = useState(0);
-  const [days, setDays] = useState('7');
-  const [range, setRange] = useState({ start_ds: '', end_ds: '' });
   const [json, setJSON] = useState(false);
   const [copied, setCopied] = useState(false);
   const manualRequest = useRef<AbortController | null>(null);
-  const tabs = ['overview', 'bills', 'parameters'] as const;
+  const tabs = ['overview', 'parameters'] as const;
   function changeTab(value: (typeof tabs)[number]) {
     setTab(value);
     setError('');
@@ -111,7 +104,6 @@ export default function SubmissionDetails({
     const abort = new AbortController();
     setBusy('load');
     setError('');
-    setStatusError('');
     setCurrentRefresh({});
     setDetail(null);
     Promise.all([
@@ -127,7 +119,6 @@ export default function SubmissionDetails({
           vendors.vendors.find((v) => v.id === data.submission.vendor_id) ||
           null;
         setVendor(currentVendor);
-        setRange(billRange(7, currentVendor?.timezone || 'UTC'));
         // Successful submissions schedule their own bounded background syncs.
         // Opening saved history must not add an immediate supplier query.
       })
@@ -149,7 +140,6 @@ export default function SubmissionDetails({
     manualRequest.current = abort;
     setBusy('current-status');
     setCurrentRefresh({ checking: true });
-    if (target.id === detail.submission.id) setStatusError('');
     try {
       const result = await request<Detail & Partial<AdminDetail>>(
         `${endpointPrefix}/${encodeURIComponent(target.id)}/status`,
@@ -161,47 +151,9 @@ export default function SubmissionDetails({
       });
       const failure = executionError(result);
       setCurrentRefresh({ error: failure });
-      if (target.id === detail.submission.id) setStatusError(failure);
     } catch (cause) {
       if (!abort.signal.aborted) {
         setCurrentRefresh({ error: errorMessage(cause) });
-        if (target.id === detail.submission.id) setStatusError(errorMessage(cause));
-      }
-    } finally {
-      if (!abort.signal.aborted) setBusy('');
-    }
-  }
-  async function query(operation: 'metrics' | 'bills') {
-    if (!detail || busy) return;
-    const abort = new AbortController();
-    manualRequest.current = abort;
-    setBusy(operation);
-    if (operation === 'metrics') {
-      setStatusError('');
-      if (detail.current_submission?.id === detail.submission.id) setCurrentRefresh({ checking: true });
-    }
-    else setError('');
-    try {
-      const body = operation === 'bills' ? range : { force: true };
-      const result = await request<Detail & Partial<AdminDetail>>(
-        `${endpointPrefix}/${encodeURIComponent(id)}/${operation === 'bills' ? 'bills' : 'status'}`,
-        { method: 'POST', body, signal: abort.signal },
-      );
-      if (abort.signal.aborted) return;
-      setDetail(result);
-      if (operation === 'metrics') {
-        setStatusError(executionError(result));
-        if (result.current_submission?.id === result.submission.id) setCurrentRefresh({ error: executionError(result) });
-        else if (result.current_submission?.id !== detail.current_submission?.id) setCurrentRefresh({});
-      }
-      else setError(executionError(result, 'bills'));
-    } catch (cause) {
-      if (!abort.signal.aborted) {
-        if (operation === 'metrics') {
-          setStatusError(errorMessage(cause));
-          if (detail.current_submission?.id === detail.submission.id) setCurrentRefresh({ error: errorMessage(cause) });
-        }
-        else setError(errorMessage(cause));
       }
     } finally {
       if (!abort.signal.aborted) setBusy('');
@@ -217,17 +169,6 @@ export default function SubmissionDetails({
     }
   }
   const submission = detail?.submission;
-  const available = Boolean(
-    submission &&
-      submission.can_manage !== false &&
-      canCheckStatus(submission) &&
-      vendor?.configured &&
-      vendor.enabled,
-  );
-  const metric = detail?.metrics?.account;
-  const bill = detail?.bills?.account;
-  const earliest = billRange(90, vendor?.timezone || 'UTC').start_ds;
-  const today = billRange(1, vendor?.timezone || 'UTC').end_ds;
   return (
     <div className='detail-page'>
       <Back onClick={onBack} label={backLabel} />
@@ -259,7 +200,6 @@ export default function SubmissionDetails({
               </button>}
             </div> : <AccountStatus
               submission={submission}
-              refresh={{ checking: busy === 'metrics', error: statusError }}
             />}
           </div>
           <div className='detail-summary'>
@@ -377,207 +317,7 @@ export default function SubmissionDetails({
                     <Fact label='Auth JSON'>Hidden</Fact>
                   </dl>
                 </section>
-                <section className='panel details-section'>
-                  <div className='section-heading'>
-                    <div>
-                      <h2>Account activity</h2>
-                      <p className='field-help'>
-                        Last 24 hours · {vendor?.timezone || 'UTC'}
-                        {endpointPrefix === '/admin/submissions' && <> · Submission #{submission.id}{submission.remote_id ? ` · Remote ID ${submission.remote_id}` : ''}</>}
-                      </p>
-                    </div>
-                    <button
-                      className='button secondary'
-                      disabled={Boolean(busy) || !available}
-                      onClick={() => void query('metrics')}
-                    >
-                      <RefreshCw
-                        className={busy === 'metrics' ? 'spin' : ''}
-                        aria-hidden='true'
-                      />
-                      {busy === 'metrics' ? 'Checking…' : 'Refresh status'}
-                    </button>
-                  </div>
-                  <ErrorNotice>{statusError}</ErrorNotice>
-                  {metric ? (
-                    <>
-                      <div className='stat-grid'>
-                        <div>
-                          <span>Requests</span>
-                          <strong>{number(metric.requests)}</strong>
-                        </div>
-                        <div>
-                          <span>Success rate</span>
-                          <strong>
-                            {metric.success_rate == null
-                              ? '—'
-                              : `${metric.success_rate}%`}
-                          </strong>
-                        </div>
-                        <div>
-                          <span>Input tokens</span>
-                          <strong>{number(metric.prompt_tokens)}</strong>
-                        </div>
-                        <div>
-                          <span>Output tokens</span>
-                          <strong>{number(metric.completion_tokens)}</strong>
-                        </div>
-                      </div>
-                      <p className='field-help result-meta'>
-                        {detail.metrics?.begin_time} –{' '}
-                        {detail.metrics?.end_time}
-                        <br />
-                        Updated {dateTime(detail.metrics?.queried_at)}
-                      </p>
-                    </>
-                  ) : (
-                    <p className='muted'>
-                      {available
-                        ? 'Refresh status to retrieve the latest account activity.'
-                        : 'Activity is available after the account is accepted and the platform is configured.'}
-                    </p>
-                  )}
-                </section>
               </>
-            )}
-            {tab === 'bills' && (
-              <section className='panel details-section'>
-                <div className='section-heading'>
-                  <div>
-                    <h2>Billing</h2>
-                    <p className='field-help'>
-                      Charges reported by the platform, in CNY.
-                      {endpointPrefix === '/admin/submissions' && <> Submission #{submission.id}{submission.remote_id ? ` · Remote ID ${submission.remote_id}` : ''}.</>}
-                    </p>
-                  </div>
-                </div>
-                <form
-                  className='billing-range'
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void query('bills');
-                  }}
-                >
-                  <Select
-                    id='billing-period'
-                    label='Period'
-                    value={days}
-                    onChange={(value) => {
-                      setDays(value);
-                      if (value !== 'custom')
-                        setRange(
-                          billRange(Number(value), vendor?.timezone || 'UTC'),
-                        );
-                    }}
-                    options={[
-                      { value: '7', label: 'Last 7 days' },
-                      { value: '30', label: 'Last 30 days' },
-                      { value: 'custom', label: 'Custom dates' },
-                    ]}
-                  />
-                  <div className='field'>
-                    <label htmlFor='billing-start'>From</label>
-                    <input
-                      required
-                      type='date'
-                      id='billing-start'
-                      min={earliest}
-                      max={range.end_ds || today}
-                      value={range.start_ds}
-                      onChange={(e) => {
-                        setDays('custom');
-                        setRange((old) => ({
-                          ...old,
-                          start_ds: e.target.value,
-                        }));
-                      }}
-                    />
-                  </div>
-                  <div className='field'>
-                    <label htmlFor='billing-end'>To</label>
-                    <input
-                      required
-                      type='date'
-                      id='billing-end'
-                      min={range.start_ds || earliest}
-                      max={today}
-                      value={range.end_ds}
-                      onChange={(e) => {
-                        setDays('custom');
-                        setRange((old) => ({ ...old, end_ds: e.target.value }));
-                      }}
-                    />
-                  </div>
-                  <button
-                    className='button secondary'
-                    disabled={Boolean(busy) || !available}
-                    type='submit'
-                  >
-                    <RefreshCw
-                      className={busy === 'bills' ? 'spin' : ''}
-                      aria-hidden='true'
-                    />
-                    {busy === 'bills' ? 'Loading…' : 'View bills'}
-                  </button>
-                </form>
-                {bill ? (
-                  <>
-                    <div className='billing-summary'>
-                      <div>
-                        <span>Total charges</span>
-                        <strong>
-                          {bill.cost == null
-                            ? '—'
-                            : new Intl.NumberFormat('en', {
-                                style: 'currency',
-                                currency: 'CNY',
-                                currencyDisplay: 'code',
-                              }).format(bill.cost)}
-                        </strong>
-                      </div>
-                      <div>
-                        <span>Requests</span>
-                        <strong>{number(bill.request_count)}</strong>
-                      </div>
-                    </div>
-                    <div className='stat-grid'>
-                      <div>
-                        <span>Input tokens</span>
-                        <strong>{number(bill.prompt_tokens)}</strong>
-                      </div>
-                      <div>
-                        <span>Output tokens</span>
-                        <strong>{number(bill.completion_tokens)}</strong>
-                      </div>
-                      <div>
-                        <span>Cache read tokens</span>
-                        <strong>{number(bill.cache_read_input_tokens)}</strong>
-                      </div>
-                      <div>
-                        <span>Cache write tokens</span>
-                        <strong>{number(bill.cache_write_input_tokens)}</strong>
-                      </div>
-                    </div>
-                    <p className='field-help result-meta'>
-                      Reported period: {detail.bills?.start_ds} –{' '}
-                      {detail.bills?.end_ds} · Updated{' '}
-                      {dateTime(detail.bills?.queried_at)}
-                    </p>
-                  </>
-                ) : (
-                  <Empty
-                    title={
-                      detail.bills
-                        ? 'No billing data for this period'
-                        : 'Choose a period to view bills'
-                    }
-                  >
-                    {available
-                      ? 'The platform provides billing data from the past 90 days.'
-                      : 'Billing is available after the account is accepted and the platform is configured.'}
-                  </Empty>
-                )}
-              </section>
             )}
             {tab === 'parameters' && (
               <section className='panel details-section'>
