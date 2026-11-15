@@ -37,13 +37,15 @@ func TestMembersBrowserFixture(t *testing.T) {
 	b := create(root, "ben@example.com")
 	c := create(root, "clara@example.com")
 	d := create(b, "hidden-descendant@example.com")
+	existing := addUser(t, a, "existing@example.com", "member")
+	deeper := create(existing, "existing-child@example.com")
 	admin := addUser(t, a, "admin@example.com", "admin")
 	v := configuredVendor(t, a, admin.ID)
 	configureSync(t, a, admin.ID, false)
 	for i, item := range []struct {
 		u     *core.User
 		email string
-	}{{root, "liam.wu@example.com"}, {b, "nora.chen@example.com"}, {c, "emma.liu@example.com"}, {d, "oliver.lin@example.com"}} {
+	}{{root, "liam.wu@example.com"}, {b, "nora.chen@example.com"}, {c, "emma.liu@example.com"}, {d, "oliver.lin@example.com"}, {existing, "existing-vendor@example.com"}, {deeper, "descendant-vendor@example.com"}} {
 		seedAdminSubmission(t, a, item.u.ID, v, item.email, "accepted", time.Now().Add(-time.Duration(i+1)*time.Hour))
 	}
 	if err := a.store.EnsureSyncedAccounts(ctx); err != nil {
@@ -85,7 +87,11 @@ func TestMembersBrowserFixture(t *testing.T) {
 			a.cookie(w, value, 28800)
 			http.Redirect(w, r, "/tk-register#/accounts", 303)
 		case "/__test/code":
-			ok(w, map[string]string{"code": mail.code(r.URL.Query().Get("email"), "register")})
+			purpose := "register"
+			if r.URL.Query().Get("purpose") == "link" {
+				purpose = "member_link:" + root.Email
+			}
+			ok(w, map[string]string{"code": mail.code(r.URL.Query().Get("email"), purpose)})
 		case "/__test/stop":
 			ok(w, map[string]bool{"stopped": true})
 			select {

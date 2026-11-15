@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 
 // A closure row records one ancestor's visibility of one user. SourceUserID is
 // the immediate child on that path, not the descendant who owns the account.
-// Self rows have depth zero and a NULL source. Parentage is immutable.
+// Self rows have depth zero and a NULL source. Parentage is immutable once assigned.
 type UserHierarchy struct {
 	AncestorUserID   uint64  `gorm:"primaryKey;autoIncrement:false;index:idx_hierarchy_source,priority:1"`
 	AncestorUser     User    `gorm:"foreignKey:AncestorUserID;constraint:OnDelete:RESTRICT"`
@@ -25,7 +26,7 @@ type UserHierarchy struct {
 func (UserHierarchy) TableName() string { return "user_hierarchy" }
 
 func (s *Store) migrateMembers() error {
-	if err := s.DB.AutoMigrate(&UserHierarchy{}); err != nil {
+	if err := s.DB.AutoMigrate(&UserHierarchy{}, &MemberLinkAudit{}); err != nil {
 		return err
 	}
 	// Existing users become independent roots. Do not infer a parent from an
@@ -37,6 +38,9 @@ func (s *Store) migrateMembers() error {
 
 func (s *Store) CreateMemberByUser(ctx context.Context, actorID, actorVersion uint64, user *User) error {
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockUserAccess(tx); err != nil {
+			return err
+		}
 		var actor User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&actor, actorID).Error; err != nil {
 			return err
@@ -51,6 +55,146 @@ func (s *Store) CreateMemberByUser(ctx context.Context, actorID, actorVersion ui
 		scoped.DB = tx
 		return scoped.createHierarchyUser(ctx, user)
 	})
+}
+
+// Serialize hierarchy mutations with role changes. All callers acquire this
+// guard before user rows, and never hold it while sending mail or calling Redis.
+// Child creation must share the guard so a concurrent subtree attachment cannot
+// omit the new descendant. The existing singleton also works across replicas.
+func lockUserAccess(tx *gorm.DB) error {
+	result := tx.Model(&AdminRoleGuard{}).Where("id = ?", 1).UpdateColumn("revision", gorm.Expr("revision + ?", 1))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("user access guard is unavailable")
+	}
+	return nil
+}
+
+// No passwords or verification codes are stored in this audit.
+type MemberLinkAudit struct {
+	ID        uint64 `gorm:"primaryKey"`
+	ActorID   uint64 `gorm:"not null;index"`
+	Actor     User   `gorm:"foreignKey:ActorID;constraint:OnDelete:RESTRICT"`
+	TargetID  uint64 `gorm:"not null;uniqueIndex"`
+	Target    User   `gorm:"foreignKey:TargetID;constraint:OnDelete:RESTRICT"`
+	CreatedAt time.Time
+}
+
+func linkTarget(db *gorm.DB, actorID uint64, email string) (*User, error) {
+	var target User
+	if err := db.Where("email = ?", NormalizeEmail(email)).First(&target).Error; err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, vendorError(400, "MEMBER_NOT_ELIGIBLE", "Use an existing active member's email address.")
+		}
+		return nil, err
+	}
+	if target.ID == actorID {
+		return nil, vendorError(409, "MEMBER_SELF", "You cannot add yourself as a sub account.")
+	}
+	if target.Status != "active" || target.Role != "member" || target.EmailVerifiedAt.IsZero() {
+		return nil, vendorError(409, "MEMBER_NOT_ELIGIBLE", "Only an active, verified member can be added. Administrator accounts cannot be added.")
+	}
+	if target.ParentUserID != nil {
+		if *target.ParentUserID == actorID {
+			return nil, vendorError(409, "MEMBER_ALREADY_LINKED", "This user is already your direct member.")
+		}
+		return nil, vendorError(409, "MEMBER_HAS_PARENT", "This user already has a parent and cannot be added here.")
+	}
+	var count int64
+	if err := db.Model(&UserHierarchy{}).Where("ancestor_user_id = ? AND descendant_user_id = ?", target.ID, actorID).Count(&count).Error; err != nil {
+		return nil, err
+	}
+	if count != 0 {
+		return nil, vendorError(409, "MEMBER_CYCLE", "An ancestor cannot be added as your sub account.")
+	}
+	return &target, nil
+}
+
+func (s *Store) MemberLinkTarget(ctx context.Context, actorID uint64, email string) (*User, error) {
+	return linkTarget(s.DB.WithContext(ctx), actorID, email)
+}
+
+// The caller must first consume a dedicated code bound to both users and their
+// auth versions. Revalidate eligibility inside the same transaction as the link.
+func (s *Store) LinkExistingMember(ctx context.Context, actorID, actorVersion, targetID, targetVersion uint64) (AdminUser, error) {
+	var out AdminUser
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockUserAccess(tx); err != nil {
+			return err
+		}
+		var actor, candidate User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&actor, actorID).Error; err != nil {
+			return err
+		}
+		if actor.Status != "active" || actor.AuthVersion != actorVersion {
+			return vendorError(403, "FORBIDDEN", "An active signed-in account is required.")
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&candidate, targetID).Error; err != nil {
+			return err
+		}
+		if candidate.AuthVersion != targetVersion {
+			return vendorError(409, "MEMBER_CHANGED", "This user's access changed. Request a new verification code.")
+		}
+		target, err := linkTarget(tx, actorID, candidate.Email)
+		if err != nil {
+			return err
+		}
+		var ancestors, descendants []UserHierarchy
+		if err := tx.Where("descendant_user_id = ?", actorID).Find(&ancestors).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("ancestor_user_id = ?", target.ID).Find(&descendants).Error; err != nil {
+			return err
+		}
+		if len(ancestors) == 0 || len(descendants) == 0 {
+			return errors.New("user hierarchy is unavailable")
+		}
+		result := tx.Model(&User{}).Where("id = ? AND parent_user_id IS NULL", target.ID).Update("parent_user_id", actorID)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return vendorError(409, "MEMBER_CHANGED", "This user's membership changed. Refresh the member list.")
+		}
+		// Batch the cross-product to keep memory and SQL parameter usage bounded.
+		links := make([]UserHierarchy, 0, 200)
+		flush := func() error {
+			if len(links) == 0 {
+				return nil
+			}
+			if err := tx.Omit("AncestorUser", "DescendantUser", "SourceUser").Create(&links).Error; err != nil {
+				return err
+			}
+			links = links[:0]
+			return nil
+		}
+		for _, ancestor := range ancestors {
+			source := ancestor.SourceUserID
+			if ancestor.Depth == 0 {
+				id := target.ID
+				source = &id
+			}
+			for _, descendant := range descendants {
+				links = append(links, UserHierarchy{AncestorUserID: ancestor.AncestorUserID, DescendantUserID: descendant.DescendantUserID, SourceUserID: source, Depth: ancestor.Depth + 1 + descendant.Depth})
+				if len(links) == 200 {
+					if err := flush(); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if err := flush(); err != nil {
+			return err
+		}
+		if err := tx.Omit("Actor", "Target").Create(&MemberLinkAudit{ActorID: actorID, TargetID: target.ID}).Error; err != nil {
+			return err
+		}
+		out = adminUser(*target)
+		return nil
+	})
+	return out, err
 }
 
 type AccountSource struct {

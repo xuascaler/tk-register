@@ -48,7 +48,7 @@ function Account({ user, status, tab, onTab, onViewAccounts }: { user: User; sta
         {(['general', 'members'] as const).map(value => <button key={value} role='tab' id={`account-tab-${value}`} aria-selected={tab === value} aria-controls={`account-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => onTab(value)} onKeyDown={event => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'general' : event.key === 'End' ? 'members' : tab === 'general' ? 'members' : 'general'; onTab(next); requestAnimationFrame(() => document.getElementById(`account-tab-${next}`)?.focus()); } }}>{value === 'general' ? 'General' : 'Members'}</button>)}
       </div>
       <div role='tabpanel' id={`account-panel-${tab}`} aria-labelledby={`account-tab-${tab}`}>
-      {tab === 'members' ? <Members onViewAccounts={onViewAccounts} /> : <>
+      {tab === 'members' ? <Members currentEmail={user.email} onViewAccounts={onViewAccounts} /> : <>
       <section className='account-section' aria-labelledby='profile-title'>
         <h2 id='profile-title'>Profile</h2>
         <div className='account-row'>

@@ -123,7 +123,11 @@ func TestSMTPWithVerifiedTLSAndBothAuthMethods(t *testing.T) {
 			if mode == "tls" {
 				values["smtp_force_auth_login"] = "true"
 			}
-			if err = sendCode(context.Background(), values, "member@example.com", "A1b2C3", "registration", 600, &tls.Config{RootCAs: roots}); err != nil {
+			purpose, action := "registration", "registration"
+			if mode == "tls" {
+				purpose, action = "member_link:parent@example.com", "parent@example.com"
+			}
+			if err = sendCode(context.Background(), values, "member@example.com", "A1b2C3", purpose, 600, &tls.Config{RootCAs: roots}); err != nil {
 				t.Fatal(err)
 			}
 			if err = <-finished; err != nil {
@@ -154,7 +158,7 @@ func TestSMTPWithVerifiedTLSAndBothAuthMethods(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, needle := range []string{"A1b2C3", "10 minutes", "registration"} {
+				for _, needle := range []string{"A1b2C3", "10 minutes", action} {
 					if !strings.Contains(string(body), needle) {
 						t.Fatalf("missing %q in MIME part", needle)
 					}

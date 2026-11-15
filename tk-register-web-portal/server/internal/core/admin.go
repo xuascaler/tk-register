@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// This singleton serializes role changes across processes, including concurrent
-// demotions. Updating it obtains a transaction lock on all supported databases.
+// This singleton serializes role and member-hierarchy changes across processes,
+// including concurrent demotions and subtree attachments. Updating it obtains a transaction lock on all supported databases.
 type AdminRoleGuard struct {
 	ID       uint64 `gorm:"primaryKey"`
 	Revision uint64 `gorm:"not null"`

@@ -66,7 +66,12 @@ func sendCode(ctx context.Context, values Values, email, code, purpose string, t
 		subject = "Confirm your TK Register administrator sign-in"
 		action = "complete your administrator sign-in"
 	default:
-		return errors.New("invalid verification purpose")
+		parentEmail, linking := strings.CutPrefix(purpose, "member_link:")
+		if !linking || !ValidEmail(parentEmail) {
+			return errors.New("invalid verification purpose")
+		}
+		subject = "Confirm your TK Register member connection"
+		action = "connect your TK Register user to " + parentEmail + " as a direct member. This grants that user and their ancestors access to view and sync the accounts available through you, including your members' accounts. Only share this code if you approve this connection"
 	}
 	message, err := codeMessage(values.String("smtp_from_name"), values.String("smtp_from_email"), email, code, subject, action, ttlSeconds)
 	if err != nil {

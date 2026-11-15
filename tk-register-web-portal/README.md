@@ -301,7 +301,7 @@ new user's normalized email is their username, their role is always `member`,
 and an existing user cannot be attached to a creator through this workflow.
 Administrator creation in Config → Users continues to create independent users.
 
-`users.parent_user_id` records the immutable direct parent. The `user_hierarchy`
+`users.parent_user_id` records the direct parent, immutable once assigned. The `user_hierarchy`
 closure table records `(ancestor_user_id, descendant_user_id, source_user_id,
 depth)`, with foreign keys to `users.id`. Every user has a self row (depth zero,
 NULL source). The source of a deeper descendant is the ancestor's immediate child
@@ -313,7 +313,7 @@ viewer's own data plus descendant data. Source filters default to all and accept
 `myself` or direct-member IDs; `none` is an explicitly empty selection. Branch
 filtering happens before pagination. Response `account_source` exposes only
 `myself` or the immediate child, and `can_manage` is true only for the real owner.
-Members sees only directly created users. A parent may read saved descendant data
+Members shows only directly created or linked users. A parent may read saved descendant data
 and manually Sync an account, but cannot edit credentials or delete it. Admin
 Account pool and personal Bearer API ownership checks keep their existing scope.
 Account ownership, submissions and collection history are not copied or moved.
@@ -339,3 +339,36 @@ simulated supplier. Bind it to loopback using
 `TK_MEMBERS_BROWSER_TEST_ADDRESS=127.0.0.1:39165`; run
 `node tests/members.browser.mjs` against that fixture. No production accounts or
 real emails are needed for the browser test.
+
+### Link an existing user
+
+**Account settings → Members → Add sub accounts** links an existing active,
+verified member. The target receives an approval code naming the requesting
+parent and describing recursive account visibility. No password is requested.
+Codes are single-use, isolated from login/registration, and bound to both user
+IDs and authentication versions. TTL, resend cooldown, email/IP limits and maximum
+verification attempts reuse the existing verification settings.
+
+- `POST /members/link-code`: `{ "email": "existing@example.com" }`; returns
+  `retry_after` and `expires_in` after successful SMTP delivery and code storage.
+- `POST /members/link`: `{ "email": "existing@example.com", "code": "..." }`;
+  returns `{ user }` after the relationship commits, without changing sessions.
+
+Both routes require an active browser session, same origin and CSRF; together
+they allow 10 requests per actor per minute. Linking is independent of the
+new-registration switch. Self-links, ancestors/cycles, administrator or inactive
+targets, and users with an existing parent are rejected; this is not a reparenting
+endpoint. Every request rechecks eligibility and never accepts a client parent ID.
+
+One transaction updates `users.parent_user_id`, extends `user_hierarchy` from all
+parent ancestors to all target descendants, and inserts `member_link_audits`.
+Its `actor_id` and unique `target_id` reference `users.id`; `created_at` records
+when consent was applied. It stores no password/code. Hierarchy mutations and
+role changes share the existing `admin_role_guards` singleton transaction lock,
+acquired before user rows. Member creation takes the same lock, preventing lost
+closure edges during concurrent subtree links. Network/SMTP calls occur outside
+the transaction. Source labels expose only the viewer's immediate child.
+
+No account ownership, submissions, snapshots, tokens or login sessions are moved.
+Descendant access remains view/manual-Sync only; edit/delete and Bearer APIs keep
+their owner/admin checks. The browser refreshes members and Source after success.

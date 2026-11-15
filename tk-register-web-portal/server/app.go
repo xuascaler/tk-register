@@ -392,7 +392,7 @@ type deliveryError struct {
 }
 
 func (e *deliveryError) Error() string { return "delivery unavailable" }
-func (a *app) deliver(ctx context.Context, email, purpose, ip string, ttl int, v core.Values, send bool) error {
+func (a *app) deliver(ctx context.Context, email, purpose, ip string, ttl int, v core.Values, send bool, mailPurpose ...string) error {
 	request, err := randomToken()
 	if err != nil {
 		return err
@@ -437,7 +437,11 @@ func (a *app) deliver(ctx context.Context, email, purpose, ip string, ttl int, v
 	if err = a.store.RecordVerification(ctx, record); err != nil {
 		return err
 	}
-	if err = a.mail.SendCode(ctx, email, code, strings.Split(purpose, ":")[0], ttl); err != nil {
+	mailAction := strings.Split(purpose, ":")[0]
+	if len(mailPurpose) > 0 {
+		mailAction = mailPurpose[0]
+	}
+	if err = a.mail.SendCode(ctx, email, code, mailAction, ttl); err != nil {
 		_ = a.store.UpdateVerification(ctx, request, "failed")
 		return err
 	}

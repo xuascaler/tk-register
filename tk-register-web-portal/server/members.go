@@ -16,6 +16,8 @@ func (a *app) memberRoutes(w http.ResponseWriter, r *http.Request, route string)
 		return true
 	}
 	switch r.Method + " " + route {
+	case "POST members/link-code", "POST members/link":
+		a.linkMember(w, r, user, route == "members/link-code")
 	case "GET members":
 		page, valid := adminPage(w, r)
 		if !valid {
@@ -61,4 +63,66 @@ func (a *app) memberRoutes(w http.ResponseWriter, r *http.Request, route string)
 		fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
 	}
 	return true
+}
+
+func memberLinkPurpose(actor, target *core.User) string {
+	return "member_link:" + strconv.FormatUint(actor.ID, 10) + ":" + strconv.FormatUint(actor.AuthVersion, 10) + ":" + strconv.FormatUint(target.ID, 10) + ":" + strconv.FormatUint(target.AuthVersion, 10)
+}
+
+func (a *app) linkMember(w http.ResponseWriter, r *http.Request, actor *core.User, send bool) {
+	retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "member-link:" + strconv.FormatUint(actor.ID, 10)}, 10, 60).Int()
+	if err != nil {
+		internal(w)
+		return
+	}
+	if retry > 0 {
+		rateFailure(w, retry)
+		return
+	}
+	var input struct {
+		Email string `json:"email"`
+		Code  string `json:"code"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	input.Email = core.NormalizeEmail(input.Email)
+	if !validEmail(input.Email) {
+		fail(w, 400, "INVALID_REQUEST", "Enter a valid email address of up to 50 characters.")
+		return
+	}
+	target, err := a.store.MemberLinkTarget(r.Context(), actor.ID, input.Email)
+	if err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	v, good := a.config(w, r)
+	if !good {
+		return
+	}
+	purpose := memberLinkPurpose(actor, target)
+	if send {
+		ttl := v.Int("registration_code_ttl_seconds")
+		if err := a.deliver(r.Context(), target.Email, purpose, clientIP(r), ttl, v, true, "member_link:"+actor.Email); err != nil {
+			deliveryFailure(w, err)
+			return
+		}
+		ok(w, map[string]any{"retry_after": v.Int("email_send_cooldown_seconds"), "expires_in": ttl})
+		return
+	}
+	valid, err := a.checkCode(r.Context(), target.Email, purpose, input.Code, v.Int("verification_max_attempts"), "")
+	if err != nil {
+		internal(w)
+		return
+	}
+	if !valid {
+		fail(w, 400, "INVALID_CODE", "The verification code is invalid or expired. Request a code for this connection.")
+		return
+	}
+	linked, err := a.store.LinkExistingMember(r.Context(), actor.ID, actor.AuthVersion, target.ID, target.AuthVersion)
+	if err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	ok(w, map[string]any{"user": linked})
 }
