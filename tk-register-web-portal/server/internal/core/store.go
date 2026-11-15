@@ -196,6 +196,10 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, errors.New("could not migrate bill exports")
 	}
+	if err = s.migrateDailyUsage(); err != nil {
+		s.Close()
+		return nil, errors.New("could not migrate daily usage")
+	}
 	if err = s.validateVendorSecrets(); err != nil {
 		s.Close()
 		return nil, err

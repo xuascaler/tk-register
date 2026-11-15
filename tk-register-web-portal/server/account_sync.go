@@ -163,6 +163,10 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		vendorFailure(w, err)
 		return true
 	}
+	if len(parts) == 2 && parts[1] == "daily-usage" && r.Method == "GET" {
+		a.dailyUsageData(w, r, id)
+		return true
+	}
 	if len(parts) == 2 && parts[1] == "auth-json" {
 		if !adminAccounts && account.CanManage != nil && !*account.CanManage {
 			vendorFailure(w, core.ErrNotFound)

@@ -116,3 +116,14 @@ func TestBillExportDiagnosticPathOmitsQueryAndAccountData(t *testing.T) {
 		t.Fatal("query leaked")
 	}
 }
+
+func TestDailyUsageDiagnosticSource(t *testing.T) {
+	t.Setenv("TK_REGISTER_SUPPLIER_DIAGNOSTICS", "all")
+	var output bytes.Buffer
+	ctx := WithLogger(WithTrace(context.Background(), Trace{Source: "daily_usage", Vendor: "tk-register-0", JobID: 7}), log.New(&output, "", 0))
+	LogRequest(ctx, RequestEvent{StartedAt: time.Now(), Method: "GET", Path: "/supplier-account/api/supplier/bill/claude-export", HTTPStatus: 200, Outcome: "succeeded"})
+	event := decoded(t, strings.TrimSpace(output.String()), "TK_SUPPLIER_REQUEST")
+	if event["source"] != "daily_usage" || event["job_id"] != float64(7) {
+		t.Fatal(event)
+	}
+}

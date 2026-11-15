@@ -10,6 +10,7 @@ import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statu
 import type { AccountDetails, AccountPage, SyncedAccount } from './types';
 import { ErrorPopover } from './ErrorPopover';
 import { UsageTrend } from './UsageTrend';
+import { DailyUsage } from './DailyUsage';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
 import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
 import { loadAccountPage, mergeSyncedAccount, syncAccountRow, syncRetryLabel, type AccountRowSyncResult } from './row-sync';
@@ -183,6 +184,8 @@ const metricNames: Record<Metric, string> = { cost_total_usd: 'Total spent', inp
 export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }: { id: string; onBack: () => void; onSubmission: (id: string) => void; admin?: boolean }) {
   const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountDetails | null>(null);
+  const [tab, setTab] = useState<'overview' | 'daily'>(() => new URLSearchParams(window.location.hash.split('?')[1]).get('tab') === 'daily-usage' ? 'daily' : 'overview');
+  function changeTab(next: 'overview' | 'daily') { setTab(next); const path = window.location.hash.split('?')[0]; window.history.replaceState(null, '', `${path}${next === 'daily' ? '?tab=daily-usage' : ''}`); }
   const [days, setDays] = useState('7');
   const [metric, setMetric] = useState<Metric>('cost_total_usd');
   const [loading, setLoading] = useState(true);
@@ -282,6 +285,9 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       {refreshWarning && <p className='notice account-auth-refresh-warning' role='status'>{refreshWarning}</p>}
       {syncRetryIn > 0 && <p className='usage-small' role='status'>{syncRetryLabel(syncRetryIn, syncRetry?.stage)}. Saved account data is retained.</p>}
       {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><ErrorPopover label='Sync failed' title='Account synchronization failed' className='usage-sync-error' message={account.last_error} detail={`Last saved attempt: ${formatTime(account.last_attempt_at, data.timezone)}`} /></div>}
+      <div className='member-settings-tabs account-usage-tabs' role='tablist' aria-label='Account information'>{(['overview', 'daily'] as const).map(value => <button key={value} role='tab' id={`usage-tab-${value}`} aria-selected={tab === value} aria-controls={`usage-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => changeTab(value)} onKeyDown={e => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'overview' : e.key === 'End' ? 'daily' : tab === 'daily' ? 'overview' : 'daily'; changeTab(next); requestAnimationFrame(() => document.getElementById(`usage-tab-${next}`)?.focus()); } }}>{value === 'overview' ? 'Overview' : 'Daily usage'}</button>)}</div>
+      <div role='tabpanel' id={`usage-panel-${tab}`} aria-labelledby={`usage-tab-${tab}`}>
+      {tab === 'overview' && <>
       {(admin || account.can_manage !== false) && <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} />}
       <div className='usage-metrics'>
         <div><span>Total spent</span><strong>{formatCost(snapshot?.cost_total_usd, 'USD')}</strong><small>{account.last_error && snapshot ? 'Last known cumulative total' : 'Cumulative total'}</small></div>
@@ -289,10 +295,13 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
         <div><span>Output tokens</span><strong>{formatTokens(snapshot?.output_tokens_total, true)}</strong><small>{formatTokens(snapshot?.output_tokens_total)} tokens</small></div>
       </div>
       <div className='usage-windows-panel'><div><UsageWindow label='5-hour usage' value={snapshot?.usage_5h_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_5h_at, data.timezone)}</span></div><div><UsageWindow label='7-day usage' value={snapshot?.usage_7d_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_7d_at, data.timezone)}</span></div></div>
-      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>Usage trend</h2><p className='usage-small'>Saved observations, collected every {data.interval_seconds.toLocaleString()} seconds when enabled.</p></div><Select id='usage-date-range' label='Date range' hiddenLabel value={days} onChange={setDays} disabled={syncing || loading} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '90', label: 'Last 90 days' }]} /></div>
+      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>Cumulative usage</h2><p className='usage-small'>Saved observations, collected every {data.interval_seconds.toLocaleString()} seconds when enabled.</p></div><Select id='usage-date-range' label='Date range' hiddenLabel value={days} onChange={setDays} disabled={syncing || loading} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '90', label: 'Last 90 days' }]} /></div>
         <div className='usage-metric-tabs' role='group' aria-label='Trend metric'>{(Object.keys(metricNames) as Metric[]).map(key => <button key={key} aria-pressed={metric === key} onClick={() => setMetric(key)}>{metricNames[key]}</button>)}</div>
         {loading ? <Loading label='Loading usage history…' /> : <UsageTrend key={`${id}:${days}`} data={data} endpoint={`${endpoint}/${encodeURIComponent(id)}/snapshots`} days={days} metric={metric} />}
       </section>
+      </>}
+      <DailyUsage key={`${endpoint}:${id}`} endpoint={`${endpoint}/${encodeURIComponent(id)}`} compact={tab === 'overview'} onOpen={() => changeTab('daily')} />
+      </div>
       {editorOpen && <AuthJSONEditor account={account} endpoint={endpoint} onClose={() => setEditorOpen(false)} onSaved={credentialsSaved} />}
     </>}
   </section>;
