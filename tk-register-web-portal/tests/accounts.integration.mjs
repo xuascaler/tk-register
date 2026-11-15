@@ -28,6 +28,8 @@ try {
     const fail = status => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'Fixture unavailable.' }) });
     if (path === '/auth/status') return ok({ registration_enabled: true, password_login_enabled: true, email_code_login_enabled: true });
     if (path === '/auth/me') return ok({ user: { id: 1, email: 'admin@example.com', role }, csrf_token: 'fixture-csrf' });
+    if (path === '/members/sources') return ok({ sources: [{ id: 'myself', label: 'myself' }] });
+    if (path.endsWith('/daily-usage')) return ok({ start_date: url.searchParams.get('start_date'), end_date: url.searchParams.get('end_date'), timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, days: [], rows: [] });
     if (path === '/vendors') return ok({ vendors: [] });
     if (path === '/accounts' || path === '/admin/synced-accounts') {
       const search = url.searchParams.get('search') || '', status = url.searchParams.get('status') || '';
@@ -107,10 +109,10 @@ try {
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/account-pool/submissions/22?account=42`);
   await Promise.all([page.waitForRequest(req => req.url().includes('/admin/accounts/42')), page.getByRole('button', { name: 'Account details', exact: true }).click()]);
   assert.match(page.url(), /account-pool\/accounts\/42$/);
-  await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts`);
+  await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts?tab=list`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Actions']);
-  assert.equal(await page.locator('.usage-owner-email').count(), 0);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Source', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Actions']);
+  assert.deepEqual(await page.locator('.usage-owner-email').allTextContents(), ['myself', 'myself', 'myself']);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).click();
   await page.getByRole('button', { name: 'Sync now', exact: true }).waitFor();
   assert.equal(await page.locator('.usage-owner-meta').count(), 0);

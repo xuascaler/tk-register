@@ -7,7 +7,7 @@ const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors
 const shot=process.env.TK_SCREENSHOT_DIR || 'test-results/members';
 await mkdir(shot,{recursive:true});
 try {
- await page.goto(base+'/__test/login');await expect(page.getByRole('heading',{name:'Accounts',exact:true})).toBeVisible();
+ await page.goto(base+'/__test/login');await expect(page.getByRole('heading',{name:'Accounts',exact:true})).toBeVisible();await page.getByRole('tab',{name:'Account list',exact:true}).click();
  await expect(page.locator('tbody tr')).toHaveCount(4);
  await expect(page.getByRole('button',{name:'Delete oliver.lin@example.com',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Delete liam.wu@example.com',exact:true})).toBeVisible();
@@ -45,7 +45,7 @@ try {
  await page.screenshot({path:shot+'/create-mobile.png',fullPage:true});
  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth);if(overflow)throw new Error('mobile horizontal overflow');
  await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
- await page.goto(base+'/tk-register#/accounts');await expect(page.locator('tbody tr')).toHaveCount(4);
+ await page.goto(base+'/tk-register#/accounts?tab=list');await expect(page.locator('tbody tr')).toHaveCount(4);
  await page.locator('#account-source').click();await expect(menu).toBeVisible();await page.screenshot({path:shot+'/source-mobile.png',fullPage:true});
  const rect=await menu.boundingBox();if(rect.x<0||rect.x+rect.width>390)throw new Error('source menu overflow');
  if(errors.length)throw new Error(errors.join('\n'));

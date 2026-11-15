@@ -127,7 +127,7 @@ try {
   assert.equal(calls.some(call => call.path.endsWith('/sync')), false, 'Deletion must not trigger a supplier Sync request');
 
   records = [account('4')];
-  await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts`);
+  await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts?tab=list`);
   await page.getByRole('button', { name: 'Delete account4@example.com', exact: true }).click();
   assert.doesNotMatch(await dialog.textContent(), /owner@example.com/);
   await page.setViewportSize({ width: 390, height: 844 });

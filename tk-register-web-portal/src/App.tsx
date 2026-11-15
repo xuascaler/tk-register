@@ -33,6 +33,7 @@ import SubmissionDetails from './submissions/SubmissionDetail';
 import { AdminHistory, PoolAccountDetails } from './admin/AccountPool';
 import APIToken from './account/APIToken';
 import { AccountUsageDetails, MemberAccounts } from './accounts/Accounts';
+import AccountsWorkspace from './accounts/AccountsWorkspace';
 import APIDocumentation, { type DocTopic, type DocSection } from './docs/APIDocumentation';
 
 function Account({ user, status, tab, onTab, onViewAccounts }: { user: User; status: AuthStatus; tab: 'general' | 'members'; onTab: (tab: 'general' | 'members') => void; onViewAccounts: () => void }) {
@@ -103,6 +104,7 @@ type Route = {
   id?: string;
   config?: string;
   settingsTab?: 'general' | 'members';
+  accountsTab?: 'overview' | 'list';
   backAccount?: string;
   backAccountUsage?: boolean;
   docTopic?: DocTopic;
@@ -125,7 +127,7 @@ function readRoute(): Route {
       : { page: 'pool-history' };
     return segments[2] ? { page: segments[3] === 'usage' ? 'pool-account-usage' : 'pool-account', id: segments[2] } : { page: 'pool-accounts' };
   }
-  if (segments[0] === 'accounts') return segments[1] ? { page: 'account-usage', id: segments[1] } : { page: 'accounts' };
+  if (segments[0] === 'accounts') return segments[1] ? { page: 'account-usage', id: segments[1] } : { page: 'accounts', accountsTab: new URLSearchParams(query).get('tab') === 'list' ? 'list' : 'overview' };
   if (segments[0] === 'submissions') return segments[1] ? { page: 'detail', id: segments[1], backAccount: new URLSearchParams(query).get('account') || undefined } : { page: 'history' };
   if (segments[0] === 'account') return { page: 'account', settingsTab: segments[1] === 'members' ? 'members' : 'general' };
   if (segments[0] === 'config') return {
@@ -139,7 +141,7 @@ function routeHash(route: Route) {
   if (route.page === 'pool-account-usage') return `#/account-pool/accounts/${encodeURIComponent(route.id || '')}/usage`;
   if (route.page === 'pool-accounts' || route.page === 'pool-account') return `#/account-pool/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
   if (route.page === 'pool-history' || route.page === 'pool-submission') return `#/account-pool/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?${route.backAccountUsage ? 'synced_account' : 'account'}=${encodeURIComponent(route.backAccount)}` : ''}`;
-  if (route.page === 'accounts' || route.page === 'account-usage') return `#/accounts${route.id ? `/${encodeURIComponent(route.id)}` : ''}`;
+  if (route.page === 'accounts' || route.page === 'account-usage') return `#/accounts${route.id ? `/${encodeURIComponent(route.id)}` : route.accountsTab === 'list' ? '?tab=list' : ''}`;
   if (route.page === 'history' || route.page === 'detail') return `#/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?account=${encodeURIComponent(route.backAccount)}` : ''}`;
   if (route.page === 'config') return `#/config${route.config && route.config !== 'email' ? `/${route.config}` : ''}`;
   return `#/${route.page}`;
@@ -497,11 +499,11 @@ export default function App() {
                 onDirty={setDirty}
               />
             ) : page === 'accounts' ? (
-              <MemberAccounts key='member-accounts' onOpen={id => navigate({ page: 'account-usage', id })} />
+              <AccountsWorkspace tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'accounts', accountsTab })} onOpen={id => navigate({ page: 'account-usage', id })} />
             ) : page === 'account-usage' && route.id ? (
-              <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => navigate({ page: 'accounts' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
+              <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => navigate({ page: 'accounts', accountsTab: 'list' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
             ) : page === 'account' ? (
-              <Account user={user} status={status} tab={route.settingsTab || 'general'} onTab={settingsTab => navigate({ page:'account', settingsTab })} onViewAccounts={() => navigate({ page:'accounts' })} />
+              <Account user={user} status={status} tab={route.settingsTab || 'general'} onTab={settingsTab => navigate({ page:'account', settingsTab })} onViewAccounts={() => navigate({ page:'accounts', accountsTab: 'list' })} />
             ) : page === 'docs' ? (
               <APIDocumentation
                 topic={route.docTopic}

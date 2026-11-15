@@ -44,7 +44,7 @@ function SubmittedTime({ value }: { value: string | null | undefined }) {
   </time>;
 }
 
-export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string) => void; admin?: boolean }) {
+export function MemberAccounts({ onOpen, admin = false, embedded = false }: { onOpen: (id: string) => void; admin?: boolean; embedded?: boolean }) {
   const memberScope = useMemberScope();
   const sources = admin ? 'all' : memberScope.selection;
   const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
@@ -136,7 +136,7 @@ export function MemberAccounts({ onOpen, admin = false }: { onOpen: (id: string)
     else setAttempt(value => value + 1);
   }
   return <section className='usage-accounts'>
-    <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Saved account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>
+    {!embedded && <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Saved account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>}
     <div className={`usage-toolbar ${admin ? '' : 'member-accounts-toolbar'}`}>
       <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>Search accounts</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder={admin ? 'Search account or user email' : 'Search by account email'} maxLength={254} /></label>
       {!admin && <SourceFilter id='account-source' onChange={() => setPage(1)} />}
