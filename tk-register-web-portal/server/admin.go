@@ -32,6 +32,16 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 		fail(w, 403, "FORBIDDEN", "Administrator access is required.")
 		return true
 	}
+	// Overview only reads saved account and bill data. It must not recover
+	// executions, mutate submissions, or trigger supplier requests.
+	if route == "admin/accounts/overview" {
+		a.serveAccountsOverview(w, r, actor.ID, true)
+		return true
+	}
+	if route == "admin/accounts/overview/sources" {
+		a.adminOverviewSources(w, r, actor.ID)
+		return true
+	}
 	if strings.HasPrefix(route, "admin/accounts") || strings.HasPrefix(route, "admin/submissions") {
 		if err := a.store.RecoverVendorExecutions(r.Context()); err != nil {
 			internal(w)

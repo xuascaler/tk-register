@@ -4,7 +4,7 @@ import { errorMessage, request } from '../api';
 export type AccountSource = { id: string; label: string };
 type Scope = { sources: AccountSource[]; selection: string; setSelection: (value: string) => void; loading: boolean; error: string; reload: () => void };
 const MemberContext = createContext<Scope | null>(null);
-export function MemberScopeProvider({ children }: { children: ReactNode }) {
+export function MemberScopeProvider({ children, endpoint = '/members/sources' }: { children: ReactNode; endpoint?: string }) {
   const [sources, setSources] = useState<AccountSource[]>([{ id: 'myself', label: 'myself' }]);
   const [selection, setSelection] = useState('all');
   const [loading, setLoading] = useState(true);
@@ -13,12 +13,12 @@ export function MemberScopeProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(() => setRevision(value => value + 1), []);
   useEffect(() => {
     const abort = new AbortController(); setLoading(true); setError('');
-    request<{ sources: AccountSource[] }>('/members/sources', { signal: abort.signal })
+    request<{ sources: AccountSource[] }>(endpoint, { signal: abort.signal })
       .then(result => { if (!abort.signal.aborted) setSources(result.sources); })
       .catch(cause => { if (!abort.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();
-  }, [revision]);
+  }, [endpoint, revision]);
   return <MemberContext.Provider value={{ sources, selection, setSelection, loading, error, reload }}>{children}</MemberContext.Provider>;
 }
 export function useMemberScope() {

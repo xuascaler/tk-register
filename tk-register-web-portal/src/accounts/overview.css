@@ -75,6 +75,10 @@
 .overview-source-table.is-models { min-width: 620px; table-layout: auto; }
 .overview-source-table.is-models th, .overview-source-table.is-models td { padding-left: 12px; padding-right: 12px; }
 .overview-source-table.is-models th:not(:first-child), .overview-source-table.is-models td { text-align: right; }
+.accounts-overview-admin .overview-table-shell > .usage-table-scroll { max-height: 480px; overflow: auto; overscroll-behavior: contain; }
+.accounts-overview-admin .overview-source-table thead th { position: sticky; top: 0; z-index: 2; box-shadow: 0 1px var(--border); }
+.accounts-overview-admin .overview-source-table tfoot th, .accounts-overview-admin .overview-source-table tfoot td { position: sticky; bottom: 0; z-index: 2; background: #f6f8fb; box-shadow: 0 -1px var(--border); }
+.accounts-overview-admin .overview-source-table thead th:first-child, .accounts-overview-admin .overview-source-table tfoot th:first-child { z-index: 3; }
 .overview-sources > .overview-note { margin-top: 11px; }
 .overview-usage.daily-compact { margin-top: 25px; border-radius: 8px; padding: 19px 18px 11px; }
 .overview-chart-controls { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 20px 0 6px; }

@@ -65,37 +65,54 @@ func ValidateOverviewRange(start, end string, now time.Time) error {
 	return nil
 }
 
+// overviewScope supplies only the account ownership rules. Both views use the
+// same aggregation, currency conversion, date range, and coverage semantics.
+type overviewScope struct {
+	sources    []AccountSource
+	base       func() *gorm.DB
+	sourceExpr string
+}
+
 func (s *Store) AccountsOverview(ctx context.Context, viewerID uint64, rawSources, start, end string, allTime bool, now time.Time) (AccountsOverview, error) {
-	out := AccountsOverview{Timezone: "Asia/Shanghai", CollectionTime: "03:00", Sources: []OverviewSource{}, Rows: []DailyUsageRowDTO{}, ModelCosts: []OverviewModelCost{}, Days: []OverviewDay{}}
-	scope, err := s.ResolveVisibility(ctx, viewerID, rawSources)
+	visibility, err := s.ResolveVisibility(ctx, viewerID, rawSources)
 	if err != nil {
-		return out, err
+		return AccountsOverview{}, err
 	}
+	sources, err := s.MemberSources(ctx, viewerID)
+	if err != nil {
+		return AccountsOverview{}, err
+	}
+	selected := map[string]bool{"myself": visibility.Self}
+	for _, id := range visibility.Sources {
+		selected[idString(id)] = true
+	}
+	scope := overviewScope{sourceExpr: "COALESCE(h.source_user_id, 0)"}
+	for _, source := range sources {
+		if visibility.All || selected[source.ID] {
+			scope.sources = append(scope.sources, source)
+		}
+	}
+	scope.base = func() *gorm.DB {
+		return s.DB.WithContext(ctx).Table("synced_accounts a").
+			Joins("JOIN user_hierarchy h ON h.descendant_user_id = a.user_id AND h.ancestor_user_id = ?", viewerID).
+			Where("a.deleted_at IS NULL AND a.user_id IN (?)", visibility.Owners(s.DB))
+	}
+	return s.aggregateAccountsOverview(ctx, scope, start, end, allTime, now)
+}
+
+func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewScope, start, end string, allTime bool, now time.Time) (AccountsOverview, error) {
+	out := AccountsOverview{Timezone: "Asia/Shanghai", CollectionTime: "03:00", Sources: []OverviewSource{}, Rows: []DailyUsageRowDTO{}, ModelCosts: []OverviewModelCost{}, Days: []OverviewDay{}}
+	var err error
 	out.ExchangeRate, err = s.ExchangeRate(ctx)
 	if err != nil {
 		return out, err
 	}
-	sources, err := s.MemberSources(ctx, viewerID)
-	if err != nil {
-		return out, err
-	}
-	selected := map[string]bool{"myself": scope.Self}
-	for _, id := range scope.Sources {
-		selected[idString(id)] = true
-	}
 	bySource := map[string]int{}
-	for _, source := range sources {
-		if scope.All || selected[source.ID] {
-			bySource[source.ID] = len(out.Sources)
-			out.Sources = append(out.Sources, OverviewSource{AccountSource: source, Statuses: map[string]int64{}})
-		}
+	for _, source := range scope.sources {
+		bySource[source.ID] = len(out.Sources)
+		out.Sources = append(out.Sources, OverviewSource{AccountSource: source, Statuses: map[string]int64{}})
 	}
-	base := func() *gorm.DB {
-		return s.DB.WithContext(ctx).Table("synced_accounts a").
-			Joins("JOIN user_hierarchy h ON h.descendant_user_id = a.user_id AND h.ancestor_user_id = ?", viewerID).
-			Where("a.deleted_at IS NULL AND a.user_id IN (?)", scope.Owners(s.DB))
-	}
-	const sourceExpr = "COALESCE(h.source_user_id, 0)"
+	base, sourceExpr := scope.base, scope.sourceExpr
 	var stats []struct {
 		Source uint64
 		Status string
