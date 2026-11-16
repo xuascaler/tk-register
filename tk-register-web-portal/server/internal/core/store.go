@@ -200,6 +200,10 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, errors.New("could not migrate daily usage")
 	}
+	if err = s.migrateOverviewSummaries(); err != nil {
+		s.Close()
+		return nil, errors.New("could not migrate overview summaries")
+	}
 	if err = s.validateVendorSecrets(); err != nil {
 		s.Close()
 		return nil, err

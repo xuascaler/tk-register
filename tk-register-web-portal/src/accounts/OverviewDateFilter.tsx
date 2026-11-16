@@ -2,19 +2,22 @@ import { CalendarDays } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { recentDailyRange } from './daily-usage';
-import { validOverviewRange } from './overview';
+import { validOverviewRange, type OverviewRangeSelection } from './overview';
 
 type Range = { start: string; end: string };
-const presets = [{ days: 1, label: 'Past day' }, { days: 7, label: 'Past 7 days' }, { days: 30, label: 'Past month' }];
+const presets = [{ period: 'day', days: 1, label: 'Past day' }, { period: 'week', days: 7, label: 'Past 7 days' }, { period: 'month', days: 30, label: 'Past month' }];
 
-export default function OverviewDateFilter({ range, allTime, onDays, onAllTime, onApply }: {
-  range: Range; allTime: boolean; onDays: (days: number) => void; onAllTime: () => void; onApply: (range: Range) => void;
+export default function OverviewDateFilter({ range, allTime, period, onDays, onAllTime, onApply }: {
+  range: Range; allTime: boolean; period?: OverviewRangeSelection; onDays: (days: number) => void; onAllTime: () => void; onApply: (range: Range) => void;
 }) {
   const [open, setOpen] = useState(false), [draft, setDraft] = useState(range), [error, setError] = useState('');
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
-  const selected = !allTime && presets.find(preset => { const value = recentDailyRange(preset.days); return value.start === range.start && value.end === range.end; });
-  const title = allTime ? 'All time' : selected ? selected.label : `${range.start} – ${range.end}`;
+  const allSelected = period === undefined ? allTime : period === 'all_time';
+  const selected = !allSelected && presets.find(preset => { if (period !== undefined) return preset.period === period; const value = recentDailyRange(preset.days); return value.start === range.start && value.end === range.end; });
+  const title = allSelected ? 'All time' : selected ? selected.label : `${range.start} – ${range.end}`;
+  const currentPresetRange = selected ? recentDailyRange(selected.days) : null;
+  const savedRangeDiffers = !!currentPresetRange && (currentPresetRange.start !== range.start || currentPresetRange.end !== range.end);
   function close(restore = false) { setOpen(false); if (restore) trigger.current?.focus(); }
   function show() { setDraft(range); setError(''); setPosition(null); setOpen(true); }
   useLayoutEffect(() => {
@@ -46,10 +49,11 @@ export default function OverviewDateFilter({ range, allTime, onDays, onAllTime, 
   return <div className='overview-period tk-select'>
     <label htmlFor='overview-period-trigger'>Usage period</label>
     <button ref={trigger} id='overview-period-trigger' type='button' className='tk-select-trigger' aria-label={`Usage date range: ${title}`} aria-haspopup='dialog' aria-expanded={open} aria-controls={open ? 'overview-date-menu' : undefined} onClick={() => open ? close() : show()} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); show(); } }}><span>{title}</span><CalendarDays aria-hidden='true' /></button>
+    {savedRangeDiffers && <span className='overview-period-range'>{range.start} – {range.end}</span>}
     {open && position && createPortal(<div ref={menu} id='overview-date-menu' className='overview-date-menu' style={position} role='dialog' aria-label='Usage dates'>
       <div className='overview-presets' role='group' aria-label='Usage period'>
         {presets.map(preset => <button key={preset.days} type='button' aria-pressed={!!selected && selected.days === preset.days} onClick={() => { onDays(preset.days); close(true); }}>{preset.label}</button>)}
-        <button type='button' aria-pressed={allTime} onClick={() => { onAllTime(); close(true); }}>All time</button>
+        <button type='button' aria-pressed={allSelected} onClick={() => { onAllTime(); close(true); }}>All time</button>
       </div>
       <form onSubmit={event => { event.preventDefault(); if (!validOverviewRange(draft.start, draft.end)) { setError('Choose valid start and end dates, ending no later than yesterday.'); return; } onApply(draft); close(true); }}>
         <div className='overview-dates'><label>Start date<input type='date' value={draft.start} min='1970-01-01' max={recentDailyRange(1).end} onChange={event => setDraft(value => ({ ...value, start: event.target.value }))} required /></label><label>End date<input type='date' value={draft.end} min='1970-01-01' max={recentDailyRange(1).end} onChange={event => setDraft(value => ({ ...value, end: event.target.value }))} required /></label></div>

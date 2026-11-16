@@ -45,6 +45,7 @@ type app struct {
 	accountExpirer                     accountExpirer
 	supplierClient                     *supplier.Client
 	accountSyncWake                    chan struct{}
+	overviewSummaryBuilder             func(context.Context, uint64, bool, string, string, time.Time) error
 }
 type envelope struct {
 	Success    bool   `json:"success"`

@@ -111,3 +111,60 @@ func TestAdminAccountsOverviewAuthorizationAndReadOnly(t *testing.T) {
 	}
 	requireStatus(t, request(t, a, "GET", "admin/accounts/overview", nil, adminCookie, ""), 401)
 }
+
+func TestOverviewPresetCacheMissAndModelFiltering(t *testing.T) {
+	a, owner, cookie, _, _, fake := setupPageSync(t)
+	ctx := context.Background()
+	for _, preset := range []string{"day", "week", "month", "all_time"} {
+		w := request(t, a, "GET", "accounts/overview?sources=all&models=all&period="+preset, nil, cookie, "")
+		requireStatus(t, w, 200)
+		result := data(t, w)
+		if result["summary_available"] != false || len(result["rows"].([]any)) != 0 || len(result["sources"].([]any)) != 0 {
+			t.Fatal("missing summary aggregated live", w.Body.String())
+		}
+	}
+	// Generate an older snapshot; later reads must retain its actual date range.
+	now := time.Now()
+	day := now.AddDate(0, 0, -3).Format("2006-01-02")
+	if err := a.store.BuildOverviewSummaries(ctx, owner.ID, false, day, "api-test", now); err != nil {
+		t.Fatal(err)
+	}
+	w := request(t, a, "GET", "accounts/overview?period=week&models=none", nil, cookie, "")
+	requireStatus(t, w, 200)
+	result := data(t, w)
+	if result["summary_available"] != true || result["end_date"] != day || len(result["sources"].([]any)) != 1 || len(result["rows"].([]any)) != 0 {
+		t.Fatal("cached range or sources changed", w.Body.String())
+	}
+	// Custom and selected-source paths still aggregate current data explicitly.
+	w = request(t, a, "GET", "accounts/overview?period=week&sources=myself", nil, cookie, "")
+	requireStatus(t, w, 200)
+	if _, cached := data(t, w)["summary_available"]; cached {
+		t.Fatal("source subset unexpectedly cached")
+	}
+	for _, query := range []string{"period=wrong", "period=week&start_date=2026-01-01", "models=all,claude", "models=,claude"} {
+		requireStatus(t, request(t, a, "GET", "accounts/overview?"+query, nil, cookie, ""), 400)
+	}
+	if fake.calls != 0 {
+		t.Fatal("overview called upstream")
+	}
+}
+
+func TestOverviewModelsLeaveAccountStatisticsUnchanged(t *testing.T) {
+	cost := 123.0
+	out := core.AccountsOverview{
+		ExchangeRate: 7.2,
+		Sources:      []core.OverviewSource{{AccountSource: core.AccountSource{ID: "myself"}, Total: 9, CostUSD: &cost, CollectedDays: 1, Statuses: map[string]int64{"active": 8}}},
+		Rows: []core.DailyUsageRowDTO{
+			{AccountDailyUsage: core.AccountDailyUsage{Model: "one", InputTokens: "9007199254740993", CostCNY: "72.00000000"}},
+			{AccountDailyUsage: core.AccountDailyUsage{Model: "two", InputTokens: "42", CostCNY: "144.00000000"}},
+		},
+		ModelCosts: []core.OverviewModelCost{{SourceID: "myself", Model: "one", CostCNY: "72"}, {SourceID: "myself", Model: "two", CostCNY: "144"}},
+	}
+	if err := core.ProjectOverviewBilling(&out); err != nil {
+		t.Fatal(err)
+	}
+	filterOverviewModels(&out, map[string]bool{"one": true})
+	if len(out.Rows) != 1 || out.Rows[0].InputTokens != "9007199254740993" || len(out.ModelCosts) != 1 || out.Sources[0].Total != 9 || *out.Sources[0].CostUSD != 10 || out.Sources[0].Statuses["active"] != 8 {
+		t.Fatalf("model filter changed statistics: %+v", out)
+	}
+}

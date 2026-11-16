@@ -34,8 +34,9 @@ try {
     if (path === '/accounts/overview' || path === '/admin/accounts/overview') {
       const admin = path.startsWith('/admin/'), available = admin ? users : members;
       const chosen = url.searchParams.get('sources') === 'all' ? available : available.filter(source => url.searchParams.get('sources')?.split(',').includes(source.id));
-      const start = url.searchParams.get('range') === 'all' ? '2026-10-01' : url.searchParams.get('start_date');
-      const end = url.searchParams.get('range') === 'all' ? yesterday : url.searchParams.get('end_date');
+      const period = url.searchParams.get('period'), count = { day: 1, week: 7, month: 30 }[period];
+      const start = period === 'all_time' ? '2026-10-01' : count ? new Date(Date.parse(yesterday) - (count - 1) * 86400_000).toISOString().slice(0, 10) : url.searchParams.get('start_date');
+      const end = period ? yesterday : url.searchParams.get('end_date');
       // Admin rows are direct-owner totals; personal ben aggregates ben and clara.
       const sources = chosen.map(source => {
         const total = source.id === 'myself' ? 1 : source.id === '2' ? admin ? 2 : 5 : source.id === '3' ? 3 : 0;
@@ -47,6 +48,7 @@ try {
         days.push({ date, status: total ? 'complete' : 'missing', expected: total, collected: total });
         if (total) for (const model of ['claude-sonnet-4-5', 'claude-opus-4-1']) rows.push({ date, model, input_tokens: String(total * 100), output_tokens: String(total * 200), cache_read_tokens: '0', cache_write_tokens: '0', cost_cny: String(total * 7.2), cost_usd: total });
       }
+      for (const source of sources) source.cost_usd = source.total * days.length * 2;
       return ok({ start_date: start, end_date: end, earliest_date: '2026-10-01', timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, latest_account_data: snapshot.collected_at, sources, days, rows, model_costs: sources.flatMap(source => ['claude-sonnet-4-5', 'claude-opus-4-1'].map(model => ({ source_id: source.id, model, cost_cny: String(source.total * days.length * 7.2), cost_usd: source.total * days.length }))) });
     }
     if (path === '/accounts' || path === '/admin/synced-accounts') return ok({ items: [account], total: 1, page: 1, page_size: 20 });
@@ -74,8 +76,9 @@ try {
   assert.equal(await page.getByText('Admin only', { exact: true }).count(), 1);
   const initial = overviewCalls(true).at(-1).query;
   assert.equal(initial.get('sources'), 'all');
-  assert.equal((Date.parse(initial.get('end_date')) - Date.parse(initial.get('start_date'))) / 86400_000, 6);
-  assert.equal((await page.getByRole('button', { name: /^Usage date range:/ }).innerText()).trim(), 'Past 7 days');
+  assert.equal(initial.get('period'), 'all_time');
+  assert.equal(initial.get('models'), 'all');
+  assert.equal((await page.getByRole('button', { name: /^Usage date range:/ }).innerText()).trim(), 'All time');
   assert.match(await page.locator('#overview-source-explanation').textContent(), /only accounts they directly own/);
   assert.match(await page.locator('#overview-source-explanation').textContent(), /sub-users are listed separately/);
   assert.equal(await page.locator('.overview-source-table tbody tr').count(), 44);
@@ -123,7 +126,7 @@ try {
   await page.getByRole('button', { name: /^Usage date range:/ }).click();
   await page.getByRole('dialog', { name: 'Usage dates', exact: true }).getByRole('button', { name: 'All time', exact: true }).click();
   await page.locator('.overview-daily-chart.is-curve').waitFor();
-  assert.equal(overviewCalls(true).at(-1).query.get('range'), 'all');
+  assert.equal(overviewCalls(true).at(-1).query.get('period'), 'all_time');
   assert.match(await page.locator('.overview-daily-chart path').first().getAttribute('d'), /C/);
   await page.getByRole('button', { name: /^Usage date range:/ }).click();
   const dates = page.getByRole('dialog', { name: 'Usage dates', exact: true });
@@ -192,5 +195,5 @@ try {
   await page.getByRole('heading', { name: 'Admin access required', exact: true }).waitFor();
   assert.equal(calls.slice(beforeDenied).some(call => call.path.startsWith('/admin/')), false);
   assert.deepEqual(unexpected, []); assert.deepEqual(errors, []);
-  console.log('Admin Overview acceptance passed: flat owner totals, separate recursive personal scope, admin-only endpoints, default 7 days, searchable multi-select sources, models, custom dates/All time, smooth chart, nonlinked counts, responsive layouts, independent list, Sync/Del, detail back to list, member denial.');
+  console.log('Admin Overview acceptance passed: flat owner totals, separate recursive personal scope, admin-only endpoints, default All time, searchable multi-select sources, models, custom dates/All time, smooth chart, nonlinked counts, responsive layouts, independent list, Sync/Del, detail back to list, member denial.');
 } finally { await browser?.close(); server.kill('SIGTERM'); }

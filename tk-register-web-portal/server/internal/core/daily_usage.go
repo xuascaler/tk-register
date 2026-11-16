@@ -53,6 +53,17 @@ type DailyUsageJob struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	FinishedAt   *time.Time
+	// Overview is a separate, once-only follow-up to this daily collection.
+	// Existing completed jobs keep an empty state after migration: installing or
+	// restarting the service must not start an unscheduled summary rebuild.
+	OverviewState          string `gorm:"size:16;not null;default:'';index:idx_daily_overview_state"`
+	OverviewRunToken       string `gorm:"size:64;not null;default:''"`
+	OverviewStartedAt      *time.Time
+	OverviewLeaseUntil     *time.Time
+	OverviewFinishedAt     *time.Time
+	OverviewError          string `gorm:"size:255;not null;default:''"`
+	OverviewGeneratedViews int    `gorm:"not null;default:0"`
+	OverviewFailedViews    int    `gorm:"not null;default:0"`
 }
 
 func (s *Store) migrateDailyUsage() error {
@@ -203,7 +214,12 @@ func (s *Store) SaveDailyUsageAccount(ctx context.Context, job DailyUsageJob, re
 	})
 }
 func (s *Store) CompleteDailyUsage(ctx context.Context, job DailyUsageJob, count, review int, now time.Time) error {
-	return dailyClaim(s.DB.WithContext(ctx), job.ID, job.LeaseToken).Updates(map[string]any{"status": "succeeded", "lease_token": "", "lease_until": nil, "last_error": "", "account_count": count, "review_count": review, "finished_at": now}).Error
+	updates := map[string]any{"status": "succeeded", "lease_token": "", "lease_until": nil, "last_error": "", "account_count": count, "review_count": review, "finished_at": now}
+	// Historic catch-up jobs must not repeatedly rebuild all four summaries.
+	if job.UsageDate == DailyUsageDueDate(now).Format("2006-01-02") {
+		updates["overview_state"] = gorm.Expr("CASE WHEN overview_state = '' THEN 'pending' ELSE overview_state END")
+	}
+	return dailyClaim(s.DB.WithContext(ctx), job.ID, job.LeaseToken).Updates(updates).Error
 }
 
 type DailyUsageRowDTO struct {

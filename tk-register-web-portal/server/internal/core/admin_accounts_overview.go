@@ -33,12 +33,16 @@ func (s *Store) AdminOverviewSources(ctx context.Context, viewerID uint64) ([]Ac
 }
 
 func (s *Store) AdminAccountsOverview(ctx context.Context, viewerID uint64, rawSources, start, end string, allTime bool, now time.Time) (AccountsOverview, error) {
+	return s.readLiveAccountsOverview(ctx, viewerID, rawSources, start, end, allTime, now, true)
+}
+
+func (s *Store) adminOverviewScope(ctx context.Context, viewerID uint64, rawSources string) (overviewScope, error) {
 	sources, err := s.AdminOverviewSources(ctx, viewerID)
 	if err != nil {
-		return AccountsOverview{}, err
+		return overviewScope{}, err
 	}
 	if len(rawSources) > 8192 {
-		return AccountsOverview{}, vendorError(400, "INVALID_SOURCE", "Invalid source selection.")
+		return overviewScope{}, vendorError(400, "INVALID_SOURCE", "Invalid source selection.")
 	}
 	all := rawSources == "" || rawSources == "all"
 	selected := map[string]bool{}
@@ -51,14 +55,14 @@ func (s *Store) AdminAccountsOverview(ctx context.Context, viewerID uint64, rawS
 			if value != "myself" {
 				id, parseErr := ParseBusinessID(value)
 				if parseErr != nil {
-					return AccountsOverview{}, vendorError(400, "INVALID_SOURCE", "Choose existing users from the source list.")
+					return overviewScope{}, vendorError(400, "INVALID_SOURCE", "Choose existing users from the source list.")
 				}
 				if id == viewerID {
 					value = "myself"
 				}
 			}
 			if !valid[value] {
-				return AccountsOverview{}, vendorError(400, "INVALID_SOURCE", "Choose existing users from the source list.")
+				return overviewScope{}, vendorError(400, "INVALID_SOURCE", "Choose existing users from the source list.")
 			}
 			selected[value] = true
 		}
@@ -85,5 +89,5 @@ func (s *Store) AdminAccountsOverview(ctx context.Context, viewerID uint64, rawS
 		}
 		return q.Where("a.user_id IN ?", ownerIDs)
 	}
-	return s.aggregateAccountsOverview(ctx, scope, start, end, allTime, now)
+	return scope, nil
 }

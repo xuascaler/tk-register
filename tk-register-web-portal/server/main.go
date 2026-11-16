@@ -134,6 +134,8 @@ func run() error {
 	billExportWorkerDone := make(chan struct{})
 	dailyUsageWorkerDone := make(chan struct{})
 	accountReasonWorkerDone := make(chan struct{})
+	overviewSummaryWorkerDone := make(chan struct{})
+	go func() { defer close(overviewSummaryWorkerDone); app.runOverviewSummaries(workerCtx) }()
 	go func() { defer close(accountReasonWorkerDone); app.runAccountReasons(workerCtx) }()
 	go func() { defer close(dailyUsageWorkerDone); app.runDailyUsage(workerCtx) }()
 	go func() { defer close(billExportWorkerDone); app.runBillExports(workerCtx) }()
@@ -148,6 +150,7 @@ func run() error {
 		<-billExportWorkerDone
 		<-dailyUsageWorkerDone
 		<-accountReasonWorkerDone
+		<-overviewSummaryWorkerDone
 	}()
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(listener) }()

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
-	"goapi-tk-register/server/internal/core"
 	"net/http"
+	"strings"
 	"time"
+
+	"goapi-tk-register/server/internal/core"
 )
 
 func (a *app) accountsOverview(w http.ResponseWriter, r *http.Request, userID uint64) {
@@ -17,24 +19,100 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	q := r.URL.Query()
-	if q.Get("range") != "" && q.Get("range") != "all" {
+	period, start, end := q.Get("period"), q.Get("start_date"), q.Get("end_date")
+	allTime := q.Get("range") == "all"
+	if q.Get("range") != "" && !allTime {
 		fail(w, 400, "INVALID_RANGE", "Choose a date range or All time.")
 		return
 	}
+	if period != "" && ((start != "" || end != "") || (allTime && period != "all_time")) {
+		fail(w, 400, "INVALID_RANGE", "Choose a preset or a custom date range.")
+		return
+	}
+	if period == "" && start == "" && end == "" {
+		period = "week"
+		if allTime {
+			period = "all_time"
+		}
+	}
+	if period != "" && period != "day" && period != "week" && period != "month" && period != "all_time" {
+		fail(w, 400, "INVALID_RANGE", "Choose day, week, month, or all_time.")
+		return
+	}
+	models, valid := overviewModels(q.Get("models"))
+	if !valid {
+		fail(w, 400, "INVALID_MODELS", "Choose valid models or all models.")
+		return
+	}
+	now := time.Now()
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	query := a.store.AccountsOverview
-	if administrative {
-		query = a.store.AdminAccountsOverview
+	var result core.AccountsOverview
+	var err error
+	allSources := q.Get("sources") == "" || q.Get("sources") == "all"
+	if allSources && period != "" {
+		// A missing or stale summary is returned as such. Reading never schedules
+		// generation or falls back to scanning the underlying billing tables.
+		result, err = a.store.ReadOverviewSummary(ctx, userID, administrative, period, now)
+	} else {
+		if period != "" {
+			zone := time.FixedZone("Asia/Shanghai", 8*60*60)
+			yesterday := now.In(zone).AddDate(0, 0, -1)
+			end = yesterday.Format("2006-01-02")
+			days := 1
+			if period == "week" {
+				days = 7
+			}
+			if period == "month" {
+				days = 30
+			}
+			start = yesterday.AddDate(0, 0, 1-days).Format("2006-01-02")
+			allTime = period == "all_time"
+		}
+		query := a.store.AccountsOverview
+		if administrative {
+			query = a.store.AdminAccountsOverview
+		}
+		result, err = query(ctx, userID, q.Get("sources"), start, end, allTime, now)
 	}
-	data, err := query(ctx, userID, q.Get("sources"), q.Get("start_date"), q.Get("end_date"), q.Get("range") == "all", time.Now())
+	if err == nil {
+		err = core.ProjectOverviewBilling(&result)
+	}
 	if core.IsValidationError(err) {
 		fail(w, 400, "INVALID_RANGE", err.Error())
 	} else if err != nil {
 		vendorFailure(w, err)
 	} else {
-		ok(w, data)
+		filterOverviewModels(&result, models)
+		ok(w, result)
 	}
+}
+
+// nil means every model; a non-nil empty selection means none. Models affect
+// period billing totals only, never account counts or statuses.
+func overviewModels(raw string) (map[string]bool, bool) {
+	if raw == "" || raw == "all" {
+		return nil, true
+	}
+	if raw == "none" {
+		return map[string]bool{}, true
+	}
+	if len(raw) > 8192 {
+		return nil, false
+	}
+	out := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		model := strings.TrimSpace(part)
+		if model == "" || model == "all" || model == "none" || len(model) > 255 {
+			return nil, false
+		}
+		out[model] = true
+	}
+	return out, len(out) <= 100
+}
+
+func filterOverviewModels(out *core.AccountsOverview, models map[string]bool) {
+	core.FilterOverviewBillingModels(out, models)
 }
 
 func (a *app) adminOverviewSources(w http.ResponseWriter, r *http.Request, userID uint64) {

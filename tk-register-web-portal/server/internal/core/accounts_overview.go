@@ -34,17 +34,20 @@ type OverviewDay struct {
 	Collected int64  `json:"collected"`
 }
 type AccountsOverview struct {
-	StartDate         string              `json:"start_date"`
-	EndDate           string              `json:"end_date"`
-	EarliestDate      *string             `json:"earliest_date"`
-	Timezone          string              `json:"timezone"`
-	CollectionTime    string              `json:"collection_time"`
-	ExchangeRate      float64             `json:"exchange_rate_cny_per_usd"`
-	LatestAccountData *time.Time          `json:"latest_account_data"`
-	Sources           []OverviewSource    `json:"sources"`
-	Rows              []DailyUsageRowDTO  `json:"rows"`
-	ModelCosts        []OverviewModelCost `json:"model_costs"`
-	Days              []OverviewDay       `json:"days"`
+	SummaryAvailable   *bool               `json:"summary_available,omitempty"`
+	SummaryGeneratedAt *time.Time          `json:"summary_generated_at,omitempty"`
+	SummaryPeriod      string              `json:"summary_period,omitempty"`
+	StartDate          string              `json:"start_date"`
+	EndDate            string              `json:"end_date"`
+	EarliestDate       *string             `json:"earliest_date"`
+	Timezone           string              `json:"timezone"`
+	CollectionTime     string              `json:"collection_time"`
+	ExchangeRate       float64             `json:"exchange_rate_cny_per_usd"`
+	LatestAccountData  *time.Time          `json:"latest_account_data"`
+	Sources            []OverviewSource    `json:"sources"`
+	Rows               []DailyUsageRowDTO  `json:"rows"`
+	ModelCosts         []OverviewModelCost `json:"model_costs"`
+	Days               []OverviewDay       `json:"days"`
 }
 
 func overviewSourceID(id uint64) string {
@@ -74,13 +77,42 @@ type overviewScope struct {
 }
 
 func (s *Store) AccountsOverview(ctx context.Context, viewerID uint64, rawSources, start, end string, allTime bool, now time.Time) (AccountsOverview, error) {
+	return s.readLiveAccountsOverview(ctx, viewerID, rawSources, start, end, allTime, now, false)
+}
+
+// All live aggregates must observe the same successful bill version. Daily
+// collection can replace bill lines between SQL queries; a consistent read
+// prevents source/model/daily totals from being taken from different versions.
+func (s *Store) readLiveAccountsOverview(ctx context.Context, viewerID uint64, rawSources, start, end string, allTime bool, now time.Time, administrative bool) (AccountsOverview, error) {
+	var out AccountsOverview
+	options := &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: s.DB.Dialector.Name() != "sqlite"}
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		scoped := *s
+		scoped.DB = tx
+		var scope overviewScope
+		var err error
+		if administrative {
+			scope, err = scoped.adminOverviewScope(ctx, viewerID, rawSources)
+		} else {
+			scope, err = scoped.personalOverviewScope(ctx, viewerID, rawSources)
+		}
+		if err != nil {
+			return err
+		}
+		out, err = scoped.aggregateAccountsOverview(ctx, scope, start, end, allTime, now)
+		return err
+	}, options)
+	return out, err
+}
+
+func (s *Store) personalOverviewScope(ctx context.Context, viewerID uint64, rawSources string) (overviewScope, error) {
 	visibility, err := s.ResolveVisibility(ctx, viewerID, rawSources)
 	if err != nil {
-		return AccountsOverview{}, err
+		return overviewScope{}, err
 	}
 	sources, err := s.MemberSources(ctx, viewerID)
 	if err != nil {
-		return AccountsOverview{}, err
+		return overviewScope{}, err
 	}
 	selected := map[string]bool{"myself": visibility.Self}
 	for _, id := range visibility.Sources {
@@ -97,7 +129,7 @@ func (s *Store) AccountsOverview(ctx context.Context, viewerID uint64, rawSource
 			Joins("JOIN user_hierarchy h ON h.descendant_user_id = a.user_id AND h.ancestor_user_id = ?", viewerID).
 			Where("a.deleted_at IS NULL AND a.user_id IN (?)", visibility.Owners(s.DB))
 	}
-	return s.aggregateAccountsOverview(ctx, scope, start, end, allTime, now)
+	return scope, nil
 }
 
 func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewScope, start, end string, allTime bool, now time.Time) (AccountsOverview, error) {

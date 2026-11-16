@@ -4,10 +4,10 @@ import { dailyDate, dailyMetrics, dailyMoney, dailyTokens, type DailyMetric } fr
 import { overviewModels, overviewSeries, type OverviewData } from './overview';
 
 export const overviewColors = ['#365f91', '#688bb8', '#9aafca', '#637d83', '#7d7c9c', '#b49978', '#a4bab6', '#b6a5bd'];
-export function OverviewChart({ data, models, metric }: { data: OverviewData; models: string[]; metric: DailyMetric }) {
+export function OverviewChart({ data, models, metric, selectionEmpty = false }: { data: OverviewData; models: string[]; metric: DailyMetric; selectionEmpty?: boolean }) {
   const [active, setActive] = useState<number | null>(null);
   const wrap = useRef<HTMLDivElement>(null), [width, setWidth] = useState(1000);
-  const palette = overviewModels(data), aggregateOnly = !palette.length && !models.length;
+  const palette = overviewModels(data), aggregateOnly = !palette.length && !models.length && !selectionEmpty;
   const hasCollectedData = data.days.some(day => day.collected > 0);
   const chartSeries = aggregateOnly ? [''] : models;
   useLayoutEffect(() => {
@@ -25,7 +25,8 @@ export function OverviewChart({ data, models, metric }: { data: OverviewData; mo
   const number = (value: number) => metric === 'cost_usd' ? dailyMoney(value) : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
   const day = active === null ? null : series[active];
   useEffect(() => setActive(null), [data, metric, models]);
-  if (!models.length && (!aggregateOnly || !hasCollectedData)) return <div className='usage-chart-empty'><h3>{palette.length ? 'Select models to view daily usage' : 'No daily usage available'}</h3><p>{palette.length ? 'Choose one or more models above.' : 'No daily bills have been collected for this period.'}</p></div>;
+  if (data.summary_available === false) return <div className='overview-chart-placeholder' role='img' aria-label='Daily usage chart'><svg viewBox='0 0 1000 310' preserveAspectRatio='none' aria-hidden='true'>{[24, 84.5, 145, 205.5, 266].map(y => <line key={y} className='usage-gridline' x1='0' x2='1000' y1={y} y2={y} />)}</svg></div>;
+  if (!models.length && (!aggregateOnly || !hasCollectedData)) return <div className='usage-chart-empty'><h3>{palette.length || selectionEmpty ? 'Select models to view daily usage' : 'No daily usage available'}</h3><p>{palette.length || selectionEmpty ? 'Choose one or more models above.' : 'No daily bills have been collected for this period.'}</p></div>;
   return <>
     {!!models.length && <div className='daily-legend overview-chart-legend'>{models.map(model => <span key={model}><i style={{ background: color(model) }} />{model}</span>)}</div>}
     <div ref={wrap} className='overview-chart-wrap' onPointerLeave={() => setActive(null)}>
