@@ -28,6 +28,20 @@ func (a *app) expirer() accountExpirer {
 	return supplier.NewClient()
 }
 
+type accountDeletionPasswordChanger interface {
+	ChangePasswordForDeletion(context.Context, string, string, supplier.Target, bool, func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error)
+}
+
+func (a *app) deletionPasswordChanger() accountDeletionPasswordChanger {
+	if a.accountDeletionPasswordChanger != nil {
+		return a.accountDeletionPasswordChanger
+	}
+	if a.supplierClient != nil {
+		return a.supplierClient
+	}
+	return supplier.NewClient()
+}
+
 func accountMutationLeaseKey(account core.SyncedAccount) string {
 	return redisPrefix + "account-auth-json:lease:" + digest(strconv.FormatUint(account.VendorID, 10)+":"+strings.ToLower(strings.TrimSpace(account.Account)))
 }
@@ -56,6 +70,9 @@ func deletionMessage(op core.AccountDeletionOperation) string {
 	case "completed":
 		return "Account deleted. Submission and usage history have been retained."
 	case "awaiting_verification":
+		if op.Mode == core.AccountDeletionPasswordMode {
+			return "The supplier has not confirmed the update. Your account is retained; administrator verification is required before another attempt."
+		}
 		return "Deletion is being confirmed. Your account is retained until the operation completes."
 	case "upstream_confirmed":
 		return "Finishing account deletion. Submission and usage history will be retained."
@@ -243,11 +260,11 @@ func deletionErrorCode(err error) string {
 	var upstream *supplier.Error
 	if errors.As(err, &upstream) {
 		switch upstream.Code {
-		case supplier.CodePlanDatesLocked:
+		case supplier.CodePlanDatesLocked, supplier.CodeDeletionPasswordLocked:
 			return "SUPPLIER_LOCKED"
-		case supplier.CodePlanDatesRejected:
+		case supplier.CodePlanDatesRejected, supplier.CodeDeletionPasswordRejected:
 			return "SUPPLIER_REJECTED"
-		case supplier.CodePlanDatesNotSent:
+		case supplier.CodePlanDatesNotSent, supplier.CodeDeletionPasswordNotSent:
 			return "SUPPLIER_REQUEST_NOT_SENT"
 		case supplier.CodeAccountIdentityChanged:
 			return "ACCOUNT_CHANGED"
@@ -396,9 +413,18 @@ func (a *app) processAccountDeletion(parent context.Context, now time.Time) (pro
 		if !strings.EqualFold(strings.TrimSpace(info.Account), strings.TrimSpace(target.Account)) {
 			return core.ErrAccountIdentityChanged
 		}
-		return a.store.MarkAccountDeletionWriteStarted(check, op.ID, info.RecordID, info.PlanStartTime, info.PlanEndTime, time.Now().UTC())
+		return a.store.MarkAccountDeletionPasswordWriteStarted(check, op.ID, info.RecordID, info.PlanStartTime, info.PlanEndTime, time.Now().UTC())
 	}
-	result, updateErr := a.expirer().ExpireAccount(ctx, username, password, selection, allowWrite, beforeWrite)
+	// Resume pre-upgrade writes using date readback only. Every operation that
+	// has not written yet uses the password strategy, including old pending rows.
+	legacyDateVerification := current.Status == "awaiting_verification" && (current.Mode == "" || current.Mode == "upstream_dates_updated")
+	var result supplier.ExpireResult
+	var updateErr error
+	if legacyDateVerification {
+		result, updateErr = a.expirer().ExpireAccount(ctx, username, password, selection, false, nil)
+	} else {
+		result, updateErr = a.deletionPasswordChanger().ChangePasswordForDeletion(ctx, username, password, selection, allowWrite, beforeWrite)
+	}
 	persist, stop := deletionPersistence()
 	saved, _, readErr := a.store.AccountDeletionTarget(persist, op.ID)
 	stop()
@@ -436,7 +462,17 @@ func (a *app) processAccountDeletion(parent context.Context, now time.Time) (pro
 	mode := "upstream_not_found"
 	recordID := selection.RecordID
 	if result.Found {
-		mode = "upstream_dates_updated"
+		mode = core.AccountDeletionPasswordMode
+		if legacyDateVerification {
+			mode = "upstream_dates_updated"
+		} else if !allowWrite || !result.WriteAttempted || saved.Status != "awaiting_verification" || saved.Mode != core.AccountDeletionPasswordMode {
+			// The supplier never returns the saved plaintext password. Only an
+			// acknowledged PUT in this pass can confirm a password change.
+			if saved.Status == "pending" {
+				return failOperation("SUPPLIER_RESPONSE_INVALID")
+			}
+			return deferUntil(time.Now().UTC().Add(5*time.Minute), "UPSTREAM_UPDATE_NOT_CONFIRMED")
+		}
 		recordID = result.Info.RecordID
 		if err = a.store.CheckAccountDeletionOwnership(ctx, op.ID, recordID); err != nil {
 			if saved.Status == "pending" {
@@ -444,13 +480,7 @@ func (a *app) processAccountDeletion(parent context.Context, now time.Time) (pro
 			}
 			return deferUntil(time.Now().UTC().Add(5*time.Minute), deletionErrorCode(err))
 		}
-		// Already-expired accounts skip PUT. Preserve the configuration read
-		// before removal without creating a fictitious mutation attempt.
-		if saved.Status == "pending" {
-			if err = a.store.DB.WithContext(ctx).Model(&core.AccountDeletionOperation{}).Where("id = ? AND status = ?", op.ID, "pending").Updates(map[string]any{"supplier_record_id": recordID, "original_plan_start_time": result.Info.PlanStartTime, "original_plan_end_time": result.Info.PlanEndTime}).Error; err != nil {
-				return err
-			}
-		}
+
 	}
 	persist, stop = deletionPersistence()
 	defer stop()

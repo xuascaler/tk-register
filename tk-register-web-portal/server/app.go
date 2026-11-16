@@ -42,6 +42,7 @@ type app struct {
 	accountPageCollector               accountPageCollector
 	accountReasonReader                accountReasonReader
 	accountAuthEditor                  accountAuthEditor
+	accountDeletionPasswordChanger     accountDeletionPasswordChanger
 	accountExpirer                     accountExpirer
 	supplierClient                     *supplier.Client
 	accountSyncWake                    chan struct{}

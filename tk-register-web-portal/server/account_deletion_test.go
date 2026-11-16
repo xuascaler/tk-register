@@ -15,14 +15,14 @@ import (
 	"gorm.io/gorm"
 )
 
-type mockAccountExpirer struct {
+type mockDeletionPasswordChanger struct {
 	calls       int
 	writes      int
 	allowWrites []bool
 	run         func(context.Context, supplier.Target, bool, func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error)
 }
 
-func (m *mockAccountExpirer) ExpireAccount(ctx context.Context, u, p string, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
+func (m *mockDeletionPasswordChanger) ChangePasswordForDeletion(ctx context.Context, u, p string, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
 	m.calls++
 	m.allowWrites = append(m.allowWrites, allow)
 	if m.run != nil {
@@ -35,7 +35,7 @@ func (m *mockAccountExpirer) ExpireAccount(ctx context.Context, u, p string, tar
 		}
 		m.writes++
 	}
-	return supplier.ExpireResult{Found: true, Confirmed: true, WriteAttempted: allow, Info: info}, nil
+	return supplier.ExpireResult{Found: true, Confirmed: allow, WriteAttempted: allow, Info: info}, nil
 }
 
 func readDeletionResponse(t *testing.T, body []byte) accountDeletionResponse {
@@ -66,8 +66,8 @@ func beginDeletionTest(t *testing.T, a *app, cookie *http.Cookie, csrf string, r
 
 func TestAccountDeletionOwnerCSRFAndReplay(t *testing.T) {
 	a, owner, cookie, csrf, rows, _ := setupPageSync(t)
-	fake := &mockAccountExpirer{}
-	a.accountExpirer = fake
+	fake := &mockDeletionPasswordChanger{}
+	a.accountDeletionPasswordChanger = fake
 	path := fmt.Sprintf("accounts/%d/delete", rows[0].ID)
 	body := map[string]any{"request_id": "delete-owner-request-0001"}
 	requireStatus(t, request(t, a, "POST", path, body, nil, ""), 401)
@@ -102,7 +102,7 @@ func TestAccountDeletionOwnerCSRFAndReplay(t *testing.T) {
 	if readDeletionResponse(t, w.Body.Bytes()).Status != "completed" {
 		t.Fatal(w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), "2020") || strings.Contains(w.Body.String(), "plan_start") {
+	if strings.Contains(w.Body.String(), "2020") || strings.Contains(w.Body.String(), "plan_start") || strings.Contains(w.Body.String(), "qazwsxedc") {
 		t.Fatal("implementation details leaked into UI response")
 	}
 	requireStatus(t, request(t, a, "GET", fmt.Sprintf("accounts/%d", rows[0].ID), nil, cookie, ""), 404)
@@ -132,19 +132,19 @@ func TestAccountDeletionMissingVersusQueryFailure(t *testing.T) {
 			if scenario == "failed_local" {
 				row = rows[2]
 			}
-			fake := &mockAccountExpirer{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
+			fake := &mockDeletionPasswordChanger{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
 				switch scenario {
 				case "missing":
 					return supplier.ExpireResult{Confirmed: true}, nil
 				case "locked":
-					return supplier.ExpireResult{Found: true}, &supplier.Error{Code: supplier.CodePlanDatesLocked, Message: "PRIVATE_BODY_MUST_NOT_LEAK"}
+					return supplier.ExpireResult{Found: true}, &supplier.Error{Code: supplier.CodeDeletionPasswordLocked, Message: "PRIVATE_BODY_MUST_NOT_LEAK"}
 				case "ambiguous":
 					return supplier.ExpireResult{}, &supplier.Error{Code: supplier.CodeAccountAmbiguous, Message: "PRIVATE_BODY_MUST_NOT_LEAK"}
 				default:
 					return supplier.ExpireResult{}, &supplier.Error{Code: supplier.CodeTimeout, Message: "PRIVATE_BODY_MUST_NOT_LEAK"}
 				}
 			}}
-			a.accountExpirer = fake
+			a.accountDeletionPasswordChanger = fake
 			op := beginDeletionTest(t, a, cookie, csrf, row, "delete-missing-request-0001")
 			if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err != nil {
 				t.Fatal(err)
@@ -173,7 +173,7 @@ func TestAccountDeletionMissingVersusQueryFailure(t *testing.T) {
 
 func TestAccountDeletionTimeoutResumesReadsOnly(t *testing.T) {
 	a, _, cookie, csrf, rows, _ := setupPageSync(t)
-	fake := &mockAccountExpirer{}
+	fake := &mockDeletionPasswordChanger{}
 	fake.run = func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
 		info := supplier.ExpireInfo{RecordID: "450001", Account: target.Account, Plan: "claude/cc-max-20x", PlanStartTime: "2026-11-01", PlanEndTime: "2026-12-01"}
 		if allow {
@@ -181,11 +181,11 @@ func TestAccountDeletionTimeoutResumesReadsOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			fake.writes++
-			return supplier.ExpireResult{Found: true, WriteAttempted: true, Info: info}, &supplier.Error{Code: supplier.CodePlanDatesUnconfirmed, Message: "private socket payload"}
+			return supplier.ExpireResult{Found: true, WriteAttempted: true, Info: info}, &supplier.Error{Code: supplier.CodeDeletionPasswordUnconfirmed, Message: "private socket payload"}
 		}
 		return supplier.ExpireResult{Found: true, Confirmed: true, Info: info}, nil
 	}
-	a.accountExpirer = fake
+	a.accountDeletionPasswordChanger = fake
 	op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-timeout-request-0001")
 	if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
@@ -204,17 +204,32 @@ func TestAccountDeletionTimeoutResumesReadsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.store.DB.First(&op, op.ID)
-	if op.Status != "completed" || fake.writes != 1 || len(fake.allowWrites) != 2 || fake.allowWrites[1] {
+	if op.Status != "awaiting_verification" || op.Mode != core.AccountDeletionPasswordMode || fake.writes != 1 || len(fake.allowWrites) != 2 || fake.allowWrites[1] {
 		t.Fatal("uncertain PUT was replayed", op.Status, fake.allowWrites)
+	}
+	a.store.DB.First(&row, rows[0].ID)
+	if row.DeletedAt != nil || !strings.Contains(deletionMessage(op), "administrator verification") {
+		t.Fatal("uncertain password change was hidden or falsely confirmed")
+	}
+	// A later complete lookup can still establish absence, without another PUT.
+	fake.run = func(context.Context, supplier.Target, bool, func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
+		return supplier.ExpireResult{Confirmed: true}, nil
+	}
+	if err := a.processAccountDeletion(context.Background(), time.Now().Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	a.store.DB.First(&op, op.ID)
+	if op.Status != "completed" || op.Mode != "upstream_not_found" || fake.writes != 1 || fake.allowWrites[2] {
+		t.Fatal("confirmed absence did not complete safely", op.Status, op.Mode)
 	}
 }
 
 func TestAccountDeletionSharedLeaseAndSupplierCooldown(t *testing.T) {
 	a, _, cookie, csrf, rows, _ := setupPageSync(t)
-	fake := &mockAccountExpirer{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
+	fake := &mockDeletionPasswordChanger{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
 		return supplier.ExpireResult{}, &supplier.Error{Code: supplier.CodeRateLimited, RetryAfterSeconds: 80, RetryAt: time.Now().UTC().Add(80 * time.Second), Deferred: true}
 	}}
-	a.accountExpirer = fake
+	a.accountDeletionPasswordChanger = fake
 	op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-cooldown-request-0001")
 	a.redis.Set(context.Background(), accountSyncLeaseKey, "another-sync", time.Minute)
 	if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err != nil {
@@ -244,14 +259,14 @@ func TestAccountDeletionSharedLeaseAndSupplierCooldown(t *testing.T) {
 
 func TestAccountDeletionExplicitRejectionAndManualRetry(t *testing.T) {
 	a, _, cookie, csrf, rows, _ := setupPageSync(t)
-	fake := &mockAccountExpirer{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
+	fake := &mockDeletionPasswordChanger{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
 		info := supplier.ExpireInfo{RecordID: "450001", Account: target.Account, PlanStartTime: "2026-11-01", PlanEndTime: "2026-12-01"}
 		if err := before(ctx, info); err != nil {
 			t.Fatal(err)
 		}
-		return supplier.ExpireResult{Found: true, WriteAttempted: true, Info: info}, &supplier.Error{Code: supplier.CodePlanDatesRejected}
+		return supplier.ExpireResult{Found: true, WriteAttempted: true, Info: info}, &supplier.Error{Code: supplier.CodeDeletionPasswordRejected}
 	}}
-	a.accountExpirer = fake
+	a.accountDeletionPasswordChanger = fake
 	op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-rejected-request-0001")
 	if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
@@ -259,6 +274,17 @@ func TestAccountDeletionExplicitRejectionAndManualRetry(t *testing.T) {
 	a.store.DB.First(&op, op.ID)
 	if op.Status != "failed" {
 		t.Fatal("explicit rejection stayed busy", op.Status)
+	}
+	var retained core.SyncedAccount
+	if err := a.store.DB.First(&retained, rows[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var archived int64
+	if err := a.store.DB.Model(&core.DeletedAccount{}).Where("account_id = ?", rows[0].ID).Count(&archived).Error; err != nil {
+		t.Fatal(err)
+	}
+	if retained.DeletedAt != nil || retained.DeletionStatus != "" || archived != 0 {
+		t.Fatal("rejected password change removed or archived the account")
 	}
 	w := request(t, a, "POST", fmt.Sprintf("accounts/%d/delete", rows[0].ID), map[string]any{"request_id": "delete-rejected-request-0001"}, cookie, csrf)
 	requireStatus(t, w, 200)
@@ -273,8 +299,8 @@ func TestAccountDeletionExplicitRejectionAndManualRetry(t *testing.T) {
 
 func TestAccountDeletionPersistenceFailureDoesNotRepeatSupplierWrite(t *testing.T) {
 	a, _, cookie, csrf, rows, _ := setupPageSync(t)
-	fake := &mockAccountExpirer{}
-	a.accountExpirer = fake
+	fake := &mockDeletionPasswordChanger{}
+	a.accountDeletionPasswordChanger = fake
 	op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-persist-request-0001")
 	if err := a.store.DB.Callback().Create().Before("gorm:create").Register("fail-delete-archive-once", func(tx *gorm.DB) {
 		if tx.Statement.Table == "deleted_account" {
@@ -313,14 +339,14 @@ func TestAccountDeletionPersistenceFailureDoesNotRepeatSupplierWrite(t *testing.
 
 func TestAccountDeletionUnsentWriteAllowsExplicitRetry(t *testing.T) {
 	a, _, cookie, csrf, rows, _ := setupPageSync(t)
-	fake := &mockAccountExpirer{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
+	fake := &mockDeletionPasswordChanger{run: func(ctx context.Context, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
 		info := supplier.ExpireInfo{RecordID: "450001", Account: target.Account, PlanStartTime: "2026-11-01", PlanEndTime: "2026-12-01"}
 		if err := before(ctx, info); err != nil {
 			t.Fatal(err)
 		}
-		return supplier.ExpireResult{Found: true, Info: info}, &supplier.Error{Code: supplier.CodePlanDatesNotSent, RequestNotSent: true}
+		return supplier.ExpireResult{Found: true, Info: info}, &supplier.Error{Code: supplier.CodeDeletionPasswordNotSent, RequestNotSent: true}
 	}}
-	a.accountExpirer = fake
+	a.accountDeletionPasswordChanger = fake
 	op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-unsent-request-0001")
 	if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
@@ -340,5 +366,88 @@ func TestAccountDeletionUnsentWriteAllowsExplicitRetry(t *testing.T) {
 	op2 := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-unsent-request-0002")
 	if op.ID == op2.ID {
 		t.Fatal("explicit retry reused failed operation")
+	}
+}
+
+// Legacy in-flight operations may verify their original date write after an
+// upgrade, but must never send either another date write or a password write.
+type legacyDeletionVerifier struct{ calls int }
+
+func (m *legacyDeletionVerifier) ExpireAccount(ctx context.Context, u, p string, target supplier.Target, allow bool, before func(context.Context, supplier.ExpireInfo) error) (supplier.ExpireResult, error) {
+	m.calls++
+	if allow || before != nil {
+		return supplier.ExpireResult{}, errors.New("legacy verifier may only read")
+	}
+	return supplier.ExpireResult{Found: true, Confirmed: true, Info: supplier.ExpireInfo{RecordID: "450001", Account: target.Account, PlanStartTime: "2020-01-01", PlanEndTime: "2020-01-01"}}, nil
+}
+
+func TestAccountDeletionLegacyAwaitingOnlyVerifiesDates(t *testing.T) {
+	for _, mode := range []string{"", "upstream_dates_updated"} {
+		t.Run("mode_"+mode, func(t *testing.T) {
+			a, _, cookie, csrf, rows, _ := setupPageSync(t)
+			password := &mockDeletionPasswordChanger{}
+			legacy := &legacyDeletionVerifier{}
+			a.accountDeletionPasswordChanger, a.accountExpirer = password, legacy
+			op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-old-awaiting-0001")
+			if err := a.store.MarkAccountDeletionWriteStarted(context.Background(), op.ID, "450001", "2026-11-01", "2026-12-01", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.store.DB.Model(&op).Update("mode", mode).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			a.store.DB.First(&op, op.ID)
+			if op.Status != "completed" || op.Mode != "upstream_dates_updated" || legacy.calls != 1 || password.calls != 0 {
+				t.Fatal("legacy operation changed strategy or wrote again", op.Status, op.Mode, legacy.calls, password.calls)
+			}
+		})
+	}
+}
+
+func TestAccountDeletionLegacyPendingUsesPassword(t *testing.T) {
+	a, _, cookie, csrf, rows, _ := setupPageSync(t)
+	password, legacy := &mockDeletionPasswordChanger{}, &legacyDeletionVerifier{}
+	a.accountDeletionPasswordChanger, a.accountExpirer = password, legacy
+	op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-old-pending-0001")
+	if err := a.store.DB.Model(&op).Update("mode", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	a.store.DB.First(&op, op.ID)
+	if op.Status != "completed" || op.Mode != core.AccountDeletionPasswordMode || password.writes != 1 || legacy.calls != 0 {
+		t.Fatal("old pending row did not use new password strategy", op.Status, op.Mode)
+	}
+}
+
+func TestAccountDeletionLostConfirmationDoesNotReplayPasswordWrite(t *testing.T) {
+	a, _, cookie, csrf, rows, _ := setupPageSync(t)
+	fake := &mockDeletionPasswordChanger{}
+	a.accountDeletionPasswordChanger = fake
+	op := beginDeletionTest(t, a, cookie, csrf, rows[0], "delete-lost-confirm-0001")
+	if err := a.store.DB.Callback().Update().Before("gorm:update").Register("fail-password-confirm-once", func(tx *gorm.DB) {
+		if tx.Statement.Table == "account_deletion_operations" {
+			if values, ok := tx.Statement.Dest.(map[string]any); ok && values["status"] == "upstream_confirmed" {
+				tx.AddError(errors.New("simulated confirmation persistence failure"))
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Second)); err == nil {
+		t.Fatal("expected failed confirmation persistence")
+	}
+	a.store.DB.Callback().Update().Remove("fail-password-confirm-once")
+	if err := a.processAccountDeletion(context.Background(), time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	a.store.DB.First(&op, op.ID)
+	var row core.SyncedAccount
+	a.store.DB.First(&row, rows[0].ID)
+	if op.Status != "awaiting_verification" || fake.writes != 1 || len(fake.allowWrites) != 2 || fake.allowWrites[1] || row.DeletedAt != nil {
+		t.Fatal("lost ACK resulted in an unsafe replay or removal", op.Status, fake.allowWrites)
 	}
 }

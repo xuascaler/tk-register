@@ -334,6 +334,10 @@ func requestNotSent(err *Error) *Error {
 // updateRequest deliberately has no retry, even for expired authentication.
 // Failures that could occur after receipt are reported as unconfirmed.
 func (s *session) updateRequest(ctx context.Context, id string, payload map[string]any) error {
+	return s.updateRequestWithAcknowledgement(ctx, id, payload, false)
+}
+
+func (s *session) updateRequestWithAcknowledgement(ctx context.Context, id string, payload map[string]any, requirePositiveACK bool) error {
 	if ctx.Err() != nil {
 		return requestNotSent(safeError(CodeUnavailable))
 	}
@@ -392,6 +396,16 @@ func (s *session) updateRequest(ctx context.Context, id string, payload map[stri
 	if common.Unmarshal(body, &result) != nil || result == nil {
 		return authError(CodeUpdateUnconfirmed)
 	}
+	if requirePositiveACK {
+		if err := positiveUpdateAcknowledgement(result); err != nil {
+			return err
+		}
+		// An accepted/queued request is not evidence that the password changed.
+		if response.StatusCode == http.StatusAccepted {
+			return authError(CodeUpdateUnconfirmed)
+		}
+		return nil
+	}
 	for _, key := range []string{"success", "ok"} {
 		if raw, exists := result[key]; exists {
 			var success bool
@@ -414,5 +428,80 @@ func (s *session) updateRequest(ctx context.Context, id string, payload map[stri
 	}
 	// The supplier website itself treats a successful HTTP JSON response as the
 	// saved acknowledgement. This does not assert that the account can log in.
+	return nil
+}
+
+// positiveUpdateAcknowledgement requires explicit completion evidence for
+// destructive local actions. Negative markers dominate contradictory success
+// markers; unfamiliar statuses cannot be promoted to a completed update.
+func positiveUpdateAcknowledgement(result map[string]json.RawMessage) error {
+	acknowledged, rejected, unknown := false, false, false
+	for _, key := range []string{"success", "ok"} {
+		if raw, exists := result[key]; exists {
+			var success bool
+			if string(raw) == "null" || common.Unmarshal(raw, &success) != nil {
+				unknown = true
+			} else if success {
+				acknowledged = true
+			} else {
+				rejected = true
+			}
+		}
+	}
+	if raw, exists := result["error"]; exists && string(raw) != "null" && string(raw) != `""` {
+		rejected = true
+	}
+	if raw, exists := result["code"]; exists {
+		code, err := numericText(raw)
+		switch {
+		case err != nil || code == "" || code == "202":
+			unknown = true
+		case code == "0" || code == "200":
+			acknowledged = true
+		default:
+			rejected = true
+		}
+	}
+	if raw, exists := result["status"]; exists {
+		var status string
+		if common.Unmarshal(raw, &status) != nil {
+			unknown = true
+		} else {
+			switch strings.ToLower(strings.TrimSpace(status)) {
+			case "success", "succeeded", "ok":
+				acknowledged = true
+			case "error", "failed", "failure", "fail", "rejected", "denied":
+				rejected = true
+			default:
+				unknown = true
+			}
+		}
+	}
+	for _, key := range []string{"msg", "message"} {
+		if raw, exists := result[key]; exists {
+			var message string
+			if common.Unmarshal(raw, &message) != nil {
+				unknown = true
+				continue
+			}
+			message = strings.ToLower(strings.TrimSpace(message))
+			switch message {
+			case "修改成功", "更新成功", "success", "ok":
+				acknowledged = true
+			}
+			for _, prefix := range []string{"修改失败", "更新失败", "操作失败", "error", "failed", "failure", "rejected", "denied", "unsuccessful"} {
+				if strings.HasPrefix(message, prefix) {
+					rejected = true
+					break
+				}
+			}
+		}
+	}
+	if rejected {
+		return authError(CodeUpdateRejected)
+	}
+	if unknown || !acknowledged {
+		return authError(CodeUpdateUnconfirmed)
+	}
 	return nil
 }

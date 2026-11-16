@@ -35,7 +35,7 @@ func TestAccountDeletionArchivesOnceAndBlocksResurrection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.Status != "pending" || op.AccountID != target.ID {
+	if op.Status != "pending" || op.AccountID != target.ID || op.Mode != AccountDeletionPasswordMode {
 		t.Fatal(op)
 	}
 	if _, err = s.BeginAuthJSONUpdate(ctx, target, owner.ID, "during-delete"); !errors.Is(err, ErrAccountIdentityChanged) {
@@ -54,13 +54,18 @@ func TestAccountDeletionArchivesOnceAndBlocksResurrection(t *testing.T) {
 	if err != nil || again.ID != op.ID {
 		t.Fatal("duplicate click created an operation", again, err)
 	}
-	if err = s.MarkAccountDeletionWriteStarted(ctx, op.ID, "301", "2026-11-01", "2026-12-01", now); err != nil {
+	if err = s.MarkAccountDeletionPasswordWriteStarted(ctx, op.ID, "301", "2026-11-01", "2026-12-01", now); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.FailAccountDeletion(ctx, op.ID, "TIMEOUT", now); !errors.Is(err, ErrAccountIdentityChanged) {
 		t.Fatal("uncertain write cleared deletion", err)
 	}
-	if err = s.ConfirmAccountDeletion(ctx, op.ID, "upstream_dates_updated", "301", now); err != nil {
+	var pending AccountDeletionOperation
+	s.DB.First(&pending, op.ID)
+	if pending.Mode != AccountDeletionPasswordMode || pending.Status != "awaiting_verification" {
+		t.Fatal("password intent was not persisted before write", pending)
+	}
+	if err = s.ConfirmAccountDeletion(ctx, op.ID, AccountDeletionPasswordMode, "301", now); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -85,7 +90,7 @@ func TestAccountDeletionArchivesOnceAndBlocksResurrection(t *testing.T) {
 	if err = s.DB.Find(&archives).Error; err != nil || len(archives) != 1 {
 		t.Fatal(archives, err)
 	}
-	if archives[0].OwnerUserID != owner.ID || archives[0].DeletionMode != "upstream_dates_updated" || !strings.Contains(archives[0].SnapshotJSON, "2026-12-01") || !strings.Contains(archives[0].SnapshotJSON, "12.3") {
+	if archives[0].OwnerUserID != owner.ID || archives[0].DeletionMode != AccountDeletionPasswordMode || !strings.Contains(archives[0].SnapshotJSON, "2026-12-01") || !strings.Contains(archives[0].SnapshotJSON, "12.3") {
 		t.Fatal("archive missing original metadata", archives[0])
 	}
 	var saved Submission
@@ -274,5 +279,23 @@ func TestAccountDeletionCutoffIncludesBackdatedImportedSubmissions(t *testing.T)
 		if err != nil || page.Total != 0 {
 			t.Fatal("backdated accepted submission resurrected deleted account", page, err)
 		}
+	}
+}
+
+func TestPasswordDeletionRequiresRecordedWrite(t *testing.T) {
+	s, owner, target := authAuditFixture(t)
+	ctx, now := context.Background(), time.Now().UTC()
+	op, _, err := s.BeginAccountDeletion(ctx, target.ID, owner.ID, false, "password-write-required", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ConfirmAccountDeletion(ctx, op.ID, AccountDeletionPasswordMode, "301", now); !errors.Is(err, ErrAccountDeletionUnconfirmed) {
+		t.Fatal("confirmed password change without persisted write", err)
+	}
+	if err = s.MarkAccountDeletionPasswordWriteStarted(ctx, op.ID, "301", "2026-11-01", "2026-12-01", now); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ConfirmAccountDeletion(ctx, op.ID, AccountDeletionPasswordMode, "302", now); !errors.Is(err, ErrAccountDeletionUnconfirmed) {
+		t.Fatal("confirmed a different supplier record", err)
 	}
 }

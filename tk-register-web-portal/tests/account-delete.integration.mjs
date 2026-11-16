@@ -20,7 +20,7 @@ try {
   const deletionRequestIDs = [];
   page.on('pageerror', error => errors.push(error.message));
   function account(id, status = 'active') {
-    return { id, account: `account${id}@example.com`, user_id: '7', user_email: 'owner@example.com', plan: 'claude/cc-max-5x', vendor_id: '1', vendor_name: 'TK Register 0', current_submission_id: id === '3' ? null : id, latest_submission_id: id, submission_status: id === '3' ? 'failed' : 'accepted', remote_id: id === '3' ? null : `37${id}`, platform_account_id: null, last_success_at: '2026-11-04T00:00:00Z', last_attempt_at: null, last_error: '', snapshot: id === '3' ? null : { id, account_id: id, collected_at: '2026-11-04T00:00:00Z', account_status: status, cost_total_usd: 24.25, input_tokens_total: 100, output_tokens_total: 100, usage_5h_percent: 7, usage_7d_percent: 14 } };
+    return { id, account: `account${id}@example.com`, can_manage: true, user_id: '7', user_email: 'owner@example.com', plan: 'claude/cc-max-5x', vendor_id: '1', vendor_name: 'TK Register 0', current_submission_id: id === '3' ? null : id, latest_submission_id: id, submission_status: id === '3' ? 'failed' : 'accepted', remote_id: id === '3' ? null : `37${id}`, platform_account_id: null, last_success_at: '2026-11-04T00:00:00Z', last_attempt_at: null, last_error: '', snapshot: id === '3' ? null : { id, account_id: id, collected_at: '2026-11-04T00:00:00Z', account_status: status, cost_total_usd: 24.25, input_tokens_total: 100, output_tokens_total: 100, usage_5h_percent: 7, usage_7d_percent: 14 } };
   }
   let records = [account('1'), account('2', 'sync_failed'), account('3')];
   await page.route('**/tk-register/api/**', async route => {
@@ -29,6 +29,7 @@ try {
     const ok = (data, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
     if (path === '/auth/status') return ok({ registration_enabled: true, password_login_enabled: true, email_code_login_enabled: true });
     if (path === '/auth/me') return ok({ user: { id: 1, email: 'admin@example.com', role: 'admin' }, csrf_token: 'fixture-csrf' });
+    if (path === '/members/sources' || path === '/admin/accounts/overview/sources') return ok({ sources: [{ id: 'myself', label: 'myself' }] });
     if (path === '/vendors') return ok({ vendors: [] });
     if (path === '/accounts' || path === '/admin/synced-accounts') {
       const filtered = records.filter(row => !url.searchParams.get('status') || row.snapshot?.account_status === url.searchParams.get('status'));
@@ -56,15 +57,16 @@ try {
       op.reads++;
       if (op.fail) { op.status = 'failed'; records = records.map(row => row.id === id ? { ...row, deletion_status: 'failed' } : row); return ok({ operation_id: op.operation_id, status: 'failed', message: 'The account was retained. Please try again later.' }); }
       if (!hold && (id === '2' || op.reads > 1)) { op.status = 'completed'; records = records.filter(row => row.id !== id); }
+      if (hold) return ok({ operation_id: op.operation_id, status: 'awaiting_verification', retry_after_seconds: 300, message: 'The supplier has not confirmed the update. Your account is retained; administrator verification is required before another attempt.' });
       return ok({ operation_id: op.operation_id, status: op.status });
     }
     throw new Error(`Unexpected request ${req.method()} ${path}`);
   });
   await mkdir('test-results', { recursive: true });
-  await page.goto(`http://127.0.0.1:${port}/tk-register/#/account-pool/accounts`);
+  await page.goto(`http://127.0.0.1:${port}/tk-register/#/account-pool/accounts?tab=list`);
   await page.getByRole('button', { name: 'account2@example.com', exact: true }).waitFor();
-  assert.equal(await page.getByText('Upstream sync failed', { exact: true }).count(), 1);
-  assert.equal(await page.locator('.usage-status.negative').textContent(), 'Upstream sync failed');
+  assert.equal(await page.getByText('Sync error', { exact: true }).count(), 1);
+  assert.equal(await page.locator('.usage-status.negative').textContent(), 'Sync error');
   assert.equal(await page.locator('.usage-accounts-table th').last().textContent(), 'Actions');
   assert.equal(calls.filter(call => call.method === 'POST').length, 0);
   for (const width of [1440, 1024, 390, 320]) {
@@ -74,7 +76,7 @@ try {
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('combobox', { name: 'Account status' }).click();
-  await page.getByRole('option', { name: 'Upstream sync failed', exact: true }).click();
+  await page.getByRole('option', { name: 'Sync error', exact: true }).click();
   await page.getByText('1 account · Page 1 of 1', { exact: true }).waitFor();
   assert.ok(calls.some(call => call.query.includes('status=sync_failed')));
   await page.getByRole('combobox', { name: 'Account status' }).click();
@@ -115,7 +117,8 @@ try {
   hold = true;
   await page.getByRole('button', { name: 'Delete account1@example.com', exact: true }).click();
   await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-  await dialog.getByText(/processing will continue/).waitFor();
+  await dialog.getByText(/administrator verification is required/).waitFor();
+  assert.doesNotMatch(await dialog.textContent(), /qazwsxedc|2020-01-01/);
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('button', { name: 'View progress', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Sync account1@example.com', exact: true }).isDisabled(), true);

@@ -11,6 +11,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const AccountDeletionPasswordMode = "upstream_password_updated"
+
 var (
 	ErrAccountDeleting            = errors.New("account deletion is in progress")
 	ErrAccountDeletionUnconfirmed = errors.New("the account has an unconfirmed submission")
@@ -153,7 +155,7 @@ func (s *Store) BeginAccountDeletion(ctx context.Context, accountID, actorID uin
 		if err := tx.Model(&Submission{}).Select("COALESCE(MAX(id),0)").Where("user_id = ? AND vendor_id = ? AND LOWER(TRIM(account)) = ?", account.UserID, account.VendorID, NormalizeEmail(account.Account)).Scan(&cutoff).Error; err != nil {
 			return err
 		}
-		op = AccountDeletionOperation{RequestID: requestID, AccountID: account.ID, IdentityKey: account.IdentityKey, OwnerID: account.UserID, ActorID: actorID, VendorID: account.VendorID, ThroughSubmissionID: cutoff, Status: "pending", NextRunAt: at.UTC()}
+		op = AccountDeletionOperation{RequestID: requestID, AccountID: account.ID, IdentityKey: account.IdentityKey, OwnerID: account.UserID, ActorID: actorID, VendorID: account.VendorID, ThroughSubmissionID: cutoff, Status: "pending", Mode: AccountDeletionPasswordMode, NextRunAt: at.UTC()}
 		if err := tx.Create(&op).Error; err != nil {
 			return err
 		}
@@ -257,7 +259,16 @@ func safeDeletionCode(code string) bool {
 	return true
 }
 
+// MarkAccountDeletionWriteStarted is retained for legacy date-update operations.
 func (s *Store) MarkAccountDeletionWriteStarted(ctx context.Context, id uint64, recordID, beforeStart, beforeEnd string, at time.Time) error {
+	return s.markAccountDeletionWriteStarted(ctx, id, recordID, beforeStart, beforeEnd, "upstream_dates_updated", at)
+}
+
+func (s *Store) MarkAccountDeletionPasswordWriteStarted(ctx context.Context, id uint64, recordID, beforeStart, beforeEnd string, at time.Time) error {
+	return s.markAccountDeletionWriteStarted(ctx, id, recordID, beforeStart, beforeEnd, AccountDeletionPasswordMode, at)
+}
+
+func (s *Store) markAccountDeletionWriteStarted(ctx context.Context, id uint64, recordID, beforeStart, beforeEnd, mode string, at time.Time) error {
 	if !validSupplierRecordID(recordID) || len(beforeStart) > 10 || len(beforeEnd) > 10 || at.IsZero() {
 		return validationErrorf("invalid deletion update")
 	}
@@ -276,7 +287,7 @@ func (s *Store) MarkAccountDeletionWriteStarted(ctx context.Context, id uint64, 
 		if err := checkAuthJSONOwnership(tx, account); err != nil {
 			return err
 		}
-		if err := tx.Model(&op).Updates(map[string]any{"status": "awaiting_verification", "supplier_record_id": recordID, "original_plan_start_time": beforeStart, "original_plan_end_time": beforeEnd, "next_run_at": at.UTC(), "error_code": ""}).Error; err != nil {
+		if err := tx.Model(&op).Updates(map[string]any{"status": "awaiting_verification", "mode": mode, "supplier_record_id": recordID, "original_plan_start_time": beforeStart, "original_plan_end_time": beforeEnd, "next_run_at": at.UTC(), "error_code": ""}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&account).Update("deletion_status", "awaiting_verification").Error
@@ -284,7 +295,7 @@ func (s *Store) MarkAccountDeletionWriteStarted(ctx context.Context, id uint64, 
 }
 
 func (s *Store) ConfirmAccountDeletion(ctx context.Context, id uint64, mode, recordID string, at time.Time) error {
-	if at.IsZero() || (mode != "local_only" && mode != "upstream_not_found" && mode != "upstream_dates_updated") || recordID != "" && !validSupplierRecordID(recordID) {
+	if at.IsZero() || (mode != "local_only" && mode != "upstream_not_found" && mode != "upstream_dates_updated" && mode != AccountDeletionPasswordMode) || recordID != "" && !validSupplierRecordID(recordID) {
 		return validationErrorf("invalid deletion confirmation")
 	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -304,8 +315,11 @@ func (s *Store) ConfirmAccountDeletion(ctx context.Context, id uint64, mode, rec
 		if mode != "local_only" && account.CurrentSubmissionID == nil {
 			return ErrAccountDeletionUnconfirmed
 		}
-		if mode == "upstream_dates_updated" && !validSupplierRecordID(recordID) {
+		if (mode == "upstream_dates_updated" || mode == AccountDeletionPasswordMode) && !validSupplierRecordID(recordID) {
 			return validationErrorf("missing supplier account ID")
+		}
+		if mode == AccountDeletionPasswordMode && (op.Status != "awaiting_verification" || op.Mode != AccountDeletionPasswordMode || op.SupplierRecordID != recordID) {
+			return ErrAccountDeletionUnconfirmed
 		}
 		if err := tx.Model(&op).Updates(map[string]any{"status": "upstream_confirmed", "mode": mode, "supplier_record_id": recordID, "next_run_at": at.UTC(), "error_code": ""}).Error; err != nil {
 			return err
@@ -315,7 +329,8 @@ func (s *Store) ConfirmAccountDeletion(ctx context.Context, id uint64, mode, rec
 }
 
 // FailAccountDeletion is valid only before any remote write. For an uncertain
-// write, the caller must first obtain a fresh vendor read and use Resolve below.
+// write, only definitive evidence permits resolving the operation as not applied.
+// A masked password or unchanged dates are not such evidence.
 func (s *Store) FailAccountDeletion(ctx context.Context, id uint64, code string, at time.Time) error {
 	return s.failAccountDeletion(ctx, id, code, at, false)
 }

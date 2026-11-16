@@ -12,7 +12,8 @@ An account with an unfinished or uncertain submission cannot be deleted as a fai
 
 For an accepted account, the worker reads the supplier's current account configuration and checks the exact account identifier and saved supplier record ID. It never substitutes a different supplier record solely because its email matches.
 
-- If the account exists, set only `plan_start_time` and `plan_end_time` to `2020-01-01`, preserving the other supplier metadata and existing credentials. Read the result back before completing local deletion. An account whose dates already match does not need another write.
+- If the account exists, replace its supplier-stored password with the fixed deletion password through the supplier’s encrypted password field. Preserve both plan dates, Auth JSON and all other account metadata. A recognized successful supplier update acknowledgement is required before local removal; an HTTP 200 response alone is insufficient. A rejected password change fails deletion, retains the account, and does not create a `deleted_account` archive. An ambiguous response also retains the account pending verification. Existing expired dates do not skip this password update. Supplier locks still apply; Auth JSON editing eligibility does not control a password-only update.
+- This updates the password stored on the supplier platform. It does not guarantee that the original provider password changes, that an existing Auth JSON session is revoked, or that supplier status immediately becomes offline.
 - If a successful, complete lookup confirms the account is absent, skip the supplier update and complete local deletion.
 - A timeout, malformed response, permission error, ambiguous match or incomplete lookup is not evidence that the account is absent.
 
@@ -25,14 +26,16 @@ The supplier request uses the existing configured website credentials, cached lo
 | State | Meaning |
 | --- | --- |
 | `pending` | The operation is saved; no supplier write has started. |
-| `awaiting_verification` | Persisted immediately before the write. Its outcome must be verified by reading the supplier. |
+| `awaiting_verification` | Persisted immediately before the write, including its operation mode. An uncertain password update retains the account pending administrator verification. |
 | `upstream_confirmed` | The supplier condition is confirmed; only the local archive transaction remains. |
 | `completed` | Archive and local removal committed together. |
 | `failed` | A definite failure retained the account and released its deletion state. |
 
-After `awaiting_verification`, a restart or uncertain result permits **read-only verification**, not automatic replay of the PUT. Seeing the old dates after a timeout does not prove a delayed write will never arrive, so the account remains pending. A definite vendor refusal, or a transport failure proven to occur before sending the request, can finish as `failed`; the server still does not automatically repeat the write.
+After `awaiting_verification`, a restart or uncertain result permits **read-only verification**, not automatic replay of the PUT. The supplier does not return plaintext passwords. Masked passwords, dates and status cannot confirm a password change after a lost acknowledgement; the account remains pending for administrator verification. A later complete lookup confirming absence can still complete local removal. A definite vendor refusal, or a transport failure proven to occur before sending the request, can finish as `failed`; the server still does not automatically repeat the write.
 
 Busy leases delay the operation by approximately five seconds. Supplier login or lookup rate limits use the returned retry deadline. Uncertain supplier failures and transient local persistence failures defer the saved operation rather than losing it. Once `upstream_confirmed`, a local database failure retries only the local transaction.
+
+New operations store `upstream_password_updated` in the existing `mode` field. Pre-upgrade pending operations adopt this strategy before writing. Pre-upgrade operations already awaiting a date-update result only verify their original date write without sending a new password or date update. Already completed deletions are not changed retroactively. No database columns or tables are added.
 
 ## Archive and retained history
 
