@@ -6,7 +6,7 @@ personal account list. Both tabs share the current Source selection.
 Administrators also have Overview and Account list tabs under Account pool →
 Accounts. The administrative Overview uses a separate Source selection and shows
 all system users. The existing administrative list retains its search, status
-filter, pagination, Sync, and Del actions.
+filter, pagination, and Sync action. Account deletion is not exposed in the frontend.
 
 Personal and administrative Overview default to All time in Asia/Shanghai.
 Source and model filters initially select all entries. Date shortcuts include

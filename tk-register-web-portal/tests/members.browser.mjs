@@ -10,7 +10,7 @@ try {
  await page.goto(base+'/__test/login');await expect(page.getByRole('heading',{name:'Accounts',exact:true})).toBeVisible();await page.getByRole('tab',{name:'Account list',exact:true}).click();
  await expect(page.locator('tbody tr')).toHaveCount(4);
  await expect(page.getByRole('button',{name:'Delete oliver.lin@example.com',exact:true})).toHaveCount(0);
- await expect(page.getByRole('button',{name:'Delete liam.wu@example.com',exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Delete liam.wu@example.com',exact:true})).toHaveCount(0);
  await page.locator('#account-source').click();
  const menu=page.getByRole('dialog',{name:'Source'});await expect(menu).toBeVisible();await expect(menu.getByRole('checkbox')).toHaveCount(4);await expect(menu.getByRole('checkbox',{name:'Select all',exact:true})).toBeFocused();
  await expect(menu.getByRole('checkbox',{name:'myself',exact:true})).toBeChecked();

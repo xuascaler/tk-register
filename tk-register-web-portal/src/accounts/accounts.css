@@ -15,11 +15,6 @@
 .workspace .usage-sync-button { width: 78px; min-width: 78px; height: 36px; min-height: 36px; padding: 0 8px; gap: 6px; font-size: 12px; border-radius: 7px; color: var(--navy); background: #edf4fc; border-color: #d0e0f3; }
 .workspace .usage-sync-button:hover:not(:disabled) { background: #e3eefc; border-color: #9dbbe0; }
 .workspace .usage-sync-button svg { width: 14px; height: 14px; }
-.usage-row-actions { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-.workspace .usage-delete-button { width: 66px; min-width: 66px; height: 36px; min-height: 36px; padding: 0 8px; gap: 6px; font-size: 12px; border-radius: 7px; }
-.workspace .usage-delete-button svg { width: 14px; height: 14px; }
-.usage-deletion-feedback { margin-top: 6px; }
-.usage-deletion-progress-link { display: inline; border: 0; background: none; padding: 0; color: #50749d; font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
 .usage-sync-cooldown { display: block; color: var(--muted); font-size: 11px; margin-top: 6px; }
 .usage-list-shell { border: 1px solid var(--border); border-radius: 10px; }
 .usage-table-scroll { overflow-x: auto; border-radius: 10px 10px 0 0; }
@@ -31,9 +26,10 @@
 .usage-accounts-table th:nth-child(4) { width: 120px; }
 .usage-accounts-table th:nth-child(5) { width: 125px; }
 .usage-accounts-table th:nth-child(6) { width: 130px; }
-.usage-accounts-table th:last-child { width: 114px; border-top-right-radius: 10px; }
+.usage-accounts-table th:last-child { width: 104px; border-top-right-radius: 10px; }
 .usage-accounts-table th:last-child, .usage-accounts-table td:last-child { position: sticky; right: 0; background: #fff; border-left: 1px solid var(--border); }
 .usage-accounts-table th:last-child { background: #f7f9fc; }
+.usage-accounts-table th:last-child, .usage-accounts-table td:last-child { padding-inline: 12px; }
 .usage-accounts-table td { vertical-align: middle; padding: 22px 18px; border-top: 1px solid var(--border); }
 .usage-accounts-table.usage-admin-table { min-width: 1110px; }
 .usage-accounts-table.usage-admin-table th:nth-child(2) { width: 150px; }
@@ -42,7 +38,7 @@
 .usage-accounts-table.usage-admin-table th:nth-child(5) { width: 120px; }
 .usage-accounts-table.usage-admin-table th:nth-child(6) { width: 125px; }
 .usage-accounts-table.usage-admin-table th:nth-child(7) { width: 130px; }
-.usage-accounts-table.usage-admin-table th:last-child { width: 114px; }
+.usage-accounts-table.usage-admin-table th:last-child { width: 104px; }
 .usage-owner-email { display: block; color: #526780; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .usage-owner-meta { flex-basis: 100%; overflow-wrap: anywhere; }
 .usage-accounts-table tr:hover td { background: #fbfcfe; }
@@ -170,10 +166,8 @@
   .usage-accounts-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 22px; padding: 20px; border-top: 1px solid var(--border); }
   .usage-accounts-table tr:first-child { border-top: 0; }
   .usage-accounts-table td { display: block; padding: 0; border: 0; min-width: 0; }
-  .usage-accounts-table td:last-child { position: static; border: 0; background: none; }
+  .usage-accounts-table td:last-child { position: static; border: 0; background: none; padding: 0; }
   .usage-accounts-table td.usage-sync-cell { grid-column: 1 / -1; text-align: right; }
-  .usage-row-actions { flex-direction: row; justify-content: flex-end; }
-  .workspace .usage-sync-button, .workspace .usage-delete-button { height: 44px; min-height: 44px; width: 90px; min-width: 90px; }
   .usage-accounts-table td[data-label]::before { display: block; content: attr(data-label); color: #8394aa; font-size: 11px; margin-bottom: 7px; }
   .usage-accounts-table td.usage-account-cell { grid-column: 1 / -1; }
   .usage-accounts-table.usage-admin-table { min-width: 0; }

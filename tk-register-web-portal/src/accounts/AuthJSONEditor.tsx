@@ -6,7 +6,7 @@ import { ErrorNotice, Loading } from '../ui';
 import { authJSONUpdateError, type AuthJSONEligibility, type AuthJSONUpdateResult } from './auth-json';
 import { formatTime } from './helpers';
 import type { SyncedAccount } from './types';
-import { deletionInProgress } from './delete-account';
+import { deletionInProgress } from './account-state';
 import './auth-json.css';
 
 export function AuthenticationCard({ account, disabled, onEdit, timezone }: {

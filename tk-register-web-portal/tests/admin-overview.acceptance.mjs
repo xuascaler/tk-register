@@ -160,13 +160,10 @@ try {
   const listCall = calls.filter(call => call.path === '/admin/synced-accounts').at(-1);
   assert.ok(!listCall.query.has('sources') || listCall.query.get('sources') === 'all', 'Admin list must retain independent all-account scope');
   assert.equal(await page.getByRole('button', { name: 'Sync alice@example.com', exact: true }).isEnabled(), true);
-  assert.equal(await page.getByRole('button', { name: 'Delete alice@example.com', exact: true }).isEnabled(), true);
+  assert.equal(await page.getByRole('button', { name: 'Delete alice@example.com', exact: true }).count(), 0);
   assert.equal(calls.some(call => call.method !== 'GET'), false, 'Overview/filter changes must never trigger mutations');
   await page.getByRole('button', { name: 'Sync alice@example.com', exact: true }).click();
   await page.getByText('Updated', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Delete alice@example.com', exact: true }).click();
-  const deletion = page.getByRole('dialog', { name: 'Delete account?', exact: true });
-  await deletion.waitFor(); await deletion.getByRole('button', { name: 'Cancel', exact: true }).click();
   assert.equal(calls.filter(call => call.method !== 'GET').length, 1);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).click();
   await page.getByRole('heading', { name: 'alice@example.com', exact: true }).waitFor();
@@ -188,12 +185,12 @@ try {
   await page.getByRole('tab', { name: 'Account list', exact: true }).click();
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Sync alice@example.com', exact: true }).count(), 1);
-  assert.equal(await page.getByRole('button', { name: 'Delete alice@example.com', exact: true }).count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'Delete alice@example.com', exact: true }).count(), 0);
   assert.equal(calls.filter(call => call.method !== 'GET').length, 1);
   role = 'member'; const beforeDenied = calls.length;
   await page.goto(`http://127.0.0.1:${port}/tk-register/?member-fixture=1#/account-pool/accounts`);
   await page.getByRole('heading', { name: 'Admin access required', exact: true }).waitFor();
   assert.equal(calls.slice(beforeDenied).some(call => call.path.startsWith('/admin/')), false);
   assert.deepEqual(unexpected, []); assert.deepEqual(errors, []);
-  console.log('Admin Overview acceptance passed: flat owner totals, separate recursive personal scope, admin-only endpoints, default All time, searchable multi-select sources, models, custom dates/All time, smooth chart, nonlinked counts, responsive layouts, independent list, Sync/Del, detail back to list, member denial.');
+  console.log('Admin Overview acceptance passed: flat owner totals, separate recursive personal scope, admin-only endpoints, default All time, searchable multi-select sources, models, custom dates/All time, smooth chart, nonlinked counts, responsive layouts, independent list, Sync without deletion controls, detail back to list, member denial.');
 } finally { await browser?.close(); server.kill('SIGTERM'); }

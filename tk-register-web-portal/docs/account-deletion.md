@@ -1,10 +1,10 @@
 # Account deletion
 
-Account deletion removes an account from the current user's **Accounts** view while preserving submission and usage history. The same action is available to administrators in **Account pool → Accounts**. It is a browser-session operation; personal API tokens do not provide access to these routes.
+The backend deletion lifecycle and archive are retained, but account deletion is no longer available in the frontend. User and administrator Accounts lists show only **Sync**. The deletion dialog, progress links, deletion POST requests, progress GET requests and their polling have been removed from the browser code.
 
-## User flow
+## Frontend behavior
 
-Select **Del** on an account and confirm. The server saves an operation before contacting the supplier and returns its identifier. The browser reads that operation's progress; closing the dialog or reloading the page does not cancel it. While deletion is pending, Sync and Auth JSON updates for that account are blocked. A confirmed failure retains the account and allows a new, explicit deletion attempt.
+The normal account-list response can still report an existing deletion operation. The frontend uses `deletion_status` and `deleted_at` only to disable Sync and Auth JSON updates while the account is unavailable for mutation. It makes no dedicated deletion-progress requests. Existing backend jobs and historical archives are unchanged.
 
 An account with an unfinished or uncertain submission cannot be deleted as a failed local record. A record with only definitively failed submissions can be removed locally without changing a supplier account that may belong to another user.
 

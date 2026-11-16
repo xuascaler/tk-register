@@ -39,7 +39,6 @@ export type SyncedAccount = {
   supplier_record_id?: string | null;
   auth_json_updated_at?: string | null;
   deletion_status?: string;
-  deletion_operation_id?: string | null;
   deleted_at?: string | null;
   last_success_at: string | null;
   last_attempt_at: string | null;

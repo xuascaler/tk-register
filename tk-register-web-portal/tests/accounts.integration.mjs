@@ -21,6 +21,12 @@ try {
   const snapshot = { id: '1', account_id: '100', collected_at: '2026-11-01T02:00:00+08:00', account_status: 'active', cost_total: 1234.56, currency: 'CNY', cost_total_usd: 1234.56 / 7.2, exchange_rate_cny_per_usd: 7.2, input_tokens_total: 120000, output_tokens_total: 200000, usage_5h_percent: 15, usage_7d_percent: 42, reset_5h_at: null, reset_7d_at: null, data_source: 'website' };
   const account = { id: '100', account: 'alice@example.com', user_id: '7', user_email: 'owner@example.com', plan: 'claude/cc-max-20x', vendor_id: '1', vendor_name: 'TK Register 0', current_submission_id: '22', latest_submission_id: '23', submission_status: 'accepted', remote_id: '456', platform_account_id: '789', last_success_at: snapshot.collected_at, last_attempt_at: snapshot.collected_at, last_error: '', snapshot };
   const accounts = [account, { ...account, id: '101', account: 'zero@example.com', snapshot: { ...snapshot, cost_total: 0, cost_total_usd: 0, usage_5h_percent: 0 } }, { ...account, id: '102', account: 'missing@example.com', snapshot: null, last_success_at: null }];
+  const retained = { ...account, id: '103', account: 'pending@example.com', deletion_status: 'awaiting_verification', deletion_operation_id: 'legacy-operation' };
+  accounts.push(retained);
+  async function noDeletionControls() {
+    assert.equal(await page.getByRole('button', { name: /^(Delete(?: |$)|Del$|View progress$|Check status$)/ }).count(), 0);
+    assert.equal(await page.locator('.account-delete-dialog').count(), 0);
+  }
   await page.route('**/tk-register/api/**', async route => {
     const req = route.request(), url = new URL(req.url()), path = url.pathname.replace('/tk-register/api', '');
     requests.push(`${req.method()} ${path}${url.search}`);
@@ -36,7 +42,7 @@ try {
       const items = accounts.filter(a => `${a.account} ${path.startsWith('/admin/') ? a.user_email : ''}`.includes(search) && (!status || a.snapshot?.account_status === status));
       return ok({ items, page: 1, page_size: 20, total: items.length });
     }
-    if (path === '/accounts/100' || path === '/admin/synced-accounts/100') return ok({ account, snapshots: [snapshot], snapshot_count: 1, snapshot_page: 1, snapshot_page_size: 50, trend_reduced: false, trend: Object.fromEntries(['cost_total_usd', 'input_tokens_total', 'output_tokens_total'].map(metric => [metric, [[{ snapshot_id: snapshot.id, collected_at: snapshot.collected_at, value: snapshot[metric] }]]])), interval_seconds: 300, timezone: 'Asia/Shanghai' });
+    if (/^\/(?:accounts|admin\/synced-accounts)\/(100|103)$/.test(path)) return ok({ account: path.endsWith('/103') ? retained : account, snapshots: [snapshot], snapshot_count: 1, snapshot_page: 1, snapshot_page_size: 50, trend_reduced: false, trend: Object.fromEntries(['cost_total_usd', 'input_tokens_total', 'output_tokens_total'].map(metric => [metric, [[{ snapshot_id: snapshot.id, collected_at: snapshot.collected_at, value: snapshot[metric] }]]])), interval_seconds: 300, timezone: 'Asia/Shanghai' });
     if (path === '/admin/synced-accounts/sync' || path === '/accounts/sync') {
       assert.equal(req.method(), 'POST'); assert.equal(req.headers()['x-csrf-token'], 'fixture-csrf'); return ok({ accounts: [account], results: [{ account_id: account.id, status: "updated" }] });
     }
@@ -47,12 +53,16 @@ try {
   await mkdir('test-results', { recursive: true });
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/account-pool/accounts?tab=list`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Actions']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'User', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Sync']);
   assert.equal(await page.locator('.usage-owner-email').first().textContent(), 'owner@example.com');
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'alice@example.com' }).textContent(), /171\.47 \$/);
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'zero@example.com' }).textContent(), /0\.00 \$/);
   assert.match(await page.locator('.usage-accounts-table tr').filter({ hasText: 'missing@example.com' }).textContent(), /No data collected/);
   assert.equal(requests.some(r => r.startsWith('POST')), false, 'Opening the list must only read saved snapshots');
+  await noDeletionControls();
+  assert.equal(await page.getByRole('button', { name: 'Sync pending@example.com', exact: true }).isDisabled(), true);
+  await page.waitForTimeout(2400);
+  assert.equal(requests.some(r => /\/delete(?:\?|$)/.test(r)), false, 'Pending legacy operations must never start progress polling');
   for (const width of [1440, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `List overflow at ${width}`);
@@ -111,15 +121,28 @@ try {
   assert.match(page.url(), /account-pool\/accounts\/42$/);
   await page.goto(`http://127.0.0.1:${port}/tk-register/#/accounts?tab=list`);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).waitFor();
-  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Source', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Actions']);
-  assert.deepEqual(await page.locator('.usage-owner-email').allTextContents(), ['myself', 'myself', 'myself']);
+  assert.deepEqual(await page.locator('.usage-accounts-table th').allTextContents(), ['Account / plan', 'Source', 'Status', 'Usage windows', 'Total spent', 'Submitted', 'Last updated', 'Sync']);
+  assert.deepEqual(await page.locator('.usage-owner-email').allTextContents(), ['myself', 'myself', 'myself', 'myself']);
   await page.getByRole('button', { name: 'alice@example.com', exact: true }).click();
   await page.getByRole('button', { name: 'Sync now', exact: true }).waitFor();
   assert.equal(await page.locator('.usage-owner-meta').count(), 0);
+  // Both scopes retain passive protection without any delete/progress request.
+  for (const list of ['account-pool/accounts', 'accounts']) {
+    await page.goto(`http://127.0.0.1:${port}/tk-register/#/${list}?tab=list`);
+    await page.getByRole('button', { name: 'pending@example.com', exact: true }).waitFor();
+    await noDeletionControls();
+    assert.equal(await page.getByRole('button', { name: 'Sync pending@example.com', exact: true }).isDisabled(), true);
+    await page.getByRole('button', { name: 'pending@example.com', exact: true }).click();
+    await page.getByRole('heading', { name: 'pending@example.com', exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Sync now', exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Update Auth JSON', exact: true }).isDisabled(), true);
+    await noDeletionControls();
+  }
+  assert.equal(requests.some(r => /\/delete(?:\?|$)/.test(r)), false, 'No deletion POST, progress GET, or polling is allowed');
   role = 'member'; const before = requests.length;
   await page.goto(`http://127.0.0.1:${port}/tk-register/?member-fixture=1#/account-pool/accounts`);
   await page.getByRole('heading', { name: 'Admin access required' }).waitFor();
   assert.equal(requests.slice(before).some(r => r.includes('/admin/synced-accounts')), false, 'Member must not mount or fetch admin Accounts');
   assert.deepEqual(failures, []); assert.deepEqual(pageErrors, []);
-  console.log('Accounts UI: admin/member shared columns, data states, search, scope, sync, new/legacy back routes and responsive layouts passed.');
+  console.log('Accounts UI: admin/member shared columns, data states, search, scope, sync, new/legacy back routes responsive layouts, no deletion controls/requests, and retained mutation guards passed.');
 } finally { await browser?.close(); server.kill('SIGTERM'); }
