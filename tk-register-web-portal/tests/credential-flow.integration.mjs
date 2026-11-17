@@ -224,6 +224,12 @@ try {
     await expect(progress.locator('[aria-current="step"]')).toHaveText('1Check proxy');
     await generate(f);
     await expect(progress.locator('[aria-current="step"]')).toHaveText('2Authorize');
+    for (const width of [1280, 390, 320]) {
+      await f.page.setViewportSize({ width, height: 1000 });
+      assert.equal(await f.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Four-step progress overflow at ${width}px`);
+      await f.page.screenshot({ path: `test-results/credential-flow/oauth-${width}.png`, fullPage: true });
+    }
+    await f.page.setViewportSize({ width: 1440, height: 1000 });
     await run(f);
     await expect(f.panel.getByRole('alert')).toContainText('proxy no longer matches');
     await expect(progress.locator('[aria-current="step"]')).toHaveText('3Submit account');
