@@ -34,6 +34,7 @@ import { AdminHistory, PoolAccountDetails } from './admin/AccountPool';
 import APIToken from './account/APIToken';
 import { AccountUsageDetails } from './accounts/Accounts';
 import AccountsWorkspace from './accounts/AccountsWorkspace';
+import { accountListHistoryState, clearAccountListReturns, cloneAccountListReturn, readAccountListReturn, type AccountListReturn } from './accounts/list-navigation';
 import APIDocumentation, { type DocTopic, type DocSection } from './docs/APIDocumentation';
 
 function Account({ user, status, tab, onTab, onViewAccounts }: { user: User; status: AuthStatus; tab: 'general' | 'members'; onTab: (tab: 'general' | 'members') => void; onViewAccounts: () => void }) {
@@ -203,6 +204,7 @@ export default function App() {
   }, [attempt, acceptSession]);
   useEffect(() => {
     const expired = () => {
+      clearAccountListReturns();
       setUser(null);
       setDirty(false);
       setCSRFToken('');
@@ -219,25 +221,38 @@ export default function App() {
     window.confirm(
       'Leave this page? Unsaved changes and account credentials will be discarded. If a submission is pending, check its history before submitting again.',
     );
-  function navigate(next: Route, confirmed = false) {
-    if (routeHash(next) === routeHash(route)) {
+  function navigate(next: Route, confirmed = false, restoredList?: AccountListReturn) {
+    const hash = restoredList?.hash || routeHash(next);
+    const sameList = !restoredList && route.page === next.page && route.accountsTab === 'list' && next.accountsTab === 'list';
+    if (hash === window.location.hash || sameList) {
       setMenuOpen(false);
       return;
     }
     if (confirmed || canLeave()) {
       const changingDocSection = route.page === 'docs' && next.page === 'docs' && route.docTopic === next.docTopic;
       setRoute(next);
-      window.history.pushState(null, '', routeHash(next));
+      const adminChain = next.page === 'pool-account-usage' || next.page === 'pool-account' || next.page === 'pool-submission' && !!next.backAccount;
+      const memberChain = next.page === 'account-usage' || next.page === 'detail' && !!next.backAccount;
+      const context = restoredList || (user && (adminChain || memberChain) ? readAccountListReturn(user.id, adminChain) : null);
+      const leavingList = route.accountsTab === 'list' && (route.page === 'accounts' || route.page === 'pool-accounts');
+      // Each new list visit and its detail chain keep separate scroll snapshots.
+      // Scrolling a browser Back destination must not change an older detail's return position.
+      const saved = context && (restoredList || leavingList) ? cloneAccountListReturn(context) : context;
+      window.history.pushState(accountListHistoryState(saved), '', hash);
       setDirty(false);
       setError('');
       setMenuOpen(false);
       if (!changingDocSection) {
         window.scrollTo({ top: 0 });
         requestAnimationFrame(() =>
-          document.getElementById('main-content')?.focus(),
+          document.getElementById('main-content')?.focus({ preventScroll: true }),
         );
       }
     }
+  }
+  function backToAccountList(admin: boolean) {
+    const saved = user ? readAccountListReturn(user.id, admin) : null;
+    navigate({ page: admin ? 'pool-accounts' : 'accounts', accountsTab: 'list' }, false, saved || undefined);
   }
   useEffect(() => {
     const followHistory = () => {
@@ -300,6 +315,7 @@ export default function App() {
     setError('');
     try {
       await request('/auth/logout', { method: 'POST', body: {} });
+      clearAccountListReturns();
       setUser(null);
       setDirty(false);
       setCSRFToken('');
@@ -482,11 +498,11 @@ export default function App() {
             {(page === 'config' || isPoolPage) && user.role !== 'admin' ? (
               <><h1>Admin access required</h1><p className='subtitle'>This page is available to administrators.</p><button className='button secondary' onClick={() => navigate({ page: 'history' })}>Your submission history</button></>
             ) : page === 'pool-accounts' ? (
-              <AccountsWorkspace key='admin-accounts' admin tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'pool-accounts', accountsTab })} onOpen={id => navigate({ page: 'pool-account-usage', id })} />
+              <AccountsWorkspace key='admin-accounts' userID={user.id} admin tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'pool-accounts', accountsTab })} onOpen={id => navigate({ page: 'pool-account-usage', id })} />
             ) : page === 'pool-account-usage' && route.id ? (
-              <AccountUsageDetails key={`admin-${route.id}`} admin id={route.id} onBack={() => navigate({ page: 'pool-accounts', accountsTab: 'list' })} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id, backAccountUsage: true })} />
+              <AccountUsageDetails key={`admin-${route.id}`} admin id={route.id} onBack={() => backToAccountList(true)} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id, backAccountUsage: true })} />
             ) : page === 'pool-account' && route.id ? (
-              <PoolAccountDetails key={route.id} id={route.id} onBack={() => navigate({ page: 'pool-accounts', accountsTab: 'list' })} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id })} />
+              <PoolAccountDetails key={route.id} id={route.id} onBack={() => backToAccountList(true)} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id })} />
             ) : page === 'pool-history' ? (
               <AdminHistory onOpen={id => navigate({ page: 'pool-submission', id })} />
             ) : page === 'pool-submission' && route.id ? (
@@ -499,9 +515,9 @@ export default function App() {
                 onDirty={setDirty}
               />
             ) : page === 'accounts' ? (
-              <AccountsWorkspace tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'accounts', accountsTab })} onOpen={id => navigate({ page: 'account-usage', id })} />
+              <AccountsWorkspace userID={user.id} tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'accounts', accountsTab })} onOpen={id => navigate({ page: 'account-usage', id })} />
             ) : page === 'account-usage' && route.id ? (
-              <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => navigate({ page: 'accounts', accountsTab: 'list' })} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
+              <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => backToAccountList(false)} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
             ) : page === 'account' ? (
               <Account user={user} status={status} tab={route.settingsTab || 'general'} onTab={settingsTab => navigate({ page:'account', settingsTab })} onViewAccounts={() => navigate({ page:'accounts', accountsTab: 'list' })} />
             ) : page === 'docs' ? (

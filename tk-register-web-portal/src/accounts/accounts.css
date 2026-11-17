@@ -65,9 +65,17 @@
 .usage-empty, .usage-chart-empty { text-align: center; padding: 56px 20px; color: var(--muted); }
 .usage-empty h2, .usage-chart-empty h3 { font-size: 15px; font-weight: 500; color: #405976; margin-bottom: 8px; }
 .usage-empty p, .usage-chart-empty p { font-size: 13px; }
-.usage-pagination { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
-.usage-pagination > div { display: flex; gap: 8px; }
-.usage-pagination .button { font-size: 12px; }
+.usage-pagination { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding: 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.usage-pagination-summary { font-variant-numeric: tabular-nums; }
+.usage-pagination-summary > span { white-space: nowrap; }
+.usage-pagination-controls { display: flex; align-items: center; gap: 20px; margin-left: auto; }
+.usage-pagination-steps, .usage-page-jump { display: flex; align-items: center; gap: 8px; }
+.usage-page-jump { margin: 0; white-space: nowrap; }
+.workspace .usage-pagination .button { min-height: 36px; height: 36px; padding: 0 11px; font-size: 12px; gap: 6px; }
+.usage-pagination .button svg { width: 14px; height: 14px; }
+.workspace .usage-page-jump input { width: 56px; height: 36px; padding: 0 6px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-page-jump input[aria-invalid='true'] { border-color: #c9676e; }
+.usage-page-jump-error { flex-basis: 100%; margin: 0; text-align: right; color: var(--red); font-size: 12px; }
 .usage-footnote { display: flex; align-items: flex-start; gap: 7px; color: #7a8ba1; font-size: 12px; line-height: 1.7; margin-top: 18px; }
 .usage-footnote svg { flex-shrink: 0; width: 14px; height: 14px; margin-top: 3px; }
 .usage-back, .usage-text-button { display: inline-flex; gap: 7px; align-items: center; color: #50749d; font-size: 13px; padding: 0; border: 0; background: transparent; }
@@ -183,8 +191,8 @@
   .usage-accounts-table tr:hover td { background: none; }
   .usage-total-cell { text-align: left; }
   .usage-money { font-size: 16px; white-space: normal; }
-  .usage-pagination { flex-wrap: wrap; padding: 16px 20px; }
-  .usage-pagination > div { margin-left: auto; }
+  .usage-pagination { padding: 16px 20px; }
+  .usage-pagination-controls { flex-basis: 100%; justify-content: flex-end; }
   .usage-detail-title { flex-direction: column; gap: 18px; }
   .usage-detail-title h1 { font-size: 24px; }
   .usage-detail-actions { width: 100%; justify-content: space-between; }
@@ -203,6 +211,18 @@
   .usage-metric-tabs button { flex: 1; padding: 8px 5px; font-size: 11px; }
   .usage-chart-bottom { flex-wrap: wrap; }
   .usage-sync-status dl { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 480px) {
+  .usage-pagination-controls { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; margin-left: 0; gap: 12px; }
+  .usage-pagination-steps > .button { flex: 1; }
+  .usage-page-jump { justify-content: flex-end; }
+  .workspace .usage-pagination .button { min-height: 40px; height: 40px; }
+  .workspace .usage-page-jump input { height: 40px; }
+}
+@media (pointer: coarse) {
+  .workspace .usage-pagination .button { min-height: 44px; height: 44px; }
+  .workspace .usage-page-jump input { height: 44px; font-size: 16px; }
 }
 
 /* Error details overlay the table; opening them never changes the row height. */

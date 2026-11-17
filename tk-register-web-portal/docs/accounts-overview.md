@@ -15,6 +15,38 @@ yesterday. All time starts at the first successfully collected daily bill for th
 selected sources and current account identities. If none exists, it shows an
 empty yesterday. Changing filters only reads the database.
 
+## Returning to an account list
+
+Personal and administrator account lists store their page, search text, status
+filter and personal Source selection in the hash URL. Default values are omitted
+from the URL. Search updates replace the current history entry after the existing
+debounce; pagination and filter changes create history entries for Back/Forward.
+
+Both account lists have a Go to field beside Previous and Next. Enter a whole
+page number and press Enter or Go to jump while preserving search, status and
+the personal Source selection. Invalid or out-of-range values show an inline
+message without issuing a request. Controls are disabled while a page loads;
+the page counter continues to describe the loaded rows. Narrow screens stack
+the controls, and single-page results omit the Go to field.
+
+Opening an account captures that list address, the clicked account ID and scroll
+offset in the current browser tab. Return snapshots are scoped to the signed-in
+user and to the personal or administrator list. Each detail navigation keeps its
+own snapshot, so later visits to the same list do not overwrite an older return
+destination. The snapshot survives detail reloads, detail-tab changes and the
+account-detail → submission-detail → account-detail navigation chain.
+
+The detail back button restores the saved filters and page, waits for the rows
+to render, then restores the scroll offset. Browser Back/Forward and list reloads
+use the corresponding history entry. If the original page no longer exists, the
+list moves to the last valid page. Direct detail links without a valid return
+snapshot fall back to Account list page 1. Signing out or session expiry clears
+the saved snapshots.
+
+This is browser navigation state only. Returning reads the existing local account
+list endpoint and does not trigger supplier Sync, modify accounts, or add database
+storage.
+
 ## Data and visibility
 
 The session-authenticated `GET /tk-register/api/accounts/overview` endpoint accepts
@@ -125,5 +157,6 @@ backfill is performed.
 - Browser: `node tests/overview.acceptance.mjs`,
   `node tests/admin-overview.acceptance.mjs`, and
   `node tests/daily-usage.acceptance.mjs`.
+- List return navigation: `node tests/account-list-navigation.integration.mjs`.
 - The browser tests accept `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for a locally
   installed Chrome executable.

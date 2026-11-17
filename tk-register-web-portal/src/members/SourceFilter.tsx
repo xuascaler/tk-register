@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { selectedSources, sourceSummary, useMemberScope } from './MemberScope';
 
-export default function SourceFilter({ id, onChange, searchable = false }: { id: string; onChange?: () => void; searchable?: boolean }) {
+export default function SourceFilter({ id, onChange, searchable = false }: { id: string; onChange?: (selection: string) => void; searchable?: boolean }) {
   const scope = useMemberScope();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -19,8 +19,9 @@ export default function SourceFilter({ id, onChange, searchable = false }: { id:
   const visibleSources = scope.sources.filter(source => !searchable || source.label.toLowerCase().includes(search.trim().toLowerCase()));
   function close(restore = false) { setOpen(false); setSearch(''); if (restore) trigger.current?.focus(); }
   function update(ids: string[]) {
-    scope.setSelection(ids.length === scope.sources.length ? 'all' : ids.length ? ids.join(',') : 'none');
-    onChange?.();
+    const selection = ids.length === scope.sources.length ? 'all' : ids.length ? ids.join(',') : 'none';
+    scope.setSelection(selection);
+    onChange?.(selection);
   }
   useLayoutEffect(() => { if (allBox.current) allBox.current.indeterminate = selected.length > 0 && !all; }, [all, selected.length, open, positioned]);
   useLayoutEffect(() => { if (open && positioned) (searchable ? searchInput.current : allBox.current)?.focus({ preventScroll: true }); }, [open, positioned, searchable]);

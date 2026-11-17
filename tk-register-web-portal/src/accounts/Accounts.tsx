@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowUpRight, ChevronLeft, ChevronRight, Clock3, RefreshCw, Search } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, Clock3, RefreshCw, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { APIError, errorMessage, request, retryAfterSeconds, retryStage, type RetryStage } from '../api';
 import { ErrorNotice, Loading } from '../ui';
@@ -15,6 +15,8 @@ import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
 import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
 import { loadAccountPage, mergeSyncedAccount, syncAccountRow, syncRetryLabel, type AccountRowSyncResult } from './row-sync';
 import { deletionInProgress } from './account-state';
+import { useAccountListNavigation } from './list-navigation';
+import { AccountPagination } from './AccountPagination';
 
 function Status({ account }: { account: SyncedAccount }) {
   const snapshot = account.snapshot;
@@ -43,15 +45,13 @@ function SubmittedTime({ value }: { value: string | null | undefined }) {
   </time>;
 }
 
-export function MemberAccounts({ onOpen, admin = false, embedded = false }: { onOpen: (id: string) => void; admin?: boolean; embedded?: boolean }) {
+export function MemberAccounts({ userID, onOpen, admin = false, embedded = false }: { userID: number; onOpen: (id: string) => void; admin?: boolean; embedded?: boolean }) {
   const memberScope = useMemberScope();
-  const sources = admin ? 'all' : memberScope.selection;
+  const navigation = useAccountListNavigation(userID, admin, memberScope.selection);
+  const { page, search: query, status, sources } = navigation.filters;
   const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountPage | null>(null);
-  const [search, setSearch] = useState('');
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('');
-  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState(query);
   const [attempt, setAttempt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [syncingID, setSyncingID] = useState<string | null>(null);
@@ -62,12 +62,14 @@ export function MemberAccounts({ onOpen, admin = false, embedded = false }: { on
   const pending = useRef<{ id: string; controller: AbortController } | null>(null);
   const revision = useRef(0);
   const scope = `${endpoint}:${page}:${query}:${status}:${sources}:${attempt}`;
+  useEffect(() => setSearch(query), [query]);
+  useEffect(() => { if (!admin && memberScope.selection !== sources) memberScope.setSelection(sources); }, [admin, sources, memberScope.selection, memberScope.setSelection]);
   useEffect(() => {
     const nextQuery = search.trim();
     if (nextQuery === query) return;
-    const timer = window.setTimeout(() => { setQuery(nextQuery); setPage(1); }, 300);
+    const timer = window.setTimeout(() => navigation.change({ search: nextQuery, page: 1 }, { replace: true }), 300);
     return () => window.clearTimeout(timer);
-  }, [search, query]);
+  }, [search, query, navigation.change]);
   useEffect(() => {
     const controller = new AbortController();
     const version = ++revision.current;
@@ -76,7 +78,7 @@ export function MemberAccounts({ onOpen, admin = false, embedded = false }: { on
     void loadAccountPage(endpoint, params, controller.signal)
       .then(result => { if (!controller.signal.aborted && version === revision.current) {
         const lastPage = Math.max(1, Math.ceil(result.total / result.page_size));
-        if (page > lastPage) { setPage(lastPage); return; }
+        if (page > lastPage) { navigation.change({ page: lastPage }, { replace: true, keepScroll: true }); return; }
         setData(result); setLoadedScope(scope);
       } })
       .catch(cause => { if (!controller.signal.aborted && version === revision.current) setError(errorMessage(cause)); })
@@ -87,6 +89,9 @@ export function MemberAccounts({ onOpen, admin = false, embedded = false }: { on
       pending.current = null;
     };
   }, [page, query, status, attempt, endpoint, scope]);
+  useEffect(() => {
+    if (data && !loading && loadedScope === scope) navigation.restoreScroll();
+  }, [data, loading, loadedScope, scope, navigation.restoreScroll]);
   useEffect(() => {
     const deadlines = Object.values(rowResults).map(result => result.retryAt || 0);
     if (!deadlines.some(deadline => deadline > Date.now())) return;
@@ -122,8 +127,8 @@ export function MemberAccounts({ onOpen, admin = false, embedded = false }: { on
     {!embedded && <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Saved account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>}
     <div className={`usage-toolbar ${admin ? '' : 'member-accounts-toolbar'}`}>
       <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>Search accounts</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder={admin ? 'Search account or user email' : 'Search by account email'} maxLength={254} /></label>
-      {!admin && <SourceFilter id='account-source' onChange={() => setPage(1)} />}
-      <Select id='usage-account-status' label='Account status' hiddenLabel={admin} value={status} onChange={value => { setStatus(value); setPage(1); }} options={[{ value: '', label: 'All account statuses' }, { value: 'active', label: 'Active' }, { value: 'offline', label: 'Offline' }, { value: 'banned', label: 'Banned' }, { value: 'sync_failed', label: 'Sync error' }, { value: 'login_failed', label: 'Login failed' }, { value: 're_login_failed', label: 'Re-login failed' }, { value: 'bound_failed', label: 'Binding failed' }, { value: 'cooking_failed', label: 'Setup failed' }, { value: 'pending', label: 'Pending' }, { value: 'unknown', label: 'Unknown' }]} />
+      {!admin && <SourceFilter id='account-source' onChange={sources => navigation.change({ sources, page: 1 })} />}
+      <Select id='usage-account-status' label='Account status' hiddenLabel={admin} value={status} onChange={value => navigation.change({ status: value, page: 1 })} options={[{ value: '', label: 'All account statuses' }, { value: 'active', label: 'Active' }, { value: 'offline', label: 'Offline' }, { value: 'banned', label: 'Banned' }, { value: 'sync_failed', label: 'Sync error' }, { value: 'login_failed', label: 'Login failed' }, { value: 're_login_failed', label: 'Re-login failed' }, { value: 'bound_failed', label: 'Binding failed' }, { value: 'cooking_failed', label: 'Setup failed' }, { value: 'pending', label: 'Pending' }, { value: 'unknown', label: 'Unknown' }]} />
     </div>
     <ErrorNotice>{error}</ErrorNotice>
     {error && <button className='button pale usage-load-retry' disabled={loading} onClick={() => setAttempt(value => value + 1)}>Try again</button>}
@@ -141,7 +146,7 @@ export function MemberAccounts({ onOpen, admin = false, embedded = false }: { on
           const retryIn = Math.max(0, Math.ceil(((refresh?.retryAt || 0) - now) / 1000));
           const rateLimited = /rate.limit|limiting requests|too many requests|http 429/i.test(failure || '');
           return <tr key={account.id} aria-busy={busy || deleting}>
-          <td className='usage-account-cell'><button className='usage-email' onClick={() => onOpen(account.id)}>{account.account}<ArrowUpRight aria-hidden='true' /></button><span className='usage-secondary'>{account.plan}</span><span className='usage-small'>Account ID {account.platform_account_id || account.remote_id || '—'}</span></td>
+          <td className='usage-account-cell'><button className='usage-email' onClick={() => { navigation.remember(account.id); onOpen(account.id); }}>{account.account}<ArrowUpRight aria-hidden='true' /></button><span className='usage-secondary'>{account.plan}</span><span className='usage-small'>Account ID {account.platform_account_id || account.remote_id || '—'}</span></td>
           <td data-label={admin ? 'User' : 'Source'} className='usage-owner-cell'><span className='usage-owner-email'>{admin ? account.user_email || '—' : account.account_source?.label || 'myself'}</span></td>
           <td data-label='Status'><Status account={account} />{stale && account.snapshot && <span className='usage-small'>Last known</span>}</td>
           <td data-label='Usage windows'><UsageWindow label='5 hours' value={account.snapshot?.usage_5h_percent} /><UsageWindow label='7 days' value={account.snapshot?.usage_7d_percent} /></td>
@@ -154,7 +159,7 @@ export function MemberAccounts({ onOpen, admin = false, embedded = false }: { on
         </tr>; })}</tbody>
       </table></div>
       {!data?.items.length && <div className='usage-empty'><h2>{query || status ? 'No matching accounts' : 'No accounts yet'}</h2><p>{query || status ? 'Try another email or account status.' : admin ? 'Submitted accounts from all users will appear here with their latest available data.' : 'Your submitted accounts will appear here with their latest available data.'}</p></div>}
-      {data && data.total > 0 && <div className='usage-pagination'><span>{data.total.toLocaleString()} {data.total === 1 ? 'account' : 'accounts'} · Page {data.page} of {Math.max(1, Math.ceil(data.total / data.page_size))}</span><div><button className='button pale' disabled={loading || page <= 1} onClick={() => setPage(p => p - 1)}><ChevronLeft aria-hidden='true' />Previous</button><button className='button pale' disabled={loading || page * data.page_size >= data.total} onClick={() => setPage(p => p + 1)}>Next<ChevronRight aria-hidden='true' /></button></div></div>}
+      {data && data.total > 0 && <AccountPagination page={data.page} total={data.total} pageSize={data.page_size} loading={loading || loadedScope !== scope} scope={loadedScope} onPage={page => navigation.change({ page })} />}
     </div>}
     <p className='usage-footnote'><Clock3 aria-hidden='true' />Use Sync to update an individual account. Automatic collection follows the configured schedule. Failed updates retain the last successful data.</p>
   </section>;
@@ -166,7 +171,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const [data, setData] = useState<AccountDetails | null>(null);
   const [tab, setTab] = useState<'overview' | 'daily'>(() => new URLSearchParams(window.location.hash.split('?')[1]).get('tab') === 'daily-usage' ? 'daily' : 'overview');
-  function changeTab(next: 'overview' | 'daily') { setTab(next); const path = window.location.hash.split('?')[0]; window.history.replaceState(null, '', `${path}${next === 'daily' ? '?tab=daily-usage' : ''}`); }
+  function changeTab(next: 'overview' | 'daily') { setTab(next); const path = window.location.hash.split('?')[0]; window.history.replaceState(window.history.state, '', `${path}${next === 'daily' ? '?tab=daily-usage' : ''}`); }
   const [days, setDays] = useState('7');
   const [metric, setMetric] = useState<Metric>('cost_total_usd');
   const [loading, setLoading] = useState(true);
