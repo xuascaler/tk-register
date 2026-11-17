@@ -476,3 +476,185 @@ func TestCredentialImportDocumentAndEnvelopeLimits(t *testing.T) {
 		t.Fatal("oversized documents reached the helper")
 	}
 }
+
+func TestCredentialProxyTestStatelessAuthenticationAndBudget(t *testing.T) {
+	a, _, _ := fixture(t)
+	u, cookie, csrf := vendorSession(t, a, "proxy-check-owner@example.com", "member")
+	var calls atomic.Int32
+	credentialHelperFixture(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		calls.Add(1)
+		if r.URL.Path != "/proxy-test" || len(body) != 2 || body["owner_id"] != strconv.FormatUint(u.ID, 10) || body["proxy_url"] != testCredentialProxy {
+			t.Error("connection test did not use the stateless owner-bound helper endpoint")
+		}
+		check := credentialReply(u.ID, false).ProxyCheck
+		check.ElapsedMS = 0
+		_ = json.NewEncoder(w).Encode(map[string]any{"owner_id": strconv.FormatUint(u.ID, 10), "proxy_check": check})
+	})
+	body := map[string]any{"proxy_url": testCredentialProxy}
+	requireStatus(t, request(t, a, "POST", "credential-flows/proxy-test", body, nil, ""), 401)
+	requireStatus(t, request(t, a, "POST", "credential-flows/proxy-test", body, cookie, "wrong-csrf"), 403)
+	if calls.Load() != 0 {
+		t.Fatal("unauthorized test contacted helper")
+	}
+	// Creating/importing drafts and editing drafts have separate budgets.
+	for _, kind := range []string{"create", "update"} {
+		if err := a.redis.Set(context.Background(), redisPrefix+"credential-rate:"+kind+":"+strconv.FormatUint(u.ID, 10), 99, time.Minute).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 30; i++ {
+		w := request(t, a, "POST", "credential-flows/proxy-test", body, cookie, csrf)
+		requireStatus(t, w, 200)
+		result := data(t, w)
+		if len(result) != 1 || result["proxy_check"].(map[string]any)["elapsed_ms"] != float64(0) {
+			t.Fatal("connection test exposed extra state or rejected zero elapsed time")
+		}
+		assertNoSecrets(t, w.Body.String())
+	}
+	w := request(t, a, "POST", "credential-flows/proxy-test", body, cookie, csrf)
+	requireStatus(t, w, 429)
+	if calls.Load() != 30 || w.Header().Get("Retry-After") == "" {
+		t.Fatal("connection tests did not use the independent 30/minute budget")
+	}
+	var submissions int64
+	if err := a.store.DB.Model(&core.Submission{}).Count(&submissions).Error; err != nil || submissions != 0 {
+		t.Fatal("connection test created a submission", err)
+	}
+	keys, err := a.redis.Keys(context.Background(), redisPrefix+"credential-flow:*").Result()
+	if err != nil || len(keys) != 0 {
+		t.Fatal("stateless proxy test created an authorization draft", err)
+	}
+}
+
+func TestCredentialProxyTestFlowBindingAndExpiry(t *testing.T) {
+	a, m, _ := fixture(t)
+	u, cookie, csrf := vendorSession(t, a, "bound-check-owner@example.com", "member")
+	_, otherCookie, otherCSRF := vendorSession(t, a, "bound-check-other@example.com", "member")
+	_, adminCookie, adminCSRF := vendorSession(t, a, "bound-check-admin@example.com", "admin")
+	original := storedCredentialFlow(t, a, u, true)
+	var calls atomic.Int32
+	credentialHelperFixture(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		calls.Add(1)
+		if r.URL.Path != "/verify" || len(body) != 3 || body["flow_id"] != testCredentialFlowID || body["proxy_url"] != testCredentialProxy || body["owner_id"] != strconv.FormatUint(u.ID, 10) {
+			t.Error("bound test did not use server-owned flow/proxy")
+		}
+		result := credentialReply(u.ID, false)
+		result.ProxyCheck.ElapsedMS = 45
+		if calls.Load() > 1 {
+			result.ProxyCheck.IP = "203.0.113.25"
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	})
+	body := map[string]any{"flow_id": testCredentialFlowID}
+	for _, session := range []struct {
+		cookie *http.Cookie
+		csrf   string
+	}{{otherCookie, otherCSRF}, {adminCookie, adminCSRF}} {
+		requireStatus(t, request(t, a, "POST", "credential-flows/proxy-test", body, session.cookie, session.csrf), 404)
+	}
+	for _, invalid := range []map[string]any{{}, {"proxy_url": testCredentialProxy, "flow_id": testCredentialFlowID}, {"proxy_url": nil, "flow_id": testCredentialFlowID}, {"proxy_url": "", "flow_id": testCredentialFlowID}, {"flow_id": nil}, {"proxy_url": "file:///private/secret"}, {"flow_id": testCredentialFlowID, "owner_id": "1"}} {
+		requireStatus(t, request(t, a, "POST", "credential-flows/proxy-test", invalid, cookie, csrf), 400)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("foreign or invalid request reached helper")
+	}
+	key := credentialFlowKey(u.ID, testCredentialFlowID)
+	m.FastForward(5 * time.Minute)
+	beforeTTL := m.TTL(key)
+	w := request(t, a, "POST", "credential-flows/proxy-test", body, cookie, csrf)
+	requireStatus(t, w, 200)
+	if len(data(t, w)) != 1 || data(t, w)["proxy_check"] == nil {
+		t.Fatal("bound test must return only the safe check")
+	}
+	assertNoSecrets(t, w.Body.String())
+	current, ciphertext, err := a.loadCredentialFlow(context.Background(), u, testCredentialFlowID)
+	if err != nil || current.ProxyCheck.ElapsedMS != 45 || current.ProxyURL != original.ProxyURL || current.Auth["access_token"] != original.Auth["access_token"] || !current.ExpiresAt.Equal(original.ExpiresAt) || m.TTL(key) > beforeTTL {
+		t.Fatal("proxy test changed credentials or extended the draft lifetime", err)
+	}
+	w = request(t, a, "POST", "credential-flows/proxy-test", body, cookie, csrf)
+	requireStatus(t, w, 409)
+	if !strings.Contains(w.Body.String(), "PROXY_CHANGED") {
+		t.Fatal("changed exit IP was not reported")
+	}
+	after, _ := m.Get(key)
+	if ciphertext != after {
+		t.Fatal("failed check replaced the saved successful draft")
+	}
+}
+
+func TestCredentialProxyTestFailureMessages(t *testing.T) {
+	a, _, _ := fixture(t)
+	u, cookie, csrf := vendorSession(t, a, "failure-check-owner@example.com", "member")
+	storedCredentialFlow(t, a, u, true)
+	upstreamCode := ""
+	credentialHelperFixture(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		w.WriteHeader(502)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": upstreamCode, "message": "private-access-token private-user:private-password unsafe upstream body"}})
+	})
+	for _, testcase := range []struct {
+		upstream, code string
+		status         int
+	}{
+		{"upstream_timeout", "PROXY_TEST_TIMEOUT", 504},
+		{"proxy_authentication_failed", "PROXY_AUTHENTICATION_FAILED", 502},
+		{"upstream_network_error", "PROXY_CONNECTION_FAILED", 502},
+		{"proxy_check_failed", "PROXY_CONNECTION_FAILED", 502},
+		{"proxy_forbidden", "INVALID_PROXY", 400},
+		{"unexpected", "PROXY_CONNECTION_FAILED", 502},
+	} {
+		upstreamCode = testcase.upstream
+		for _, body := range []map[string]any{{"proxy_url": testCredentialProxy}, {"flow_id": testCredentialFlowID}} {
+			w := request(t, a, "POST", "credential-flows/proxy-test", body, cookie, csrf)
+			requireStatus(t, w, testcase.status)
+			assertNoSecrets(t, w.Body.String())
+			if !strings.Contains(w.Body.String(), testcase.code) || strings.Contains(w.Body.String(), "authorization provider") || strings.Contains(w.Body.String(), "unsafe upstream body") {
+				t.Fatal("proxy failure was not reported with a safe, specific error")
+			}
+		}
+	}
+}
+
+func TestCredentialProxyTestResponseValidationAndTimeout(t *testing.T) {
+	a, _, _ := fixture(t)
+	u, cookie, csrf := vendorSession(t, a, "validation-check-owner@example.com", "member")
+	storedCredentialFlow(t, a, u, true)
+	var variant atomic.Int32
+	credentialHelperFixture(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		check := credentialReply(u.ID, false).ProxyCheck
+		owner := strconv.FormatUint(u.ID, 10)
+		switch variant.Load() {
+		case 0:
+			owner = "0"
+		case 1:
+			check.IP = "not-an-ip"
+		case 2:
+			check.ElapsedMS = -1
+		case 3:
+			check.OK = false
+		case 4:
+			check.CheckedAt = time.Time{}
+		case 5:
+			check.ElapsedMS = 60001
+		case 7:
+			<-r.Context().Done()
+			return
+		}
+		// No flow ID/expiry is valid for stateless checks only.
+		_ = json.NewEncoder(w).Encode(map[string]any{"owner_id": owner, "proxy_check": check})
+	})
+	for i := 0; i < 6; i++ {
+		variant.Store(int32(i))
+		requireStatus(t, request(t, a, "POST", "credential-flows/proxy-test", map[string]any{"proxy_url": testCredentialProxy}, cookie, csrf), 502)
+	}
+	variant.Store(6)
+	requireStatus(t, request(t, a, "POST", "credential-flows/proxy-test", map[string]any{"proxy_url": testCredentialProxy}, cookie, csrf), 200)
+	requireStatus(t, request(t, a, "POST", "credential-flows/proxy-test", map[string]any{"flow_id": testCredentialFlowID}, cookie, csrf), 502)
+	variant.Store(7)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := a.callCredentialHelper(ctx, u.ID, "/proxy-test", map[string]any{"proxy_url": testCredentialProxy})
+	var failure *core.VendorError
+	if !errors.As(err, &failure) || failure.Status != 504 || failure.Code != "PROXY_TEST_TIMEOUT" {
+		t.Fatal("helper deadline did not produce a proxy timeout", err)
+	}
+}

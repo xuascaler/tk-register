@@ -1,7 +1,9 @@
 import { authFields, emptyDraft, MAX_AUTH_BYTES, parseAuthJSON, vendorTimestamp, type AccountDraft } from './validation';
+import { APIError } from '../api';
 
 export type CredentialMethod = 'oauth' | 'setup' | 'json' | 'cookie' | 'token';
 export type CredentialGoal = 'submit' | 'export';
+export type ProxyCheck = { ok: true; ip: string; checked_at: string; elapsed_ms: number };
 export type CredentialFlow = {
   flow_id: string;
   auth_url?: string;
@@ -9,8 +11,29 @@ export type CredentialFlow = {
   status?: 'awaiting_code' | 'ready';
   auth?: Record<string, unknown>;
   notes?: string[];
-  proxy_check?: { ok?: boolean; checked_at?: string; exit_ip?: string; ip?: string; [key: string]: unknown };
+  proxy_check?: Partial<ProxyCheck> & { exit_ip?: string };
 };
+
+export function readProxyCheck(value: unknown): ProxyCheck {
+  const check = value as Partial<ProxyCheck> | null;
+  if (!check || check.ok !== true || typeof check.ip !== 'string' || !check.ip || check.ip.length > 64 || !/^[\da-f:.]+$/i.test(check.ip) || typeof check.checked_at !== 'string' || !Number.isFinite(Date.parse(check.checked_at)) || typeof check.elapsed_ms !== 'number' || !Number.isFinite(check.elapsed_ms) || check.elapsed_ms < 0 || check.elapsed_ms > 60000) throw new Error('The proxy test result could not be confirmed. Please try again.');
+  return { ok: true, ip: check.ip, checked_at: check.checked_at, elapsed_ms: check.elapsed_ms };
+}
+
+export function proxyTestFailure(cause: unknown) {
+  const code = cause instanceof APIError ? cause.code : '';
+  const messages: Record<string, string> = {
+    PROXY_TEST_TIMEOUT: 'Connection timed out. Check the proxy and try again.',
+    PROXY_AUTHENTICATION_FAILED: 'Proxy authentication failed. Check the username and password.',
+    PROXY_CONNECTION_FAILED: 'Unable to connect through this proxy. Check the proxy and try again.',
+    PROXY_TEST_UNAVAILABLE: 'Connection testing is temporarily unavailable. Please try again.',
+    INVALID_PROXY: 'Enter a valid HTTP, HTTPS or SOCKS5 proxy URL.',
+    PROXY_CHANGED: 'The proxy exit IP has changed. Start a new authorization before continuing.',
+    CREDENTIAL_FLOW_NOT_FOUND: 'This authorization has expired. Start a new authorization.',
+    RATE_LIMITED: 'Too many connection tests. Please wait and try again.',
+  };
+  return { code, message: messages[code] || 'The proxy connection could not be tested. Please try again.' };
+}
 
 export function automaticDraft(now = new Date()): AccountDraft {
   const today = vendorTimestamp(now, 'Asia/Shanghai').slice(0, 10);

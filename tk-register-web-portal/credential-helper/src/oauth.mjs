@@ -169,7 +169,7 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
       })
       mergeIdentity(credential, profile)
     } catch (error) {
-      if (['upstream_network_error', 'upstream_timeout', 'invalid_proxy', 'proxy_required', 'proxy_forbidden', 'proxy_check_failed', 'proxy_ip_mismatch'].includes(error.code)) throw error
+      if (['upstream_network_error', 'upstream_timeout', 'invalid_proxy', 'proxy_required', 'proxy_forbidden', 'proxy_check_failed', 'proxy_authentication_failed', 'proxy_ip_mismatch'].includes(error.code)) throw error
       notes.push(error.upstreamStatus === 403
         ? 'Credentials were obtained, but the granted scope did not return complete account information.'
         : 'Credentials were obtained, but the profile query did not return complete account information.')

@@ -55,6 +55,10 @@ type credentialHelperResult struct {
 	ExpiresAt  time.Time            `json:"expires_at"`
 }
 
+// A flow-bound connection test uses /verify, but reports connection failures
+// independently of the authorization/exchange workflow.
+type credentialProxyTestContextKey struct{}
+
 type credentialFlowRecord struct {
 	credentialFlowView
 	OwnerID     uint64 `json:"owner_id"`
@@ -145,9 +149,13 @@ func credentialHelperHealthy(ctx context.Context) bool {
 
 func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint string, payload map[string]any) (credentialHelperResult, error) {
 	var result credentialHelperResult
+	proxyTest := endpoint == "/proxy-test" || ctx.Value(credentialProxyTestContextKey{}) == true
 	address, err := credentialHelperAddress()
 	token := os.Getenv("TK_REGISTER_CREDENTIAL_HELPER_TOKEN")
 	if err != nil || len(token) < 32 || strings.ContainsAny(token, "\r\n") {
+		if proxyTest {
+			return result, credentialProblem(503, "PROXY_TEST_UNAVAILABLE", "The connection test service is temporarily unavailable. Please try again later.")
+		}
 		return result, credentialProblem(503, "CREDENTIAL_HELPER_UNAVAILABLE", "Authorization is temporarily unavailable. Please try again later.")
 	}
 	payload["owner_id"] = strconv.FormatUint(owner, 10)
@@ -166,11 +174,24 @@ func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint s
 	client := &http.Client{Transport: credentialHelperTransport, Timeout: 55 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(req)
 	if err != nil {
+		if proxyTest {
+			var timeout net.Error
+			if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+				return result, credentialProxyFailure("upstream_timeout")
+			}
+			return result, credentialProblem(503, "PROXY_TEST_UNAVAILABLE", "The connection test service could not be reached. Please try again.")
+		}
 		return result, credentialProblem(503, "CREDENTIAL_HELPER_UNAVAILABLE", "Authorization could not complete. Please try again.")
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, credentialResponseLimit+1))
 	if err != nil || len(data) > credentialResponseLimit {
+		if proxyTest {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return result, credentialProxyFailure("upstream_timeout")
+			}
+			return result, credentialProxyFailure("proxy_check_failed")
+		}
 		return result, credentialProblem(502, "CREDENTIAL_HELPER_INVALID_RESPONSE", "The authorization service returned an invalid response.")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -180,12 +201,22 @@ func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint s
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(data, &failure)
+		if proxyTest {
+			return result, credentialProxyFailure(failure.Error.Code)
+		}
 		return result, credentialHelperFailure(failure.Error.Code)
 	}
-	if json.Unmarshal(data, &result) != nil || result.OwnerID != strconv.FormatUint(owner, 10) || !credentialFlowID.MatchString(result.FlowID) ||
+	invalidResponse := json.Unmarshal(data, &result) != nil || result.OwnerID != strconv.FormatUint(owner, 10) ||
 		!result.ProxyCheck.OK || net.ParseIP(result.ProxyCheck.IP) == nil || result.ProxyCheck.CheckedAt.IsZero() ||
-		result.ProxyCheck.CheckedAt.After(time.Now().Add(time.Minute)) || result.ProxyCheck.ElapsedMS < 0 || result.ProxyCheck.ElapsedMS > 60000 ||
-		!result.ExpiresAt.After(time.Now()) || result.ExpiresAt.After(time.Now().Add(credentialFlowLifetime+time.Minute)) {
+		result.ProxyCheck.CheckedAt.After(time.Now().Add(time.Minute)) || result.ProxyCheck.ElapsedMS < 0 || result.ProxyCheck.ElapsedMS > 60000
+	// Only stateless /proxy-test responses have no flow identity or expiry.
+	if endpoint != "/proxy-test" && (!credentialFlowID.MatchString(result.FlowID) || !result.ExpiresAt.After(time.Now()) || result.ExpiresAt.After(time.Now().Add(credentialFlowLifetime+time.Minute))) {
+		invalidResponse = true
+	}
+	if invalidResponse {
+		if proxyTest {
+			return result, credentialProxyFailure("proxy_check_failed")
+		}
 		return result, credentialProblem(502, "CREDENTIAL_HELPER_INVALID_RESPONSE", "The authorization service returned an invalid response.")
 	}
 	if len(result.Notes) > 30 {
@@ -197,6 +228,29 @@ func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint s
 		}
 	}
 	return result, nil
+}
+
+func credentialProxyFailure(code string) error {
+	switch code {
+	case "upstream_timeout":
+		return credentialProblem(504, "PROXY_TEST_TIMEOUT", "The proxy connection test timed out. Check your proxy and try again.")
+	case "proxy_authentication_failed":
+		return credentialProblem(502, "PROXY_AUTHENTICATION_FAILED", "The proxy rejected its username or password. Check the proxy credentials.")
+	case "invalid_proxy", "proxy_required", "proxy_forbidden":
+		return credentialProblem(400, "INVALID_PROXY", "Enter a supported, reachable public proxy URL.")
+	case "proxy_ip_mismatch", "proxy_mismatch":
+		return credentialProblem(409, "PROXY_CHANGED", "The proxy exit IP has changed. Start a new authorization with the intended proxy.")
+	case "flow_not_found":
+		return credentialMissing()
+	case "flow_busy", "session_busy", "credential_busy":
+		return credentialProblem(409, "CREDENTIAL_FLOW_BUSY", "A request for this draft is already running. Please wait.")
+	case "too_many_sessions", "upstream_rate_limited":
+		return credentialProblem(429, "PROXY_TEST_RATE_LIMITED", "Too many connection tests. Please wait before trying again.")
+	case "unauthorized":
+		return credentialProblem(503, "PROXY_TEST_UNAVAILABLE", "The connection test service is temporarily unavailable. Please try again later.")
+	default:
+		return credentialProblem(502, "PROXY_CONNECTION_FAILED", "Could not connect through this proxy. Check the address and port and try again.")
+	}
 }
 
 func credentialHelperFailure(code string) error {
@@ -417,12 +471,16 @@ func (a *app) credentialFlowRoutes(w http.ResponseWriter, r *http.Request, route
 		kind, limit := "update", 30
 		if action == "start" || action == "import" {
 			kind, limit = "create", 10
+		} else if action == "proxy-test" {
+			kind = "proxy-test"
 		}
 		if !a.credentialRate(w, r, user.ID, kind, limit) {
 			return true
 		}
 	}
 	switch action {
+	case "proxy-test":
+		a.testCredentialProxy(w, r, user)
 	case "start":
 		a.startCredentialFlow(w, r, user)
 	case "import":
@@ -438,6 +496,67 @@ func (a *app) credentialFlowRoutes(w http.ResponseWriter, r *http.Request, route
 		}
 	}
 	return true
+}
+
+func (a *app) testCredentialProxy(w http.ResponseWriter, r *http.Request, user *core.User) {
+	var input struct {
+		ProxyURL json.RawMessage `json:"proxy_url"`
+		FlowID   json.RawMessage `json:"flow_id"`
+	}
+	if !decodeCredential(w, r, &input) {
+		return
+	}
+	// Presence is checked separately from value so an explicit null/empty
+	// proxy cannot bypass the rule forbidding overrides on an existing flow.
+	if (len(input.ProxyURL) > 0) == (len(input.FlowID) > 0) {
+		vendorFailure(w, credentialInvalid())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithValue(r.Context(), credentialProxyTestContextKey{}, true), 20*time.Second)
+	defer cancel()
+	if len(input.ProxyURL) > 0 {
+		var proxy string
+		if json.Unmarshal(input.ProxyURL, &proxy) != nil || !validCredentialProxy(proxy) {
+			vendorFailure(w, credentialProxyFailure("invalid_proxy"))
+			return
+		}
+		result, err := a.callCredentialHelper(ctx, user.ID, "/proxy-test", map[string]any{"proxy_url": proxy})
+		if err != nil {
+			vendorFailure(w, err)
+			return
+		}
+		ok(w, map[string]any{"proxy_check": result.ProxyCheck})
+		return
+	}
+	var id string
+	if json.Unmarshal(input.FlowID, &id) != nil || id == "" {
+		vendorFailure(w, credentialInvalid())
+		return
+	}
+	flow, previous, release, err := a.lockCredentialFlow(ctx, user, id)
+	if err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	defer release()
+	result, err := a.callCredentialHelper(ctx, user.ID, "/verify", map[string]any{"flow_id": flow.FlowID, "proxy_url": flow.ProxyURL})
+	if err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	if result.FlowID != flow.FlowID || result.ProxyCheck.IP != flow.ProxyCheck.IP {
+		vendorFailure(w, credentialProxyFailure("proxy_ip_mismatch"))
+		return
+	}
+	flow.ProxyCheck = result.ProxyCheck
+	if result.ExpiresAt.Before(flow.ExpiresAt) {
+		flow.ExpiresAt = result.ExpiresAt
+	}
+	if err = a.saveCredentialFlow(ctx, flow, previous); err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	ok(w, map[string]any{"proxy_check": flow.ProxyCheck})
 }
 
 func (a *app) credentialRate(w http.ResponseWriter, r *http.Request, owner uint64, kind string, limit int) bool {

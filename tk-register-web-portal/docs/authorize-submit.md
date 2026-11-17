@@ -11,7 +11,9 @@ browser authorization drafts.
 
 1. Choose **Auto submit** or **Generate JSON only**. Enter an account proxy. An
    expected account email is optional. Expand **Account settings** to override
-   the submission defaults.
+   the submission defaults. **Test connection** checks the proxy and displays its
+   exit IP and elapsed time. It does not generate an authorization link or submit
+   an account. Changing the proxy clears the previous test result.
 2. Select OAuth, Setup Token, or Import JSON. Cookie/sessionKey and existing-token
    methods are available under Other methods. JSON import accepts supported
    credential exports and allows selecting an account from a multi-account file.
@@ -56,6 +58,20 @@ character. The password is retained through an in-page submission retry. This
 value is a supplier submission parameter; it does not change the Claude login
 password. Processing the next account clears its proxy, credentials, email,
 password and remark while retaining the selected business settings and dates.
+
+## Connection testing
+
+The proxy input occupies its own row, with **Test connection** on the right. The
+optional account email is on the next row. A test can run before authorization or
+against the proxy retained by an existing draft. Existing drafts keep their
+original exit-IP binding and expiration; an IP change requires a new authorization.
+Timeout, proxy authentication, and connection failures have separate safe messages.
+
+`POST /tk-register/api/credential-flows/proxy-test` uses the browser session and
+CSRF token. Send either `{ "proxy_url": "<account proxy>" }` or
+`{ "flow_id": "<owned draft>" }`, never both. It returns `data.proxy_check` with
+`ok`, `ip`, `checked_at`, and `elapsed_ms`. The endpoint has an independent limit
+of 30 requests per minute per user. It is not a personal-token OpenAPI endpoint.
 
 ## Credential data and failure handling
 

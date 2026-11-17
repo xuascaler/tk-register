@@ -12,6 +12,7 @@ const fields = {
   exchange: ['owner_id', 'flow_id', 'code'],
   import: ['owner_id', 'proxy_url', 'kind', 'document', 'account_index', 'session_key', 'access_token', 'refresh_token', 'expires_at'],
   verify: ['owner_id', 'flow_id', 'proxy_url'],
+  'proxy-test': ['owner_id', 'proxy_url'],
 };
 
 export function normalizeOwner(value) {
@@ -197,5 +198,13 @@ export function createCredentialService({ requestJson = defaultRequestJson, now 
     return base(flow);
   }
 
-  return { start, exchange, import: importCredential, verify, close() { clearInterval(timer); flows.clear(); imports.clear(); } };
+  async function proxyTest(body) {
+    const owner = validate('proxy-test', body);
+    parseProxy(body.proxy_url);
+    // Deliberately stateless: no OAuth service, flow, credential cache, or supplier request.
+    const check = await checkProxy(body.proxy_url, '', now() + 15000);
+    return { owner_id: owner, proxy_check: check };
+  }
+
+  return { start, exchange, import: importCredential, verify, proxyTest, close() { clearInterval(timer); flows.clear(); imports.clear(); } };
 }

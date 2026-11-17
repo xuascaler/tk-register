@@ -14,6 +14,7 @@ const messages = {
   proxy_ip_mismatch: 'The proxy exit IP changed. Start a new authorization.',
   proxy_mismatch: 'The proxy does not match this authorization.',
   proxy_check_failed: 'The proxy exit IP could not be verified.',
+  proxy_authentication_failed: 'Proxy authentication failed. Check the proxy username and password.',
   flow_not_found: 'The authorization is missing or expired.',
   flow_busy: 'This authorization is already being processed.',
   too_many_sessions: 'Too many pending authorizations. Try again later.',

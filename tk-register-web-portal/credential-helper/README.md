@@ -28,6 +28,7 @@ Unknown request fields are rejected. In particular, upstream URLs cannot be supp
 | Method and path | Request fields | Success |
 | --- | --- | --- |
 | `GET /healthz` | None | `{ "ok": true }` |
+| `POST /proxy-test` | `owner_id`, `proxy_url` | Only `owner_id` and `proxy_check`; no flow or expiry |
 | `POST /start` | `owner_id`, `proxy_url`, optional `mode` (`oauth` or `setup`, default `oauth`), `setup_kind` (`full` or `official`, default `full`) | Common fields plus `auth_url` |
 | `POST /exchange` | `owner_id`, `flow_id`, `code` (code, `code#state`, or callback URL) | Common fields plus `auth` and `notes` |
 | `POST /import` | `owner_id`, `proxy_url`, `kind` (`json`, `cookie`, `token`), kind-specific fields below | Common fields plus `auth` and `notes` |
@@ -74,6 +75,14 @@ The proxy in imported JSON never overrides the proxy bound to the flow.
 Errors use non-2xx status and `{ "error": { "code": "…", "message": "…" } }`.
 Missing, expired, evicted, or other-owner flows all return `flow_not_found` (404).
 Go should map known error codes to its own user messages and avoid recording bodies.
+
+`/proxy-test` is a stateless connection check for the Proxy field. It makes one
+request to the fixed IP check endpoint through the supplied proxy, with a
+15-second timeout, and does not create a flow, contact Claude, or retain credentials.
+Known HTTP 407 or SOCKS authentication rejection returns
+`proxy_authentication_failed` (502); connection timeout returns `upstream_timeout`
+(504). Messages never contain the proxy address, password, or upstream response.
+Use `/verify` for an existing authorization: it also checks the already bound exit IP.
 
 ## Retry, timeout, and memory behavior
 

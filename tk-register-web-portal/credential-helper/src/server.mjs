@@ -22,7 +22,7 @@ export function createHelperServer({ token, service = createCredentialService() 
         throw fail('unauthorized', 'Unauthorized.', 401);
       }
       if (request.method === 'GET' && request.url === '/healthz') return send(200, { ok: true });
-      const route = { '/start': 'start', '/exchange': 'exchange', '/import': 'import', '/verify': 'verify' }[request.url];
+      const route = { '/start': 'start', '/exchange': 'exchange', '/import': 'import', '/verify': 'verify', '/proxy-test': 'proxyTest' }[request.url];
       if (request.method !== 'POST' || !route) throw fail('not_found', 'Not found.', 404);
       if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
         throw fail('invalid_request', 'JSON content type required.', 415);

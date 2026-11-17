@@ -26,7 +26,7 @@ test('every endpoint requires bearer, accepts only JSON and scrubs upstream erro
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
   const base = `http://127.0.0.1:${server.address().port}`;
-  for (const route of ['/healthz', '/start', '/exchange', '/import', '/verify']) {
+  for (const route of ['/healthz', '/start', '/exchange', '/import', '/verify', '/proxy-test']) {
     const reply = await fetch(base + route, { method: route === '/healthz' ? 'GET' : 'POST' });
     assert.equal(reply.status, 401);
   }

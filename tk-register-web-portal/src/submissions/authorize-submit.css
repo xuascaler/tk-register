@@ -26,8 +26,20 @@
 .authorize-submit textarea { resize: vertical; line-height: 1.6; }
 .authorize-submit .field-help { line-height: 1.6; margin-top: 7px; }
 .authorize-submit .field > label { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
-.authorize-proxy-good { display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: #47846b; margin: 8px 0 0; }
-.authorize-proxy-good svg { width: 14px; height: 14px; }
+.authorize-account-fields { display: flex; flex-direction: column; gap: 26px; min-width: 0; }
+.authorize-proxy-field { min-width: 0; }
+.authorize-proxy-row { display: flex; align-items: flex-end; gap: 12px; min-width: 0; }
+.authorize-proxy-row > .field { flex: 1; min-width: 0; }
+.authorize-proxy-row .password-field input { height: 46px; }
+.authorize-submit .button.authorize-proxy-test { flex: 0 0 auto; min-width: 151px; min-height: 46px; padding: 0 15px; border: 1px solid #cbdcf2; border-radius: 7px; background: #edf4fd; color: #1b4475; font-size: 13px; font-weight: 500; white-space: nowrap; gap: 8px; }
+.authorize-submit .button.authorize-proxy-test:hover:not(:disabled) { background: #e3edfb; border-color: #aac5e8; }
+.authorize-proxy-test svg { width: 17px; height: 17px; }
+.authorize-proxy-status { min-height: 22px; display: flex; align-items: flex-start; gap: 7px; flex-wrap: wrap; margin-top: 9px; color: var(--muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.authorize-proxy-status[data-kind='success'] { color: #3d8269; }
+.authorize-proxy-status[data-kind='error'] { color: #bd4955; }
+.authorize-proxy-status > span { flex: 1; min-width: 0; }
+.authorize-proxy-status > svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 3px; }
+.authorize-proxy-status .text-link { flex-basis: 100%; padding: 0; font-size: 12px; }
 .authorize-settings { border-top: 1px solid var(--border); padding-top: 17px; }
 .authorize-settings > summary, .authorize-credentials > summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .authorize-settings > summary::-webkit-details-marker, .authorize-credentials > summary::-webkit-details-marker, .authorize-other-methods > summary::-webkit-details-marker { display: none; }
@@ -87,4 +99,8 @@
 @media (pointer: coarse) {
   .authorize-submit button, .authorize-submit a.button, .authorize-submit input { min-height: 44px; }
   .authorize-settings > summary, .authorize-credentials > summary { min-height: 44px; }
+}
+@media (max-width: 480px) {
+  .authorize-proxy-row { gap: 9px; }
+  .authorize-submit .button.authorize-proxy-test { min-width: 134px; padding: 0 11px; font-size: 12px; gap: 6px; }
 }

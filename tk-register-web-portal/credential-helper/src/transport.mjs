@@ -76,6 +76,7 @@ async function connectHTTP(socket, proxy, target) {
       ? `Proxy-Authorization: Basic ${Buffer.from(`${proxy.username}:${proxy.password}`).toString('base64')}\r\n` : '';
     socket.write(`CONNECT ${target.hostname}:443 HTTP/1.1\r\nHost: ${target.hostname}:443\r\n${authorization}\r\n`);
     const reply = (await reader.headers()).toString('ascii');
+    if (/^HTTP\/1\.[01] 407(?: |\r)/.test(reply)) throw fail('proxy_authentication_failed', 'Proxy authentication failed.', 502);
     if (!/^HTTP\/1\.[01] 200(?: |\r)/.test(reply)) throw fail('upstream_network_error', 'Proxy CONNECT rejected.', 502);
   } finally { reader.release(); }
 }
@@ -85,14 +86,15 @@ async function connectSOCKS(socket, proxy, target) {
   try {
     socket.write(proxy.username ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]));
     const method = await reader.bytes(2);
-    if (method[0] !== 5 || ![0, 2].includes(method[1]) || (method[1] === 2 && !proxy.username)) {
-      throw fail('upstream_network_error', 'Proxy authentication rejected.', 502);
-    }
+    if (method[0] !== 5) throw fail('upstream_network_error', 'Invalid proxy response.', 502);
+    if (method[1] === 255 || (method[1] === 2 && !proxy.username)) throw fail('proxy_authentication_failed', 'Proxy authentication failed.', 502);
+    if (![0, 2].includes(method[1])) throw fail('upstream_network_error', 'Unsupported proxy response.', 502);
     if (method[1] === 2) {
       const user = Buffer.from(proxy.username), password = Buffer.from(proxy.password);
       socket.write(Buffer.concat([Buffer.from([1, user.length]), user, Buffer.from([password.length]), password]));
       const authentication = await reader.bytes(2);
-      if (authentication[0] !== 1 || authentication[1] !== 0) throw fail('upstream_network_error', 'Proxy authentication rejected.', 502);
+      if (authentication[0] !== 1) throw fail('upstream_network_error', 'Invalid proxy response.', 502);
+      if (authentication[1] !== 0) throw fail('proxy_authentication_failed', 'Proxy authentication failed.', 502);
     }
     // SOCKS5 and SOCKS5h both resolve the fixed upstream hostname at the proxy.
     const host = Buffer.from(target.hostname);

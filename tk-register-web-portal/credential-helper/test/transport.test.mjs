@@ -6,7 +6,7 @@ import { createTransport } from '../src/transport.mjs';
 
 // Protocol mocks are loopback-only. Production DNS policy is still exercised; only the
 // injected test dialer redirects a validated public destination to this local mock.
-async function mockProxy(t, scheme, responseStatus = 200) {
+async function mockProxy(t, scheme, responseStatus = 200, options = {}) {
   const observed = { connect: '', authorization: '', request: '', socksUser: '', socksTarget: '' };
   const connections = new Set();
   const server = net.createServer(socket => {
@@ -17,13 +17,13 @@ async function mockProxy(t, scheme, responseStatus = 200) {
       while (buffer.length) {
         if (stage === 'greeting') {
           if (buffer.length < 2 || buffer.length < 2 + buffer[1]) return;
-          buffer = buffer.subarray(2 + buffer[1]); socket.write(Buffer.from([5, 2])); stage = 'auth';
+          buffer = buffer.subarray(2 + buffer[1]); socket.write(Buffer.from([5, options.socksMethod ?? 2])); stage = 'auth';
         } else if (stage === 'auth') {
           if (buffer.length < 2 || buffer.length < 3 + buffer[1]) return;
           const userLength = buffer[1], passwordLength = buffer[2 + userLength], length = 3 + userLength + passwordLength;
           if (buffer.length < length) return;
           observed.socksUser = buffer.subarray(2, 2 + userLength).toString();
-          buffer = buffer.subarray(length); socket.write(Buffer.from([1, 0])); stage = 'socksConnect';
+          buffer = buffer.subarray(length); socket.write(Buffer.from([1, options.socksAuthStatus ?? 0])); stage = 'socksConnect';
         } else if (stage === 'socksConnect') {
           if (buffer.length < 5 || buffer.length < 7 + buffer[4]) return;
           assert.equal(buffer[3], 3);
@@ -36,7 +36,7 @@ async function mockProxy(t, scheme, responseStatus = 200) {
           if (stage === 'connect') {
             observed.connect = headers.split('\r\n')[0];
             observed.authorization = headers.match(/Proxy-Authorization: ([^\r]+)/i)?.[1] || '';
-            socket.write('HTTP/1.1 200 Connection established\r\n\r\n'); stage = 'request';
+            socket.write(`HTTP/1.1 ${options.connectStatus ?? 200} Proxy reply\r\n\r\n`); stage = 'request';
           } else {
             observed.request = headers;
             const body = JSON.stringify({ ip: '8.8.4.4', secret_upstream_detail: 'never shown on error' });
@@ -115,4 +115,37 @@ test('proxy negotiation timeout closes the only connection and never attempts di
   });
   await assert.rejects(transport('https://api.ipify.org/?format=json', { proxy_url: 'http://proxy.example', timeout: 30 }), { code: 'upstream_timeout' });
   assert.equal(dials, 1); assert.equal(client.destroyed, true);
+});
+
+test('known HTTP and SOCKS authentication failures are distinguishable from connection errors', async t => {
+  for (const [scheme, options] of [
+    ['http', { connectStatus: 407 }],
+    ['https', { connectStatus: 407 }],
+    ['socks5', { socksAuthStatus: 1 }],
+    ['socks5h', { socksAuthStatus: 1 }],
+    ['socks5', { socksMethod: 255 }],
+  ]) {
+    const mock = await mockProxy(t, scheme, 200, options);
+    let dials = 0;
+    const transport = createTransport({
+      lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+      dial: async (_options, track) => {
+        dials++;
+        const socket = track(net.connect({ host: '127.0.0.1', port: mock.port }));
+        await once(socket, 'connect'); return socket;
+      },
+      secure: async socket => socket,
+    });
+    await assert.rejects(transport('https://api.ipify.org/?format=json', {
+      proxy_url: `${scheme}://demo:mock-password@proxy.example:1080`, timeout: 2000,
+    }), error => {
+      assert.equal(error.code, 'proxy_authentication_failed');
+      assert.equal(error.status, 502);
+      assert.ok(!error.message.includes('mock-password'));
+      assert.ok(!error.message.includes('proxy.example'));
+      return true;
+    });
+    assert.equal(dials, 1);
+    assert.equal(mock.observed.request, '');
+  }
 });

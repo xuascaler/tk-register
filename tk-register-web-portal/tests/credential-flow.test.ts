@@ -1,8 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { authEditorValue, automaticDraft, completionPatch, emailDiffers, flowMetadata, importAccountOptions, parseImportDocument, readFlowMetadata, submissionPassword, validateProxy } from '../src/submissions/credential-flow.ts';
+import { authEditorValue, automaticDraft, completionPatch, emailDiffers, flowMetadata, importAccountOptions, parseImportDocument, proxyTestFailure, readFlowMetadata, readProxyCheck, submissionPassword, validateProxy } from '../src/submissions/credential-flow.ts';
+import { APIError } from '../src/api.ts';
 
 const auth = { id_token: '', access_token: 'fixture-access', refresh_token: 'fixture-refresh', last_refresh: '2026-11-18T00:00:00Z', email: 'authorized@example.com', account_uuid: 'account-id', organization_uuid: 'org-id', organization_name: 'Fixture org', claude_device_ids: ['device-id'], type: 'claude', expired: '2027-11-18T00:00:00Z', proxy_url: 'https://proxy.example:443', verification_status: 'verified' };
+
+test('proxy checks accept zero/fractional latency and reject unconfirmed or malformed results', () => {
+  const check = { ok: true, ip: '203.0.113.24', checked_at: '2026-11-18T00:00:00Z', elapsed_ms: 0 };
+  assert.deepEqual(readProxyCheck(check), check);
+  assert.equal(readProxyCheck({ ...check, ip: '2001:db8::1', elapsed_ms: 1.25 }).elapsed_ms, 1.25);
+  for (const value of [null, {}, { ...check, ok: false }, { ...check, ip: 'proxy:password@example.com' }, { ...check, checked_at: 'invalid' }, { ...check, elapsed_ms: -1 }, { ...check, elapsed_ms: Infinity }, { ...check, elapsed_ms: 60001 }]) assert.throws(() => readProxyCheck(value), /could not be confirmed/);
+});
+
+test('proxy test errors expose fixed safe explanations without echoing credential-bearing errors', () => {
+  for (const code of ['PROXY_TEST_TIMEOUT', 'PROXY_AUTHENTICATION_FAILED', 'PROXY_CONNECTION_FAILED', 'PROXY_TEST_UNAVAILABLE', 'INVALID_PROXY', 'PROXY_CHANGED', 'CREDENTIAL_FLOW_NOT_FOUND', 'RATE_LIMITED']) {
+    const result = proxyTestFailure(new APIError('SECRET: http://user:password@proxy.example', 502, code));
+    assert.equal(result.code, code);
+    assert.ok(result.message);
+    assert.equal(result.message.includes('SECRET'), false);
+    assert.equal(result.message.includes('password@'), false);
+  }
+  assert.match(proxyTestFailure(new APIError('SECRET', 409, 'PROXY_CHANGED')).message, /new authorization/);
+  assert.equal(proxyTestFailure(new Error('SECRET')).message.includes('SECRET'), false);
+});
 
 test('automatic defaults use Shanghai calendar dates and clamp the previous month', () => {
   const draft = automaticDraft(new Date('2026-03-30T18:00:00Z'));
