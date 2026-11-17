@@ -23,6 +23,21 @@ func vendorFailure(w http.ResponseWriter, err error) {
 	logUnexpectedVendorFailure(w, err)
 	internal(w)
 }
+
+// Both the manual form and server-owned credential drafts consume the same
+// submission budget before entering the existing VendorService workflow.
+func (a *app) limitVendorAction(w http.ResponseWriter, r *http.Request, owner uint64, kind string, limit int) bool {
+	retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "vendor-action:" + kind + ":" + strconv.FormatUint(owner, 10)}, limit, 60).Int()
+	if err != nil {
+		internal(w)
+		return false
+	}
+	if retry > 0 {
+		rateFailure(w, retry)
+		return false
+	}
+	return true
+}
 func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string) bool {
 	isVendor := route == "vendors" || route == "submissions" || strings.HasPrefix(route, "submissions/") || strings.HasPrefix(route, "admin/vendors/")
 	if !isVendor {
@@ -39,13 +54,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			limit = 100
 			kind = "push"
 		}
-		retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "vendor-action:" + kind + ":" + strconv.FormatUint(user.ID, 10)}, limit, 60).Int()
-		if err != nil {
-			internal(w)
-			return true
-		}
-		if retry > 0 {
-			rateFailure(w, retry)
+		if !a.limitVendorAction(w, r, user.ID, kind, limit) {
 			return true
 		}
 	}

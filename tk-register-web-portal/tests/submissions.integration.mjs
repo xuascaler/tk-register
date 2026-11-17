@@ -24,6 +24,7 @@ try {
     viewport: { width: 1440, height: 1060 },
   });
   page = await context.newPage();
+  const manual = page.locator('#manual-submit-panel');
   page.on("pageerror", (error) => errors.push(error.message));
   const data = async (response) => {
     assert.equal(response.status(), 200, await response.text());
@@ -81,7 +82,7 @@ try {
 
   await register(page.request, "admin@example.com");
   await go("submit");
-  await page
+  await manual
     .getByText("This platform is not ready for submissions.", { exact: true })
     .waitFor();
   assert.equal(
@@ -155,38 +156,32 @@ try {
     verification_status: "verified",
   };
   const fillAccount = async (name) => {
-    await page.getByLabel("Account", { exact: true }).fill(name);
-    await page
+    await manual.getByLabel("Account", { exact: true }).fill(name);
+    await manual
       .getByLabel("Account password", { exact: true })
       .fill("fixture-account-password");
-    await page
+    await manual
       .getByLabel("Upload authentication JSON file")
       .setInputFiles({
         name: "fixture-auth.json",
         mimeType: "application/json",
         buffer: Buffer.from(JSON.stringify(auth)),
       });
-    await page.getByText("fixture-auth.json", { exact: true }).waitFor();
-    await page
+    await manual.getByText("fixture-auth.json", { exact: true }).waitFor();
+    await manual
       .getByLabel("Registration date", { exact: true })
       .fill("2026-10-23");
-    await page
+    await manual
       .getByLabel("Plan start date", { exact: true })
       .fill("2026-10-23");
-    await page.getByLabel("Plan end date", { exact: true }).fill("2026-11-23");
-    await page
-      .locator("summary")
-      .filter({ hasText: "Additional details" })
-      .click();
-    await page
-      .getByLabel("Payment method", { exact: true })
-      .selectOption("third_party_payment");
-    await page
-      .getByLabel("Registration device", { exact: true })
-      .selectOption("Windows");
-    await page.getByLabel("Remaining balance (%)", { exact: true }).fill("0");
-    await page.getByLabel("Warranty period", { exact: true }).selectOption("7");
-    await page
+    await manual.getByLabel("Plan end date", { exact: true }).fill("2026-11-23");
+    if (!(await manual.locator('.additional-details').evaluate(details => details.open))) await manual.locator('.additional-details > summary').click();
+    for (const [label, option] of [['Payment method', 'Third-party payment'], ['Registration device', 'Windows'], ['Warranty period', '7 days']]) {
+      await manual.getByRole('combobox', { name: label, exact: true }).click();
+      await page.getByRole('option', { name: option, exact: true }).click();
+    }
+    await manual.getByLabel("Remaining balance (%)", { exact: true }).fill("0");
+    await manual
       .getByLabel("Remark", { exact: true })
       .fill("Browser integration fixture");
   };
@@ -234,6 +229,7 @@ try {
   assert.equal((await retryResponse).status(), 409, "Accepted accounts must still be protected against duplicates");
   assert.notEqual(captured.client_request_key, firstRequestKey, "Each deliberate retry uses a new request key");
   captured = firstPayload;
+  page.once('dialog', dialog => dialog.accept());
   await go(`submissions/${firstAcceptedSubmissionID}`);
   await page
     .getByRole("heading", { name: "account@example.com", exact: true })

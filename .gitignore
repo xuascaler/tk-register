@@ -10,3 +10,4 @@
 !/start.sh
 !/tk-register-web-portal/
 /tk-register-web-portal/node_modules
+/tk-register-web-portal/credential-helper/node_modules

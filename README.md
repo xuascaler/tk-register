@@ -12,6 +12,7 @@ self-contained; no parent GoAPI source checkout is required.
 
 - `tk-register-web-portal/src/`: React and TypeScript frontend.
 - `tk-register-web-portal/server/`: independent Go module and backend tests.
+- `tk-register-web-portal/credential-helper/`: private Claude authorization and JSON import helper.
 - `tk-register-web-portal/tests/`: frontend and integration tests.
 - `Dockerfile`, `nginx.conf`, `start.sh`: standalone HTTPS runtime.
 
@@ -52,7 +53,9 @@ docker build -t tk-register:local .
 ```
 
 The image runs Nginx on HTTPS port `8443` and proxies `/tk-register` to the Go
-server on container loopback port `3002`. Mount the TLS certificate and private
+server on container loopback port `3002`. A Node.js helper listens only on
+`127.0.0.1:3003`; it is not published or proxied. The startup script generates an
+internal shared secret and supervises all three processes together. Mount the TLS certificate and private
 key directory at `/etc/tk-register/tls` read-only. Required private environment
 settings include `TK_REGISTER_SQL_DSN`, `TK_REGISTER_REDIS_URL`,
 `TK_REGISTER_ENCRYPTION_KEY`, `TK_REGISTER_ADMIN_EMAIL`, and
@@ -75,3 +78,10 @@ the same usage view across all users and adds owner attribution. See
 [account sync documentation](tk-register-web-portal/docs/account-sync.md).
 
 The parent project's GNU AGPL v3 license is preserved in `LICENSE`.
+
+## Authorization and submission
+
+**Submit account → Authorize & submit** adds proxy-bound OAuth authorization,
+Setup Token, and JSON import alongside the existing manual form. See
+[authorization workflow](tk-register-web-portal/docs/authorize-submit.md) for the
+defaults, credential handling, and deployment requirements.

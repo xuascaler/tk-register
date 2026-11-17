@@ -118,7 +118,7 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if a.store.Ping(ctx) != nil || a.redis.Ping(ctx).Err() != nil {
+		if a.store.Ping(ctx) != nil || a.redis.Ping(ctx).Err() != nil || !credentialHelperHealthy(r.Context()) {
 			internal(w)
 			return
 		}
@@ -148,6 +148,9 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	route := strings.TrimPrefix(r.URL.Path, basePath+"/api/")
+	if a.credentialFlowRoutes(w, r, route) {
+		return
+	}
 	if a.memberRoutes(w, r, route) {
 		return
 	}
