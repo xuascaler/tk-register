@@ -13,7 +13,20 @@ import (
 	"goapi-tk-register/server/internal/supplier"
 )
 
-func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64) {
+func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64, administrative bool) {
+	modelCostsEnabled := true
+	if !administrative {
+		var err error
+		modelCostsEnabled, err = a.userModelCostsEnabled(r.Context())
+		if err != nil {
+			internal(w)
+			return
+		}
+		if !modelCostsEnabled && r.URL.Query().Has("models") {
+			fail(w, 400, "MODEL_DETAILS_DISABLED", "Model filtering is disabled for personal account pages.")
+			return
+		}
+	}
 	start, end := r.URL.Query().Get("start_date"), r.URL.Query().Get("end_date")
 	now := time.Now().In(time.FixedZone("Asia/Shanghai", 8*60*60))
 	if start == "" && end == "" {
@@ -29,7 +42,16 @@ func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64) 
 		internal(w)
 		return
 	}
-	ok(w, data)
+	if administrative {
+		ok(w, data)
+		return
+	}
+	personal, err := personalDailyUsage(data, modelCostsEnabled)
+	if err != nil {
+		internal(w)
+		return
+	}
+	ok(w, personal)
 }
 
 var errDailyExportBusy = errors.New("daily usage export lease is busy")

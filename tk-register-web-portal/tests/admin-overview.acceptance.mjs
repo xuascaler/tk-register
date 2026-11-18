@@ -49,11 +49,11 @@ try {
         if (total) for (const model of ['claude-sonnet-4-5', 'claude-opus-4-1']) rows.push({ date, model, input_tokens: String(total * 100), output_tokens: String(total * 200), cache_read_tokens: '0', cache_write_tokens: '0', cost_cny: String(total * 7.2), cost_usd: total });
       }
       for (const source of sources) source.cost_usd = source.total * days.length * 2;
-      return ok({ start_date: start, end_date: end, earliest_date: '2026-10-01', timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, latest_account_data: snapshot.collected_at, sources, days, rows, model_costs: sources.flatMap(source => ['claude-sonnet-4-5', 'claude-opus-4-1'].map(model => ({ source_id: source.id, model, cost_cny: String(source.total * days.length * 7.2), cost_usd: source.total * days.length }))) });
+      return ok({ model_costs_enabled: true, start_date: start, end_date: end, earliest_date: '2026-10-01', timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, latest_account_data: snapshot.collected_at, sources, days, rows, model_costs: sources.flatMap(source => ['claude-sonnet-4-5', 'claude-opus-4-1'].map(model => ({ source_id: source.id, model, cost_cny: String(source.total * days.length * 7.2), cost_usd: source.total * days.length }))) });
     }
     if (path === '/accounts' || path === '/admin/synced-accounts') return ok({ items: [account], total: 1, page: 1, page_size: 20 });
     if (path === '/admin/synced-accounts/100') return ok({ account, snapshots: [snapshot], snapshot_count: 1, snapshot_page: 1, snapshot_page_size: 50, trend_reduced: false, trend: { cost_total_usd: [], input_tokens_total: [], output_tokens_total: [] }, interval_seconds: 300, timezone: 'Asia/Shanghai' });
-    if (path.endsWith('/daily-usage')) return ok({ start_date: url.searchParams.get('start_date'), end_date: url.searchParams.get('end_date'), timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, days: [], rows: [] });
+    if (path.endsWith('/daily-usage')) return ok({ model_costs_enabled: true, start_date: url.searchParams.get('start_date'), end_date: url.searchParams.get('end_date'), timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, days: [], rows: [] });
     if (path === '/admin/synced-accounts/sync') {
       assert.equal(req.method(), 'POST'); assert.deepEqual(req.postDataJSON().account_ids, ['100']);
       return ok({ accounts: [account], results: [{ account_id: '100', status: 'updated' }] });

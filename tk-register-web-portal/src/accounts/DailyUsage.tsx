@@ -5,12 +5,15 @@ import { ErrorNotice, Loading } from '../ui';
 import { formatTime } from './helpers';
 import { ModelFilter } from './ModelFilter';
 import { dailyDate, dailyMetrics, dailyModels, dailyMoney, dailySeries, dailyTokens, dailyTotals, filterDailyRows, recentDailyRange, validDailyRange, type DailyData, type DailyMetric, type ModelSelection } from './daily-usage';
+import { OverviewChart } from './OverviewChart';
+import type { OverviewData } from './overview';
 import './daily-usage.css';
+import './overview.css';
 
 const colors = ['#365f91', '#688bb8', '#9aafca', '#637d83', '#a4bab6', '#7d7c9c', '#b6a5bd', '#b49978'];
 function DailyChart({ data, selection, metric }: { data: DailyData; selection: ModelSelection; metric: DailyMetric }) {
   const [active, setActive] = useState<number | null>(null);
-  const series = dailySeries(data, selection, metric), models = dailyModels(data.rows);
+  const series = dailySeries(data, selection, metric), models = dailyModels(data.rows || []);
   const maximum = Math.max(1, ...series.map(day => day.value || 0));
   const width = Math.max(780, series.length * 24), height = 245, left = 65, top = 14, bottom = 210;
   const step = (width - left - 20) / Math.max(1, series.length), bar = Math.min(42, step * .58);
@@ -55,39 +58,41 @@ export function DailyUsage({ endpoint, compact, onOpen }: { endpoint: string; co
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError(''); setData(null);
     request<DailyData>(`${endpoint}/daily-usage?${new URLSearchParams({ start_date: range.start, end_date: range.end })}`, { signal: controller.signal })
-      .then(result => { if (!controller.signal.aborted) setData(result); })
+      .then(result => { if (!controller.signal.aborted) setData(endpoint.startsWith('/admin/') || result.model_costs_enabled === true ? result : { ...result, model_costs_enabled: false, rows: undefined }); })
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [endpoint, range.start, range.end, attempt]);
+  const modelCostsEnabled = endpoint.startsWith('/admin/') || data?.model_costs_enabled === true;
+  const chartData = useMemo<OverviewData | null>(() => data ? { ...data, model_costs_enabled: false, earliest_date: null, latest_account_data: null, sources: [], days: data.days.map(day => ({ date: day.date, status: day.collected_at ? 'complete' : 'missing', expected: 1, collected: day.collected_at ? 1 : 0 })) } : null, [data]);
   const models = useMemo(() => dailyModels(data?.rows || []), [data]);
-  const rows = useMemo(() => filterDailyRows(data?.rows || [], selection), [data, selection]);
+  const rows = useMemo(() => modelCostsEnabled ? filterDailyRows(data?.rows || [], selection) : data?.daily_totals || [], [data, selection, modelCostsEnabled]);
   const totals = useMemo(() => dailyTotals(rows), [rows]);
   const collected = data?.days.filter(day => day.collected_at).length || 0;
   const incomplete = data?.days.some(day => day.status !== 'complete');
-  const noSelection = selection !== null && !models.some(m => selection.includes(m));
+  const noSelection = modelCostsEnabled && selection !== null && !models.some(m => selection.includes(m));
   const known = !!data && collected > 0 && !noSelection;
   const updated = data?.days.map(day => day.collected_at).filter((v): v is string => !!v).sort().at(-1);
   const pageCount = Math.max(1, Math.ceil(rows.length / 20));
   const visiblePage = Math.min(page, pageCount), pageRows = rows.slice((visiblePage - 1) * 20, visiblePage * 20);
   function changeRange(next: typeof range) { setRange(next); setDraft(next); setPage(1); setDateError(''); }
   return <section className={`daily-usage ${compact ? 'daily-compact' : ''}`} aria-labelledby='daily-usage-title'>
-    <div className='daily-heading'><div><h2 id='daily-usage-title'>Daily usage</h2><p className='usage-small'>Daily tokens and cost, broken down by model.</p></div>{compact && <button className='usage-text-button' onClick={onOpen}>View daily details<ArrowUpRight aria-hidden='true' /></button>}</div>
+    <div className='daily-heading'><div><h2 id='daily-usage-title'>Daily usage</h2><p className='usage-small'>Daily tokens and cost, {modelCostsEnabled ? 'broken down by model.' : 'for all models.'}</p></div>{compact && <button className='usage-text-button' onClick={onOpen}>View daily details<ArrowUpRight aria-hidden='true' /></button>}</div>
     <div className='daily-filters'>
       <div className='daily-date-control'><span className='daily-filter-label'>Date range</span><div className='daily-presets'>{[7, 30].map(count => { const preset = recentDailyRange(count); return <button type='button' key={count} aria-pressed={range.start === preset.start && range.end === preset.end} onClick={() => changeRange(preset)}>Last {count} days</button>; })}</div></div>
       {!compact && <form className='daily-custom-dates' onSubmit={e => { e.preventDefault(); if (!validDailyRange(draft.start, draft.end)) { setDateError('Choose up to 90 complete days, ending no later than yesterday.'); return; } changeRange(draft); }}>
         <label>From<input type='date' value={draft.start} max={recentDailyRange(1).end} onChange={e => setDraft(d => ({ ...d, start: e.target.value }))} required /></label><label>To<input type='date' value={draft.end} max={recentDailyRange(1).end} onChange={e => setDraft(d => ({ ...d, end: e.target.value }))} required /></label><button className='button pale' type='submit' disabled={loading}>Apply</button>
       </form>}
-      <ModelFilter models={models} value={selection} onChange={value => { setSelection(value); setPage(1); }} />
+      {modelCostsEnabled && <ModelFilter models={models} value={selection} onChange={value => { setSelection(value); setPage(1); }} />}
     </div>
     <ErrorNotice>{dateError || error}</ErrorNotice>{error && <button className='button pale' onClick={() => setAttempt(v => v + 1)}>Try again</button>}
     {loading ? <Loading label='Loading daily usage…' /> : data && <>
       <div className='daily-range-caption'>{dailyDate(data.start_date)} – {dailyDate(data.end_date)}, {data.end_date.slice(0, 4)}<span>Asia/Shanghai</span></div>
-      {!compact && <div className='usage-metrics daily-summary'><div><span>Total cost</span><strong>{known ? dailyMoney(totals.cost) : '—'}</strong><small>{incomplete ? 'Available days in selected period' : 'Selected models and period'}</small></div><div><span>Input tokens</span><strong>{known ? dailyTokens(totals.input) : '—'}</strong><small>Selected models and period</small></div><div><span>Output tokens</span><strong>{known ? dailyTokens(totals.output) : '—'}</strong><small>Selected models and period</small></div></div>}
+      {!compact && <div className='usage-metrics daily-summary'><div><span>Total cost</span><strong>{known ? dailyMoney(modelCostsEnabled ? totals.cost : data.total_cost_usd ?? totals.cost) : '—'}</strong><small>{incomplete ? 'Available days in selected period' : modelCostsEnabled ? 'Selected models and period' : 'Selected period'}</small></div><div><span>Input tokens</span><strong>{known ? dailyTokens(totals.input) : '—'}</strong><small>{modelCostsEnabled ? 'Selected models and period' : 'Selected period'}</small></div><div><span>Output tokens</span><strong>{known ? dailyTokens(totals.output) : '—'}</strong><small>{modelCostsEnabled ? 'Selected models and period' : 'Selected period'}</small></div></div>}
       {incomplete && <p className='daily-data-notice' role='status'>{collected ? 'Some daily bills are not available yet. Totals include collected days only; previously collected data is retained.' : 'No daily bills have been collected for this period yet. Missing data is shown as —.'}{data.days.some(day => day.status === 'failed' || day.status === 'stale') && <span> A collection or account match needs attention. Details are available below.</span>}</p>}
-      <div className='daily-chart-panel'><div className='usage-metric-tabs daily-metric-tabs' role='group' aria-label='Daily chart metric'>{(Object.keys(dailyMetrics) as DailyMetric[]).map(key => <button key={key} type='button' aria-pressed={metric === key} onClick={() => setMetric(key)}>{dailyMetrics[key]}</button>)}</div><DailyChart data={data} metric={metric} selection={selection} /></div>
-      {!compact && <div className='daily-table-panel'><div className='daily-table-heading'><h3>Daily breakdown</h3><span>All token metrics · cost in $</span></div><div className='usage-table-scroll'><table className='daily-table'><caption className='sr-only'>Daily usage for selected models. Dates use Asia/Shanghai.</caption><thead><tr><th scope='col'>Date</th><th scope='col'>Model</th><th scope='col'>Input tokens</th><th scope='col'>Cache write</th><th scope='col'>Cache read</th><th scope='col'>Output tokens</th><th scope='col'>Cost</th></tr></thead><tbody>{pageRows.map(row => <tr key={`${row.date}:${row.model}`}><td><time dateTime={row.date}>{dailyDate(row.date)}</time></td><td>{row.model}</td><td>{dailyTokens(row.input_tokens)}</td><td>{dailyTokens(row.cache_write_tokens)}</td><td>{dailyTokens(row.cache_read_tokens)}</td><td>{dailyTokens(row.output_tokens)}</td><td className='daily-row-cost'>{dailyMoney(row.cost_usd)}</td></tr>)}</tbody></table></div>
-        {!rows.length && <div className='usage-empty'><h2>{noSelection ? 'No models selected' : collected ? 'No model usage recorded' : 'Daily usage is not available yet'}</h2><p>{noSelection ? 'Choose one or more models above.' : collected ? 'No bill lines were returned for the collected days and selected models.' : 'Daily bills are collected at 03:00 the following day.'}</p></div>}
+      <div className='daily-chart-panel'><div className='usage-metric-tabs daily-metric-tabs' role='group' aria-label='Daily chart metric'>{(Object.keys(dailyMetrics) as DailyMetric[]).map(key => <button key={key} type='button' aria-pressed={metric === key} onClick={() => setMetric(key)}>{dailyMetrics[key]}</button>)}</div>{modelCostsEnabled ? <DailyChart data={data} metric={metric} selection={selection} /> : chartData && <OverviewChart data={chartData} models={[]} metric={metric} />}</div>
+      {!compact && <div className='daily-table-panel'><div className='daily-table-heading'><h3>Daily breakdown</h3><span>All token metrics · cost in $</span></div><div className='usage-table-scroll'><table className='daily-table'><caption className='sr-only'>Daily usage for the selected period. Dates use Asia/Shanghai.</caption><thead><tr><th scope='col'>Date</th>{modelCostsEnabled && <th scope='col'>Model</th>}<th scope='col'>Input tokens</th><th scope='col'>Cache write</th><th scope='col'>Cache read</th><th scope='col'>Output tokens</th><th scope='col'>Cost</th></tr></thead><tbody>{pageRows.map(row => <tr key={`${row.date}:${'model' in row ? row.model : ''}`}><td><time dateTime={row.date}>{dailyDate(row.date)}</time></td>{modelCostsEnabled && <td>{'model' in row ? String(row.model) : ''}</td>}<td>{dailyTokens(row.input_tokens)}</td><td>{dailyTokens(row.cache_write_tokens)}</td><td>{dailyTokens(row.cache_read_tokens)}</td><td>{dailyTokens(row.output_tokens)}</td><td className='daily-row-cost'>{dailyMoney(row.cost_usd)}</td></tr>)}</tbody></table></div>
+        {!rows.length && <div className='usage-empty'><h2>{noSelection ? 'No models selected' : collected ? modelCostsEnabled ? 'No model usage recorded' : 'No daily usage recorded' : 'Daily usage is not available yet'}</h2><p>{noSelection ? 'Choose one or more models above.' : collected ? modelCostsEnabled ? 'No bill lines were returned for the collected days and selected models.' : 'No bill lines were returned for the collected days.' : 'Daily bills are collected at 03:00 the following day.'}</p></div>}
         {!!rows.length && <div className='usage-pagination'><span>{rows.length.toLocaleString()} rows · Page {visiblePage} of {pageCount}</span><div><button className='button pale' disabled={visiblePage <= 1} onClick={() => setPage(visiblePage - 1)}><ChevronLeft aria-hidden='true' />Previous</button><button className='button pale' disabled={visiblePage >= pageCount} onClick={() => setPage(visiblePage + 1)}>Next<ChevronRight aria-hidden='true' /></button></div></div>}
       </div>}
       {data.days.some(day => day.error) && <details className='daily-collection-details'><summary>Collection details</summary>{data.days.filter(day => day.error).map(day => <p key={day.date}><time>{day.date}</time> {day.error}{day.collected_at && ' Showing the last successful data.'}</p>)}</details>}

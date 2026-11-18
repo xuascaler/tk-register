@@ -9,8 +9,9 @@ all system users. The existing administrative list retains its search, status
 filter, pagination, and Sync action. Account deletion is not exposed in the frontend.
 
 Personal and administrative Overview default to All time in Asia/Shanghai.
-Source and model filters initially select all entries. Date shortcuts include
-the past day, seven days, thirty days, and All time; custom dates end no later than
+Source and model filters initially select all entries. The personal Overview
+allows only the past day (yesterday), seven days, thirty days, and All time.
+Administrative Management pages also retain custom dates ending no later than
 yesterday. All time starts at the first successfully collected daily bill for the
 selected sources and current account identities. If none exists, it shows an
 empty yesterday. Changing filters only reads the database.
@@ -50,21 +51,51 @@ storage.
 ## Data and visibility
 
 The session-authenticated `GET /tk-register/api/accounts/overview` endpoint accepts
-the existing `sources` filter and either `period=day|week|month|all_time` or
-`start_date` / `end_date`. Legacy `range=all` remains supported. Requests also
-accept `models=all` (default), `models=none`, or a comma-separated model selection.
+the existing `sources` filter and `period=day|week|month|all_time`, defaulting to
+All time. Personal requests reject custom dates. Legacy `range=all` selects
+All time. When model details are enabled, requests also accept `models=all`
+(default), `models=none`, or a comma-separated model selection.
 It uses the existing recursive visibility rules. Descendants are grouped under
 the viewer's direct member; their underlying user identities are not exposed.
 Deleted accounts and previous remote identities are excluded.
 
-The administrator-only `GET /tk-register/api/admin/accounts/overview` accepts the
-same date and Source parameters. Its Source options come from
+The administrator-only `GET /tk-register/api/admin/accounts/overview` retains
+model selections, custom dates, presets, and Source parameters. Its Source options come from
 `GET /tk-register/api/admin/accounts/overview/sources`. The current administrator
 is labeled `myself`; other users are labeled with their email addresses. Every
 row groups accounts by their actual owner, without recursively including that
 user's descendants. Users with no accounts remain available in the Source
 filter. Each account contributes once to administrative totals. These endpoints
 require an administrator browser session and do not accept personal API tokens.
+
+### Model detail visibility
+
+Config → Overview has the boolean `user_overview_model_costs_enabled`, disabled
+by default. It applies to personal pages and endpoints even when the signed-in
+user is an administrator. Management endpoints retain their full data.
+
+When disabled, personal Overview omits the model selector, model cost cards, and
+the Source table's Model costs toggle. Usage period uses a single-select dropdown
+with Past day, Past 7 days, Past month, and All time. Selecting a value applies it
+and closes the menu; the selected row has a check mark. The dropdown uses the
+existing select keyboard and viewport behavior and keeps its mode while a new
+period loads. Enabled personal pages and Management retain their date controls.
+The backend returns account statistics,
+Source totals, the selected-period total, and daily totals computed across all
+models. It omits per-model rows and costs; model-specific API filters are
+rejected. Daily usage displays a single total series: bars for up to 14 days,
+and a smooth curve for longer periods, with Cost/Input tokens/Output tokens.
+
+The setting is checked when responding, including when reading existing summary
+cache records. It does not remove stored bills or require regenerating summaries.
+Personal single-account daily-usage endpoints also return totals only. Personal
+submission history keeps structured account-level totals and request metadata,
+but omits opaque supplier result and error bodies that might contain model usage.
+Guided authorization submissions, including replayed results, use the same
+personal response projection while retaining submission identity and status.
+In this mode, API submission responses preserve identity/status fields and HTTP
+status/correlation headers, while arbitrary supplier payload extensions are not
+passed through. Full model responses return when the setting is enabled.
 
 For example, if A created B and B created C, A's personal Overview groups B's and
 C's accounts under B. The administrative Overview shows A, B, and C separately,
@@ -77,9 +108,9 @@ the same daily bills for the selected sources, dates, and models. All time means
 all available daily bills in the saved date range, not the supplier lifetime
 cumulative amount. The separate Accounts list retains its cumulative spend.
 
-Models are filtered in the browser over already aggregated rows; an explicit
-API model selection applies the same filtering to period rows, model costs, and
-Source fees. Currency conversion uses the existing configured CNY-per-USD
+When model details are enabled, models are filtered in the browser over already
+aggregated rows; an explicit API model selection applies the same filtering to
+period rows, model costs, and Source fees. Currency conversion uses the existing configured CNY-per-USD
 exchange rate. Raw CNY billing values are unchanged. USD amounts are reconciled
 to cents across Source/model cells and daily rows so the displayed Source,
 model, and period totals agree, including after model selection. A rounding
@@ -95,7 +126,8 @@ available when a subsequent collection fails.
 
 ## Charts
 
-Ranges up to fourteen days use stacked bars. Longer ranges use 3.5 px smooth
+Ranges up to fourteen days use bars, stacked by model when details are enabled.
+Longer ranges use 3.5 px smooth
 monotone curves without overshooting observed points. Missing days break the
 curve. Hover or use the arrow keys on the chart to inspect exact daily values.
 Counts and totals do not navigate to other pages.
@@ -138,7 +170,7 @@ red `—` values and an empty chart. Existing summaries return
 shows the actual saved date range and generation time even when the preset is
 older than yesterday.
 
-Custom date ranges and Source subsets retain on-demand database aggregation.
+Management custom date ranges and Source subsets retain on-demand database aggregation.
 Changing only the model selection can reuse an all-source preset summary.
 Account transfers, deletions, and hierarchy changes are reflected in the next
 nightly preset generation, not rebuilt during the day. Session validity and

@@ -847,7 +847,7 @@ func (a *app) updateCredentialFlow(w http.ResponseWriter, r *http.Request, user 
 		vendorFailure(w, err)
 		return
 	}
-	ok(w, detail)
+	a.writePersonalSubmission(w, r, detail)
 }
 
 func emptyCredentialValue(value any) bool {

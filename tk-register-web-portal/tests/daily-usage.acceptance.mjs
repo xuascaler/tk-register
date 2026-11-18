@@ -21,7 +21,7 @@ try {
    const start=url.searchParams.get('start_date'),end=url.searchParams.get('end_date');const days=[],rows=[];
    for(let at=Date.parse(start);at<=Date.parse(end);at+=86400000){const date=new Date(at).toISOString().slice(0,10);days.push({date,status:'complete',collected_at:new Date().toISOString()});for(const [i,model] of ['claude-sonnet','claude-opus','claude-haiku'].entries()) rows.push({date,model,input_tokens:String(35000*(i+1)),output_tokens:String(12000*(i+1)),cache_write_tokens:String(2500*(i+1)),cache_read_tokens:String(8000*(i+1)),cost_cny:String(72*(i+1)),cost_usd:10*(i+1)});}
    rows.sort((a,b)=>b.date.localeCompare(a.date)||a.model.localeCompare(b.model));
-   return ok({start_date:start,end_date:end,timezone:'Asia/Shanghai',collection_time:'03:00',currency:'CNY',exchange_rate_cny_per_usd:7.2,days,rows});
+   return ok({model_costs_enabled:true,start_date:start,end_date:end,timezone:'Asia/Shanghai',collection_time:'03:00',currency:'CNY',exchange_rate_cny_per_usd:7.2,days,rows});
   }
   if(/^\/(accounts|admin\/synced-accounts)\/1$/.test(path))return ok({account,interval_seconds:300,timezone:'Asia/Shanghai',snapshots:[],snapshot_count:0,trend:{cost_total_usd:[],input_tokens_total:[],output_tokens_total:[]}});
   return route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({success:false,message:'Unexpected mock request'})});

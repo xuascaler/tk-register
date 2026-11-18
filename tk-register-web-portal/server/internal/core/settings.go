@@ -49,6 +49,7 @@ type settingSpec struct {
 }
 
 var specs = []settingSpec{
+	{"user_overview_model_costs_enabled", "overview", "boolean", "false", "Show model costs and model-level usage on personal account pages and APIs. Management views always retain model details.", 0, 0, nil},
 	{exchangeRateSettingKey, "exchange_rate", "decimal", defaultExchangeRate, "CNY per 1 USD. Used for current and historical account amounts, charts, and API responses. Default: 7.2. Greater than 0, up to 10000 and 6 decimal places.", 0, 10000, nil},
 	{"smtp_host", "email", "string", "", "SMTP server hostname.", 0, 253, nil},
 	{"smtp_port", "email", "integer", "587", "SMTP server port.", 1, 65535, nil},

@@ -110,10 +110,23 @@ test('overview uses one cent matrix for selected-period source, model and total 
 });
 test('overview daily cost totals use cents while token metrics retain their original values', () => {
   const fixture: OverviewData = { ...data, rows: [
-    { ...data.rows[0], model: 'sonnet', cost_usd: 0.10, input_tokens: '123' },
-    { ...data.rows[0], model: 'opus', cost_usd: 0.20, input_tokens: '456' },
+    { ...data.rows![0], model: 'sonnet', cost_usd: 0.10, input_tokens: '123' },
+    { ...data.rows![0], model: 'opus', cost_usd: 0.20, input_tokens: '456' },
   ] };
   const cost = overviewSeries(fixture, ['sonnet', 'opus'], 'cost_usd');
   assert.equal(cost[1].value, 0.30);
   assert.equal(overviewSeries(fixture, ['sonnet', 'opus'], 'input_tokens')[1].value, 579);
+});
+
+
+test('disabled overview uses only backend totals and keeps exact token counters', () => {
+  const total = { date: '2026-11-13', cost_cny: '2.376', cost_usd: 0.33, input_tokens: '9007199254740993', output_tokens: '44', cache_read_tokens: '0', cache_write_tokens: '0' };
+  const disabled: OverviewData = { ...data, model_costs_enabled: false, total_cost_usd: 0.33, sources: [{ ...data.sources[0], cost_usd: 0.33 }], rows: undefined, model_costs: undefined, daily_totals: [total] };
+  assert.deepEqual(overviewModels(disabled), []);
+  const costs = overviewCosts(disabled, ['sonnet']);
+  assert.equal(costs.total, 0.33); assert.equal(costs.sources.get('myself'), 0.33); assert.equal(costs.models.size, 0); assert.equal(costs.cells.size, 0);
+  const points = overviewSeries(disabled, [], 'cost_usd');
+  assert.deepEqual(points.map(point => point.value), [null, 0.33, 0, 0]);
+  assert.equal(overviewSeries(disabled, [], 'input_tokens')[1].total?.input_tokens, '9007199254740993');
+  assert.deepEqual(Object.fromEntries(overviewQuery('all', 'all_time', { start: '', end: '' }, false)), { sources: 'all', period: 'all_time' });
 });

@@ -163,6 +163,17 @@ func (a *app) claudeAccountsAPI(w http.ResponseWriter, r *http.Request) {
 			fail(w, result.HTTPStatus, result.ErrorCode, result.Message)
 			return
 		}
+		enabled, visibilityErr := a.userModelCostsEnabled(r.Context())
+		if visibilityErr != nil {
+			internal(w)
+			return
+		}
+		if !enabled {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(result.HTTPStatus)
+			_, _ = w.Write(totalsOnlySubmissionBody(result.Body, result.HTTPStatus))
+			return
+		}
 		if result.ContentType != "" {
 			w.Header().Set("Content-Type", result.ContentType)
 		} else {

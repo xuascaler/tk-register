@@ -28,6 +28,7 @@ const groups = [
   ['sessions', 'Sessions'],
   ['vendors', 'Vendors'],
   ['account_sync', 'Account sync'],
+  ['overview', 'Overview'],
   ['users', 'Users'],
   ['bill_exports', 'Bill exports'],
   ['exchange_rate', 'Exchange rate'],
@@ -179,7 +180,7 @@ export default function Config({
             checked={String(value) === 'true'}
             onChange={(event) => update(setting, String(event.target.checked))}
           />
-          <span aria-hidden='true'>{String(value)}</span>
+          <span aria-hidden='true'>{setting.key === 'user_overview_model_costs_enabled' ? String(value) === 'true' ? 'Enabled' : 'Disabled' : String(value)}</span>
         </label>
       );
     if (setting.options?.length)

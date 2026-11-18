@@ -115,6 +115,9 @@ func TestAdminAccountsOverviewAuthorizationAndReadOnly(t *testing.T) {
 func TestOverviewPresetCacheMissAndModelFiltering(t *testing.T) {
 	a, owner, cookie, _, _, fake := setupPageSync(t)
 	ctx := context.Background()
+	if err := a.store.PatchSettings(ctx, map[string]string{"user_overview_model_costs_enabled": "true"}, owner.ID); err != nil {
+		t.Fatal(err)
+	}
 	for _, preset := range []string{"day", "week", "month", "all_time"} {
 		w := request(t, a, "GET", "accounts/overview?sources=all&models=all&period="+preset, nil, cookie, "")
 		requireStatus(t, w, 200)

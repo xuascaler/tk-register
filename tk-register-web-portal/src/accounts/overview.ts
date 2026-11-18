@@ -1,20 +1,21 @@
-import { recentDailyRange, type DailyRow, type ModelSelection, type DailyMetric } from './daily-usage';
+import { recentDailyRange, type DailyRow, type ModelSelection, type DailyMetric, type DailyTotal } from './daily-usage';
 
 export const overviewStatuses = ['active', 'pending', 'offline', 'banned', 'sync_failed', 'login_failed', 're_login_failed', 'bound_failed', 'cooking_failed', 'limited', 'unknown'];
 export type OverviewPeriod = 'day' | 'week' | 'month' | 'all_time';
 export type OverviewRangeSelection = OverviewPeriod | 'custom';
-export function overviewQuery(sources: string, period: OverviewRangeSelection, range: { start: string; end: string }) {
+export function overviewQuery(sources: string, period: OverviewRangeSelection, range: { start: string; end: string }, administrative = true) {
   // Always fetch every model once. Changing the model selection is local and
   // must not change account counts; selected-period costs are filtered locally.
-  return new URLSearchParams({ sources, models: 'all', ...(period === 'custom' ? { start_date: range.start, end_date: range.end } : { period }) });
+  return new URLSearchParams({ sources, ...(administrative ? { models: 'all' } : {}), ...(period === 'custom' ? { start_date: range.start, end_date: range.end } : { period }) });
 }
 export type OverviewSource = { id: string; label: string; total: number; statuses: Record<string, number>; cost_usd: number | null; cost_known: number; collected_days: number };
 export type OverviewData = {
   summary_available?: boolean; summary_generated_at?: string | null; summary_period?: string;
   start_date: string; end_date: string; earliest_date: string | null; timezone: string; collection_time: string;
   exchange_rate_cny_per_usd: number; latest_account_data: string | null;
-  sources: OverviewSource[]; rows: DailyRow[];
-  model_costs: { source_id: string; model: string; cost_cny: string; cost_usd: number }[];
+  model_costs_enabled?: boolean; total_cost_usd?: number | null; daily_totals?: DailyTotal[];
+  sources: OverviewSource[]; rows?: DailyRow[];
+  model_costs?: { source_id: string; model: string; cost_cny: string; cost_usd: number }[];
   days: { date: string; status: 'complete' | 'partial' | 'missing'; expected: number; collected: number }[];
 };
 export function overviewTotals(sources: OverviewSource[]): OverviewSource {
@@ -24,7 +25,7 @@ export function overviewTotals(sources: OverviewSource[]): OverviewSource {
     cost_known: sum.cost_known + row.cost_known, collected_days: sum.collected_days + row.collected_days,
   }), { id: 'total', label: 'Total', total: 0, statuses: {}, cost_usd: null, cost_known: 0, collected_days: 0 });
 }
-export function overviewModels(data: OverviewData | null) { return data?.summary_available === false ? [] : [...new Set([...(data?.rows.map(row => row.model) || []), ...(data?.model_costs.map(row => row.model) || [])])].sort(); }
+export function overviewModels(data: OverviewData | null) { return data?.summary_available === false || data?.model_costs_enabled === false ? [] : [...new Set([...(data?.rows?.map(row => row.model) || []), ...(data?.model_costs?.map(row => row.model) || [])])].sort(); }
 export function selectedOverviewModels(data: OverviewData, selection: ModelSelection) { const models = overviewModels(data); return selection === null ? models : models.filter(model => selection.includes(model)); }
 export type OverviewCosts = {
   total: number | null;
@@ -33,6 +34,11 @@ export type OverviewCosts = {
   cells: Map<string, Map<string, number | null>>;
 };
 export function overviewCosts(data: OverviewData | null, selection: ModelSelection): OverviewCosts {
+  if (data?.model_costs_enabled === false) {
+    const available = data.summary_available !== false;
+    const sources = new Map(data.sources.map(source => [source.id, available ? source.cost_usd : null]));
+    return { total: available ? data.total_cost_usd ?? null : null, sources, models: new Map(), cells: new Map() };
+  }
   const selected = data ? selectedOverviewModels(data, selection) : [];
   const enabled = data?.summary_available !== false && (selection === null || selected.length > 0);
   const cents = new Map<string, Map<string, number>>();
@@ -69,11 +75,19 @@ export function validOverviewRange(start: string, end: string, now = new Date())
 }
 export function overviewSeries(data: OverviewData, models: string[], metric: DailyMetric) {
   if (data.summary_available === false) return [];
+  if (data.model_costs_enabled === false) {
+    const totals = new Map((data.daily_totals || []).map(row => [row.date, row]));
+    return data.days.map(day => {
+      const total = totals.get(day.date);
+      const value = day.collected > 0 ? Number(total?.[metric] || 0) : null;
+      return { ...day, rows: [] as DailyRow[], total, values: [value], value };
+    });
+  }
   // A successfully collected period may have no model rows at all. Keep its
   // zero total visible, without inventing a model or overriding deselection.
   const aggregateOnly = !models.length && !overviewModels(data).length;
   const byDate = new Map<string, Map<string, DailyRow>>();
-  for (const row of data.rows) { if (!models.includes(row.model)) continue; if (!byDate.has(row.date)) byDate.set(row.date, new Map()); byDate.get(row.date)!.set(row.model, row); }
+  for (const row of data.rows || []) { if (!models.includes(row.model)) continue; if (!byDate.has(row.date)) byDate.set(row.date, new Map()); byDate.get(row.date)!.set(row.model, row); }
   return data.days.map(day => {
     const rows = models.map(model => byDate.get(day.date)?.get(model)).filter((row): row is DailyRow => !!row);
     const values = aggregateOnly ? [day.collected > 0 ? 0 : null] : models.map(model => {
@@ -82,6 +96,6 @@ export function overviewSeries(data: OverviewData, models: string[], metric: Dai
       // Older responses may still mark these days as partial.
       return day.collected > 0 ? row ? Number(row[metric]) : 0 : null;
     });
-    return { ...day, rows, values, value: values.some(v => v !== null) ? metric === 'cost_usd' ? values.reduce<number>((sum, value) => sum + Math.round((value || 0) * 100), 0) / 100 : values.reduce<number>((sum, value) => sum + (value || 0), 0) : null };
+    return { ...day, rows, total: undefined as DailyTotal | undefined, values, value: values.some(v => v !== null) ? metric === 'cost_usd' ? values.reduce<number>((sum, value) => sum + Math.round((value || 0) * 100), 0) / 100 : values.reduce<number>((sum, value) => sum + (value || 0), 0) : null };
   });
 }

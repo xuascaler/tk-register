@@ -332,6 +332,79 @@ func TestCredentialSubmissionUnknownAllowsExplicitRetry(t *testing.T) {
 	}
 }
 
+func TestCredentialSubmissionRespectsPersonalModelVisibility(t *testing.T) {
+	for _, role := range []string{"member", "admin"} {
+		for _, upstreamStatus := range []int{http.StatusOK, http.StatusBadRequest} {
+			t.Run(fmt.Sprintf("%s/%d", role, upstreamStatus), func(t *testing.T) {
+				a, _, _ := fixture(t)
+				admin, adminCookie, _ := vendorSession(t, a, "visibility-config@example.com", "admin")
+				owner, cookie, csrf := vendorSession(t, a, "visibility-submit@example.com", role)
+				vendor := configuredVendor(t, a, admin.ID)
+				storedCredentialFlow(t, a, owner, true)
+				credentialHelperFixture(t, func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+					_ = json.NewEncoder(w).Encode(credentialReply(owner.ID, true))
+				})
+				var pushes atomic.Int32
+				const marker = "claude-model-visibility-marker"
+				a.vendorTransport = vendorRoundTrip(func(*http.Request) (*http.Response, error) {
+					pushes.Add(1)
+					if upstreamStatus == http.StatusBadRequest {
+						return remoteResponse(upstreamStatus, `{"error":"rejected","model_usage":{"claude-model-visibility-marker":{"cost":1234,"input_tokens":99}}}`), nil
+					}
+					return remoteResponse(upstreamStatus, `{"id":765432,"alias":"accepted account"}`), nil
+				})
+				input := createInput(vendor, "credential-visibility-key-001")
+				body := map[string]any{"flow_id": testCredentialFlowID, "vendor_id": input.VendorID, "protocol_version_id": input.ProtocolVersionID, "client_request_key": input.ClientRequestKey, "parameters": input.Parameters}
+				w := request(t, a, "POST", "credential-flows/submit", body, cookie, csrf)
+				requireStatus(t, w, http.StatusOK)
+				first := submissionDetail(t, w.Body.Bytes())
+				if strings.Contains(w.Body.String(), marker) {
+					t.Fatal("disabled guided submission leaked fresh model diagnostics")
+				}
+				wantStatus := "accepted"
+				if upstreamStatus == http.StatusBadRequest {
+					wantStatus = "failed"
+				}
+				if first.Submission.Status != wantStatus || first.Submission.ID == "" {
+					t.Fatal("guided submission identity or state changed", first.Submission)
+				}
+				// Replayed submissions may contain older metrics/billing executions
+				// saved before the visibility control was introduced.
+				stored := `{"models":[{"model":"claude-model-visibility-marker","cost":1234,"input_tokens":99}]}`
+				if err := a.store.DB.Model(&core.ProtocolExecution{}).Where("submission_id = ?", first.Submission.ID).Updates(map[string]any{"result_json": stored, "error_body": stored}).Error; err != nil {
+					t.Fatal(err)
+				}
+				for _, enabled := range []bool{false, true, false} {
+					if err := a.store.PatchSettings(context.Background(), map[string]string{"user_overview_model_costs_enabled": strconv.FormatBool(enabled)}, admin.ID); err != nil {
+						t.Fatal(err)
+					}
+					w = request(t, a, "POST", "credential-flows/submit", body, cookie, csrf)
+					requireStatus(t, w, http.StatusOK)
+					detail := submissionDetail(t, w.Body.Bytes())
+					if detail.Submission.ID != first.Submission.ID || detail.Submission.Status != wantStatus || pushes.Load() != 1 {
+						t.Fatal("visibility toggle changed guided submission idempotency or state")
+					}
+					if strings.Contains(w.Body.String(), marker) != enabled {
+						t.Fatal("guided submission did not apply current model visibility", enabled, w.Body.String())
+					}
+					if !enabled {
+						for _, execution := range detail.Executions {
+							if execution.Result != nil || execution.ErrorBody != "" || execution.RequestID == "" {
+								t.Fatal("opaque model fields leaked or request metadata was lost")
+							}
+						}
+					}
+				}
+				management := request(t, a, "GET", "admin/submissions/"+first.Submission.ID, nil, adminCookie, "")
+				requireStatus(t, management, http.StatusOK)
+				if !strings.Contains(management.Body.String(), marker) {
+					t.Fatal("personal projection removed stored Management details")
+				}
+			})
+		}
+	}
+}
+
 func TestCredentialFailureSafetyLocksAndValidation(t *testing.T) {
 	a, m, _ := fixture(t)
 	u, cookie, csrf := vendorSession(t, a, "failure-member@example.com", "member")

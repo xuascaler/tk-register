@@ -1,10 +1,11 @@
 .accounts-overview { min-width: 0; }
 .overview-filters { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.55fr) minmax(0,1.1fr); gap: 14px; align-items: start; margin: 24px 0 18px; }
 .overview-filters > .tk-select { width: 100%; min-width: 0; margin: 0; gap: 0; }
-.overview-filters > .tk-select > label { display: block; margin: 0 0 6px; color: #71839d; font-size: 12px; }
+.overview-filters > .tk-select > label, .overview-period-dropdown > .tk-select > label { display: block; margin: 0 0 6px; color: #71839d; font-size: 12px; }
+.overview-period-dropdown > .tk-select { gap: 0; }
 .overview-filters .tk-select-trigger { width: 100%; height: 40px; min-height: 40px; margin: 0; padding: 8px 11px; font-size: 12px; border-radius: 6px; }
 .overview-filters .tk-select-trigger > svg { width: 15px; height: 15px; }
-.overview-period .tk-select-trigger[aria-expanded=true] > svg { transform: none; }
+.overview-period:not(.overview-period-dropdown) .tk-select-trigger[aria-expanded=true] > svg { transform: none; }
 .overview-period-range { display:block; margin-top:5px; color:#71839d; font-size:10px; line-height:1.5; }
 .overview-unavailable, .accounts-overview.is-summary-unavailable .overview-stat-value, .accounts-overview.is-summary-unavailable .overview-status-grid strong, .accounts-overview.is-summary-unavailable .overview-period-total, .accounts-overview.is-summary-unavailable .overview-model-grid strong, .accounts-overview.is-summary-unavailable .overview-source-table td, .accounts-overview.is-summary-unavailable .overview-chart-total strong { color:#b64f58; }
 .overview-chart-placeholder { height:310px; margin-top:18px; }
@@ -128,3 +129,11 @@
   .overview-dates { grid-template-columns: 1fr; }
 }
 @media(pointer:coarse) { .overview-date-menu button { min-height: 44px; } .overview-dates input { font-size: 16px; } }
+
+.overview-filters.is-totals-only { grid-template-columns: minmax(0,1fr) minmax(0,1.55fr); }
+.overview-date-menu.is-presets-only .overview-presets { margin-bottom: 0; }
+@media(max-width:600px) { .overview-filters.is-totals-only .overview-period { grid-column: 2; grid-row: 1; } }
+@media(max-width:400px) {
+  .overview-filters.is-totals-only { grid-template-columns: minmax(0,1fr); }
+  .overview-filters.is-totals-only .overview-period { grid-column: 1; grid-row: 2; }
+}

@@ -7,7 +7,7 @@ export const overviewColors = ['#365f91', '#688bb8', '#9aafca', '#637d83', '#7d7
 export function OverviewChart({ data, models, metric, selectionEmpty = false }: { data: OverviewData; models: string[]; metric: DailyMetric; selectionEmpty?: boolean }) {
   const [active, setActive] = useState<number | null>(null);
   const wrap = useRef<HTMLDivElement>(null), [width, setWidth] = useState(1000);
-  const palette = overviewModels(data), aggregateOnly = !palette.length && !models.length && !selectionEmpty;
+  const palette = overviewModels(data), aggregateOnly = data.model_costs_enabled === false || !palette.length && !models.length && !selectionEmpty;
   const hasCollectedData = data.days.some(day => day.collected > 0);
   const chartSeries = aggregateOnly ? [''] : models;
   useLayoutEffect(() => {
@@ -18,8 +18,11 @@ export function OverviewChart({ data, models, metric, selectionEmpty = false }: 
   }, [models.length, aggregateOnly, hasCollectedData]);
   const series = useMemo(() => overviewSeries(data, models, metric), [data, models, metric]);
   const color = (model: string) => overviewColors[Math.max(0, palette.indexOf(model)) % overviewColors.length];
-  const lines = series.length > 14, height = 310, left = width < 600 ? 48 : 68, right = width - 14, top = 24, bottom = 266;
+  const lines = series.length > 14, height = 310, right = width - 14, top = 24, bottom = 266;
   const maximum = Math.max(1, ...series.map(day => lines ? Math.max(0, ...day.values.map(v => v || 0)) : day.value || 0)) * 1.1;
+  const axisNumber = (value: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  const axisLabels = [0, .25, .5, .75, 1].map(fraction => axisNumber(maximum * fraction));
+  const left = Math.max(width < 600 ? 48 : 68, Math.max(...axisLabels.map(label => label.length)) * 7 + 14);
   const step = (right - left) / Math.max(1, series.length), x = (i: number) => lines ? left + (right - left) * i / Math.max(1, series.length - 1) : left + step * (i + .5);
   const y = (value: number) => bottom - value / maximum * (bottom - top);
   const number = (value: number) => metric === 'cost_usd' ? dailyMoney(value) : new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
@@ -30,8 +33,8 @@ export function OverviewChart({ data, models, metric, selectionEmpty = false }: 
   return <>
     {!!models.length && <div className='daily-legend overview-chart-legend'>{models.map(model => <span key={model}><i style={{ background: color(model) }} />{model}</span>)}</div>}
     <div ref={wrap} className='overview-chart-wrap' onPointerLeave={() => setActive(null)}>
-      <div className='daily-chart-scroll'><svg className={`daily-chart overview-daily-chart ${lines ? 'is-curve' : 'is-bar'}`} viewBox={`0 0 ${width} ${height}`} role='img' aria-label={`Daily ${dailyMetrics[metric].toLowerCase()}${aggregateOnly ? '' : ' by model'}. ${lines ? 'Smooth curves' : 'Stacked bars'}. Use arrow keys to inspect dates.`}>
-        {[0, .25, .5, .75, 1].map(f => <g key={f}><line className='usage-gridline' x1={left} x2={right} y1={y(maximum * f)} y2={y(maximum * f)} /><text x={left - 10} y={y(maximum * f) + 4} textAnchor='end'>{new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(maximum * f)}</text></g>)}
+      <div className='daily-chart-scroll'><svg className={`daily-chart overview-daily-chart ${lines ? 'is-curve' : 'is-bar'}`} viewBox={`0 0 ${width} ${height}`} role='img' aria-label={`Daily ${dailyMetrics[metric].toLowerCase()}${aggregateOnly ? '' : ' by model'}. ${lines ? 'Smooth curves' : aggregateOnly ? 'Bars' : 'Stacked bars'}. Use arrow keys to inspect dates.`}>
+        {[0, .25, .5, .75, 1].map((f, index) => <g key={f}><line className='usage-gridline' x1={left} x2={right} y1={y(maximum * f)} y2={y(maximum * f)} /><text x={left - 10} y={y(maximum * f) + 4} textAnchor='end'>{axisLabels[index]}</text></g>)}
         {lines ? chartSeries.map((model, modelIndex) => {
           const segments: XY[][] = []; let segment: XY[] = [];
           series.forEach((point, i) => { const value = point.values[modelIndex]; if (value === null) { if (segment.length) segments.push(segment); segment = []; } else segment.push({ x: x(i), y: y(value) }); });
@@ -47,7 +50,7 @@ export function OverviewChart({ data, models, metric, selectionEmpty = false }: 
       </svg></div>
       {day && <div className={`daily-chart-tooltip ${active !== null && active > series.length / 2 ? 'overview-tooltip-left' : ''}`} role='status'><strong>{day.date}</strong><span>{day.value === null ? 'No daily bill collected' : dailyMetrics[metric]}</span>
         {models.map((model, i) => { const row = day.rows.find(row => row.model === model); return <div key={model}><span><i style={{ background: color(model) }} />{model}</span><b>{day.values[i] === null ? '—' : metric === 'cost_usd' ? dailyMoney(day.values[i]!) : dailyTokens(row?.[metric] || '0')}</b></div>; })}
-        {day.value !== null && <div className='daily-tooltip-total'><span>Total</span><b>{metric === 'cost_usd' ? number(day.value) : dailyTokens(day.rows.reduce((sum, row) => sum + BigInt(row[metric]), 0n))}</b></div>}
+        {day.value !== null && <div className='daily-tooltip-total'><span>Total</span><b>{metric === 'cost_usd' ? number(day.value) : dailyTokens(day.total ? day.total[metric] : day.rows.reduce((sum, row) => sum + BigInt(row[metric]), 0n))}</b></div>}
       </div>}
     </div>
   </>;

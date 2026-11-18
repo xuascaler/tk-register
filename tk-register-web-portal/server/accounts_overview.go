@@ -20,6 +20,23 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 	}
 	q := r.URL.Query()
 	period, start, end := q.Get("period"), q.Get("start_date"), q.Get("end_date")
+	modelCostsEnabled := true
+	if !administrative {
+		var err error
+		modelCostsEnabled, err = a.userModelCostsEnabled(r.Context())
+		if err != nil {
+			internal(w)
+			return
+		}
+		if q.Has("start_date") || q.Has("end_date") {
+			fail(w, 400, "INVALID_RANGE", "Choose day, week, month, or all_time.")
+			return
+		}
+		if !modelCostsEnabled && q.Has("models") {
+			fail(w, 400, "MODEL_DETAILS_DISABLED", "Model filtering is disabled for personal account pages.")
+			return
+		}
+	}
 	allTime := q.Get("range") == "all"
 	if q.Get("range") != "" && !allTime {
 		fail(w, 400, "INVALID_RANGE", "Choose a date range or All time.")
@@ -31,7 +48,7 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 	}
 	if period == "" && start == "" && end == "" {
 		period = "week"
-		if allTime {
+		if allTime || !administrative {
 			period = "all_time"
 		}
 	}
@@ -84,7 +101,16 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 		vendorFailure(w, err)
 	} else {
 		filterOverviewModels(&result, models)
-		ok(w, result)
+		if administrative {
+			ok(w, result)
+			return
+		}
+		personal, err := personalOverview(result, modelCostsEnabled)
+		if err != nil {
+			internal(w)
+			return
+		}
+		ok(w, personal)
 	}
 }
 
