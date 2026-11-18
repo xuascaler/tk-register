@@ -20,13 +20,15 @@ export default function AccountsOverview({ admin = false }: { admin?: boolean })
   const [selection, setSelection] = useState<ModelSelection>(null), [metric, setMetric] = useState<DailyMetric>('cost_usd');
   const [table, setTable] = useState<'status' | 'models'>('status');
   const [data, setData] = useState<OverviewData | null>(null), [loading, setLoading] = useState(true), [error, setError] = useState('');
+  // Retain the confirmed control mode while a new period or source is loading.
+  const [periodDropdown, setPeriodDropdown] = useState(!admin);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError(''); setData(null);
     const query = overviewQuery(scope.selection, period, range, admin);
     request<OverviewData>(`${admin ? '/admin/accounts/overview' : '/accounts/overview'}?${query}`, { signal: controller.signal })
-      .then(result => { if (!controller.signal.aborted) { setData(admin || result.model_costs_enabled === true ? result : { ...result, model_costs_enabled: false, rows: undefined, model_costs: undefined }); } })
+      .then(result => { if (!controller.signal.aborted) { setPeriodDropdown(!admin && result.model_costs_enabled !== true); setData(admin || result.model_costs_enabled === true ? result : { ...result, model_costs_enabled: false, rows: undefined, model_costs: undefined }); } })
       .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -56,7 +58,7 @@ export default function AccountsOverview({ admin = false }: { admin?: boolean })
   return <section className={`accounts-overview ${admin ? 'accounts-overview-admin' : ''} ${summaryUnavailable ? 'is-summary-unavailable' : ''}`} aria-label='Accounts overview'>
     <div className={`overview-filters ${modelCostsEnabled ? '' : 'is-totals-only'}`}>
       <SourceFilter id='overview-source' searchable={admin} />
-      <OverviewDateFilter allowCustom={admin} range={displayedRange} allTime={period === 'all_time'} period={period} onDays={chooseDays} onAllTime={() => setPeriod('all_time')} onApply={next => { setRange(next); setPeriod('custom'); }} />
+      <OverviewDateFilter dropdown={!admin && periodDropdown} allowCustom={admin} range={displayedRange} allTime={period === 'all_time'} period={period} onDays={chooseDays} onAllTime={() => setPeriod('all_time')} onApply={next => { setRange(next); setPeriod('custom'); }} />
       {modelCostsEnabled && <ModelFilter models={models} value={selection} onChange={setSelection} />}
     </div>
     <ErrorNotice>{error}</ErrorNotice>{error && <button className='button pale' onClick={() => setAttempt(n => n + 1)}>Try again</button>}

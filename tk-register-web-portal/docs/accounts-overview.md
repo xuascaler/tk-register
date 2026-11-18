@@ -75,7 +75,12 @@ by default. It applies to personal pages and endpoints even when the signed-in
 user is an administrator. Management endpoints retain their full data.
 
 When disabled, personal Overview omits the model selector, model cost cards, and
-the Source table's Model costs toggle. The backend returns account statistics,
+the Source table's Model costs toggle. Usage period uses a single-select dropdown
+with Past day, Past 7 days, Past month, and All time. Selecting a value applies it
+and closes the menu; the selected row has a check mark. The dropdown uses the
+existing select keyboard and viewport behavior and keeps its mode while a new
+period loads. Enabled personal pages and Management retain their date controls.
+The backend returns account statistics,
 Source totals, the selected-period total, and daily totals computed across all
 models. It omits per-model rows and costs; model-specific API filters are
 rejected. Daily usage displays a single total series: bars for up to 14 days,

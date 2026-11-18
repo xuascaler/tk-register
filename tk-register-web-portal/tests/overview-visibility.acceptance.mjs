@@ -69,17 +69,61 @@ try {
   assert.match(await page.locator('.daily-chart-tooltip').innerText(), /9,007,199,254,740,993/);
   await page.keyboard.press('Escape');
   const trigger = page.getByRole('button', { name: /^Usage date range:/ });
-  for (const label of ['Past day', 'Past 7 days', 'Past month', 'All time']) {
-    await trigger.click();
-    const menu = page.getByRole('dialog', { name: 'Usage dates', exact: true });
-    assert.deepEqual(await menu.getByRole('button').allTextContents(), ['Past day', 'Past 7 days', 'Past month', 'All time']);
-    assert.equal(await menu.locator('input[type=date]').count(), 0);
+  const periodSelect = page.getByRole('combobox', { name: 'Usage period', exact: true });
+  const periodList = page.getByRole('listbox', { name: 'Usage period', exact: true });
+  const personalCalls = () => calls.filter(call => call.path === '/accounts/overview');
+  const assertPeriodList = async width => {
+    assert.equal(await periodSelect.getAttribute('aria-expanded'), 'true');
+    assert.deepEqual(await periodList.getByRole('option').allTextContents(), ['Past day', 'Past 7 days', 'Past month', 'All time']);
+    assert.equal(await periodList.locator('input,footer,form').count(), 0);
+    assert.equal(await periodList.getByRole('option', { selected: true }).locator('svg.lucide-check').count(), 1);
+    assert.equal(await periodList.locator('svg.lucide-check').count(), 1);
+    const menu = await periodList.boundingBox(), field = await periodSelect.boundingBox();
+    assert.ok(menu && field && Math.abs(menu.width - field.width) <= 1, 'Period menu matches its trigger width');
+    assert.ok(menu.x >= 0 && menu.x + menu.width <= width, `Period menu fits ${width}px width`);
+    assert.ok(menu.y >= 0 && menu.y + menu.height <= 1080, `Period menu fits ${width}px viewport`);
+    const rows = await periodList.getByRole('option').evaluateAll(options => options.map(option => ({ x: option.getBoundingClientRect().x, top: option.getBoundingClientRect().top, bottom: option.getBoundingClientRect().bottom })));
+    assert.ok(rows.every((row, index) => Math.abs(row.x - rows[0].x) <= 1 && (!index || row.top >= rows[index - 1].bottom)), 'Four options form one vertical list');
+  };
+  const choosePeriod = async (label, activate) => {
     const response = page.waitForResponse(response => new URL(response.url()).pathname === '/tk-register/api/accounts/overview');
-    await menu.getByRole('button', { name: label, exact: true }).click();
-    await response;
+    await activate(); await response;
     await page.getByRole('heading', { name: 'Account summary', exact: true }).waitFor();
+    const days = ({ 'Past day': 1, 'Past 7 days': 7, 'Past month': 30, 'All time': 60 })[label];
+    await page.waitForFunction(amount => document.querySelector('.overview-summary-spent strong')?.textContent === amount, `${(days * 0.03).toFixed(2)} $`);
+    assert.equal((await periodSelect.innerText()).trim(), label);
+    assert.equal(await periodSelect.getAttribute('aria-expanded'), 'false');
     await assertPrivate();
+  };
+  assert.equal((await periodSelect.innerText()).trim(), 'All time');
+  assert.equal(await periodSelect.locator('svg.lucide-chevron-down').count(), 1);
+  assert.equal(await periodSelect.locator('svg.lucide-calendar-days').count(), 0);
+  await periodSelect.click(); await assertPeriodList(1440);
+  const beforeSame = personalCalls().length;
+  await periodList.getByRole('option', { name: 'All time', exact: true }).click();
+  await page.waitForTimeout(100);
+  assert.equal(await periodSelect.getAttribute('aria-expanded'), 'false');
+  assert.equal(personalCalls().length, beforeSame, 'Selecting the current period does not repeat the GET');
+  for (const label of ['Past day', 'Past 7 days', 'Past month', 'All time']) {
+    await periodSelect.click();
+    await choosePeriod(label, () => periodList.getByRole('option', { name: label, exact: true }).click());
   }
+  const beforeDismiss = personalCalls().length;
+  await periodSelect.click(); await periodSelect.press('Escape');
+  assert.equal(await periodSelect.getAttribute('aria-expanded'), 'false');
+  assert.equal(await periodSelect.evaluate(element => element === document.activeElement), true);
+  await periodSelect.click(); await page.getByRole('heading', { name: 'Accounts', exact: true }).click();
+  assert.equal(await periodSelect.getAttribute('aria-expanded'), 'false');
+  assert.equal((await periodSelect.innerText()).trim(), 'All time');
+  assert.equal(personalCalls().length, beforeDismiss, 'Dismissing the list leaves the selected period unchanged');
+  await periodSelect.press('Home');
+  await choosePeriod('Past day', () => periodSelect.press('Enter'));
+  await periodSelect.press('Home'); await periodSelect.press('ArrowDown');
+  await choosePeriod('Past 7 days', () => periodSelect.press('Enter'));
+  await periodSelect.press('End'); await periodSelect.press('ArrowUp');
+  await choosePeriod('Past month', () => periodSelect.press('Enter'));
+  await periodSelect.press('End');
+  await choosePeriod('All time', () => periodSelect.press('Enter'));
   assert.ok(calls.filter(call => call.path === '/accounts/overview').every(call => !call.query.has('models') && !call.query.has('start_date')));
   await mkdir('test-results', { recursive: true });
   for (const width of [1440, 390, 320]) {
@@ -89,6 +133,10 @@ try {
     assert.ok(chartLabels.every(label => label.x >= 0), `Chart labels must fit at ${width}px: ${JSON.stringify(chartLabels)}`);
     await page.screenshot({ path: `test-results/overview-disabled-${width}.png`, fullPage: true });
     await page.locator('.overview-usage').screenshot({ path: `test-results/overview-disabled-chart-${width}.png` });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await periodSelect.click(); await assertPeriodList(width);
+    await page.screenshot({ path: `test-results/period-dropdown-${width}.png` });
+    await periodSelect.press('Escape');
   }
   await page.setViewportSize({ width: 1440, height: 1080 });
   await goto('accounts/1/usage?tab=daily-usage');
@@ -126,5 +174,5 @@ try {
   await trigger.click();
   assert.equal(await page.getByRole('dialog', { name: 'Usage dates' }).locator('input[type=date]').count(), 2);
   assert.deepEqual(unknown, []); assert.deepEqual(errors, []);
-  console.log('Overview visibility acceptance passed: disabled personal admin scope, four presets, backend total chart and exact counters, mobile layouts, account aggregate table, Config save and enabled restoration, Management details/custom dates preserved.');
+  console.log('Overview visibility acceptance passed: disabled personal admin scope, vertical period dropdown with current-item check, immediate selection and no redundant GET, keyboard/dismissal and responsive menu bounds, backend total chart and exact counters, account aggregate table, Config save and enabled restoration, Management details/custom dates preserved.');
 } finally { await browser?.close(); server.kill('SIGTERM'); }
