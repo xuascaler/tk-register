@@ -100,7 +100,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {
-				ok(w, result)
+				a.writePersonalSubmission(w, r, result)
 			}
 		default:
 			fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
@@ -149,7 +149,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {
-				ok(w, result)
+				a.writePersonalSubmission(w, r, result)
 			}
 			return true
 		}
@@ -165,7 +165,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 				if e != nil {
 					vendorFailure(w, e)
 				} else {
-					ok(w, result)
+					a.writePersonalSubmission(w, r, result)
 				}
 				return true
 			}
@@ -187,7 +187,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {
-				ok(w, result)
+				a.writePersonalSubmission(w, r, result)
 			}
 			return true
 		}

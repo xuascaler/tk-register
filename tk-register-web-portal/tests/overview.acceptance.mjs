@@ -37,7 +37,7 @@ try {
         if(!missing&&chosen.length)for(const [m,model]of models.entries())rows.push({date,model,input_tokens:String((m+1)*1234567),output_tokens:String((m+1)*654321),cache_read_tokens:'0',cache_write_tokens:'0',cost_cny:'72',cost_usd:chosen.length*Math.round((m+1)*(10+Math.sin(i/3)*3)*100)/100});
       }
       const sources=chosen.map(s=>({...s,total:3,statuses:{active:1,login_failed:1,offline:1},cost_usd:rows.reduce((sum,row)=>sum+Math.round(row.cost_usd*100),0)/chosen.length/100,cost_known:3,collected_days:days.filter(d=>d.collected).length}));
-      return ok({start_date:start,end_date:end,earliest_date:chosen.length?'2026-05-01':null,timezone:'Asia/Shanghai',collection_time:'03:00',exchange_rate_cny_per_usd:7.2,latest_account_data:new Date().toISOString(),sources,days,rows,model_costs:sources.flatMap(s=>models.map(model=>({source_id:s.id,model,cost_cny:'72',cost_usd:rows.filter(r=>r.model===model).reduce((sum,r)=>sum+Math.round(r.cost_usd*100),0)/chosen.length/100})))});
+      return ok({model_costs_enabled:true,start_date:start,end_date:end,earliest_date:chosen.length?'2026-05-01':null,timezone:'Asia/Shanghai',collection_time:'03:00',exchange_rate_cny_per_usd:7.2,latest_account_data:new Date().toISOString(),sources,days,rows,model_costs:sources.flatMap(s=>models.map(model=>({source_id:s.id,model,cost_cny:'72',cost_usd:rows.filter(r=>r.model===model).reduce((sum,r)=>sum+Math.round(r.cost_usd*100),0)/chosen.length/100})))});
     }
     if(path==='/accounts')return ok({items:[],total:0,page:1,page_size:20});
     return route.fulfill({status:404,contentType:'application/json',body:JSON.stringify({success:false,message:'Unexpected mock request'})});
@@ -66,7 +66,7 @@ try {
   assert.equal((await dateTrigger.innerText()).trim(),'All time');
   assert.equal(await page.getByLabel('Start date',{exact:true}).isVisible(),false);
   const initial=overviewCalls().at(-1).query;
-  assert.equal(initial.get('period'),'all_time');assert.equal(initial.get('models'),'all');
+  assert.equal(initial.get('period'),'all_time');assert.equal(initial.has('models'),false);
   const initialRange=queryRange(initial);
   assert.equal(initial.get('sources'),'all');
   const summary=page.locator('section[aria-labelledby="overview-summary-heading"]');
@@ -75,22 +75,14 @@ try {
   assert.equal(await page.locator('.overview-daily-chart.is-curve').count(),1);
   assert.equal(await page.locator('.overview-source-table tbody tr').count(),3);
   assert.equal(await page.locator('.overview-status-grid a,.overview-status-grid button,.overview-source-table a,.overview-source-table button').count(),0);
-  for(const dismissal of ['outside','Escape','Cancel']){
+  for(const dismissal of ['outside','Escape']){
     await openDates();
-    assert.equal(await dateDialog.getByRole('button',{name:'All time',exact:true}).getAttribute('aria-pressed'),'true');
-    await dateDialog.getByLabel('Start date',{exact:true}).fill('2026-10-01');
-    await dateDialog.getByLabel('End date',{exact:true}).fill('2026-10-10');
+    assert.equal(await dateDialog.locator('input[type=date]').count(),0);
+    assert.equal(await dateDialog.getByRole('button').count(),4);
     const beforeDismiss=overviewCalls().length;
     if(dismissal==='outside')await page.getByRole('heading',{name:'Daily usage',exact:true}).click();
-    else if(dismissal==='Escape')await page.keyboard.press('Escape');
-    else await dateDialog.getByRole('button',{name:'Cancel',exact:true}).click();
-    await datesClosed();
-    assert.equal(overviewCalls().length,beforeDismiss,`${dismissal} must not apply draft dates`);
-    assert.equal((await dateTrigger.innerText()).trim(),'All time');
-    await openDates();
-    assert.equal(await dateDialog.getByLabel('Start date',{exact:true}).inputValue(),initialRange.start,`${dismissal} restores the start date`);
-    assert.equal(await dateDialog.getByLabel('End date',{exact:true}).inputValue(),initialRange.end,`${dismissal} restores the end date`);
-    await page.keyboard.press('Escape');await datesClosed();
+    else await page.keyboard.press('Escape');
+    await datesClosed();assert.equal(overviewCalls().length,beforeDismiss);
   }
   await page.locator('#overview-source').click();await page.getByRole('checkbox',{name:'ben@example.com',exact:true}).uncheck();await page.getByRole('button',{name:'Done',exact:true}).click();
   await page.waitForFunction(()=>document.querySelectorAll('.overview-source-table tbody tr').length===2);
@@ -105,16 +97,11 @@ try {
   await choosePreset('All time');await page.locator('.overview-daily-chart.is-curve').waitFor();
   assert.equal(overviewCalls().at(-1).query.get('period'),'all_time');
   await openDates();
-  assert.equal(await dateDialog.getByLabel('Start date',{exact:true}).inputValue(),'2026-05-01');
-  assert.equal(await dateDialog.getByLabel('End date',{exact:true}).inputValue(),yesterday);
+  assert.equal(await dateDialog.locator('input[type=date]').count(),0);
   await page.keyboard.press('Escape');await datesClosed();
   assert.ok(await page.locator('.overview-daily-chart path[stroke-width="3.5"]').count()>0);
   assert.match(await page.locator('.overview-daily-chart path').first().getAttribute('d'),/C/);
   await page.locator('.overview-chart-target').focus();await page.keyboard.press('ArrowRight');await page.locator('.daily-chart-tooltip').waitFor();await page.keyboard.press('Escape');
-  await openDates();await dateDialog.getByLabel('Start date',{exact:true}).fill('2026-10-01');await dateDialog.getByLabel('End date',{exact:true}).fill('2026-10-10');await dateDialog.getByRole('button',{name:'Apply',exact:true}).click();await datesClosed();await page.locator('.overview-daily-chart.is-bar').waitFor();
-  const custom=overviewCalls().at(-1).query;
-  assert.equal(custom.get('start_date'),'2026-10-01');assert.equal(custom.get('end_date'),'2026-10-10');assert.equal(custom.has('period'),false);assert.equal(custom.get('models'),'all');
-  await openDates();assert.equal(await dateDialog.getByLabel('Start date',{exact:true}).inputValue(),'2026-10-01');assert.equal(await dateDialog.getByLabel('End date',{exact:true}).inputValue(),'2026-10-10');await page.keyboard.press('Escape');await datesClosed();
   await choosePreset('Past month');await page.locator('.overview-daily-chart.is-curve').waitFor();
   const month=overviewCalls().at(-1).query;
   assert.equal(month.get('period'),'month');
@@ -131,8 +118,7 @@ try {
     const bounds=await dateDialog.boundingBox();
     assert.ok(bounds&&bounds.x>=0&&bounds.x+bounds.width<=width,`date popover fits at ${width}`);
     if(width===1440||width===390)await page.screenshot({path:`test-results/overview-dates-${width}.png`,fullPage:true});
-    const applyBounds=await dateDialog.getByRole('button',{name:'Apply',exact:true}).boundingBox();
-    assert.ok(applyBounds&&applyBounds.y+applyBounds.height<=bounds.y+bounds.height,`date actions are visible without scrolling at ${width}×1080`);
+    assert.equal(await dateDialog.getByRole('button').count(),4);
     await page.keyboard.press('Escape');await datesClosed();
   }
   await page.setViewportSize({width:1440,height:1080});await choosePreset('All time');await page.locator('.overview-daily-chart.is-curve').waitFor();await page.screenshot({path:'test-results/overview-all-time.png',fullPage:true});
@@ -144,5 +130,5 @@ try {
   await page.getByRole('tab',{name:'Account list',exact:true}).click();await page.getByRole('heading',{name:'No accounts yet',exact:true}).waitFor();assert.match(page.url(),/tab=list/);
   await page.reload();await page.getByRole('heading',{name:'No accounts yet',exact:true}).waitFor();assert.equal(await page.getByRole('tab',{name:'Account list',exact:true}).getAttribute('aria-selected'),'true');
   assert.equal(calls.some(c=>c.method!=='GET'||c.path.endsWith('/sync')),false);assert.deepEqual(errors,[]);
-  console.log('Overview acceptance passed: default All time, collapsed date popover and draft dismissal, merged model costs, recursive-source UI, models, custom dates, All time, smooth curves, nonlinked counts, missing data, empty filters, retries, responsive layouts and date popovers, list routing and read-only requests.');
+  console.log('Overview acceptance passed: default All time, collapsed date popover and dismissal, merged model costs, recursive-source UI, models, four period presets, All time, smooth curves, nonlinked counts, missing data, empty filters, retries, responsive layouts and date popovers, list routing and read-only requests.');
 }finally{if(browser)await browser.close();server.kill('SIGTERM')}

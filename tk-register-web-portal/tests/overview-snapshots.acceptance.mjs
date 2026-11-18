@@ -47,6 +47,7 @@ try {
         }
         for (const source of sources) source.cost_usd = zeroBills ? 0 : days.length * 30 / sources.length;
         return ok({
+          model_costs_enabled: true,
           ...(cached ? { summary_available: !empty, summary_generated_at: empty ? null : '2026-11-14T19:20:00+08:00', summary_period: period } : {}),
           // Missing all-time responses carry a fallback date, not a real history boundary.
           start_date: empty && period === 'all_time' ? yesterday : range.start, end_date: empty && period === 'all_time' ? yesterday : range.end,
@@ -93,7 +94,7 @@ try {
     await page.goto(`http://127.0.0.1:${port}/tk-register/#/${admin ? 'account-pool/accounts' : 'accounts'}`);
     await page.locator('.is-summary-unavailable').waitFor();
     await page.waitForFunction(() => document.querySelectorAll('.overview-source-table tbody tr').length === 2);
-    assert.deepEqual(Object.fromEntries(overviewCalls().at(-1).query), { sources: 'all', models: 'all', period: 'all_time' });
+    assert.deepEqual(Object.fromEntries(overviewCalls().at(-1).query), { sources: 'all', ...(admin ? { models: 'all' } : {}), period: 'all_time' });
     assert.equal((await trigger.innerText()).trim(), 'All time');
     const numbers = page.locator('.overview-stat-value, .overview-status-grid strong, .overview-source-table td, .overview-period-total, .overview-model-grid strong, .overview-chart-total strong');
     assert.ok(await numbers.count() > 20);
@@ -121,8 +122,10 @@ try {
     await choosePreset('All time');
     assert.equal(overviewCalls().at(-1).query.get('period'), 'all_time');
     await trigger.click();
-    assert.equal(await dates.getByLabel('Start date', { exact: true }).inputValue(), '', 'Missing all-time snapshot must not invent an earliest date');
-    assert.equal(await dates.getByLabel('End date', { exact: true }).inputValue(), '');
+    if (admin) {
+      assert.equal(await dates.getByLabel('Start date', { exact: true }).inputValue(), '');
+      assert.equal(await dates.getByLabel('End date', { exact: true }).inputValue(), '');
+    } else assert.equal(await dates.locator('input[type=date]').count(), 0);
     await page.keyboard.press('Escape');
     assert.doesNotMatch(await page.locator('.overview-model-summary p').innerText(), /\d{4}-\d{2}-\d{2}/);
     assert.doesNotMatch(await page.locator('.overview-usage .overview-section-heading p').innerText(), /\d{4}-\d{2}-\d{2}/);
@@ -140,8 +143,10 @@ try {
     assert.match(await page.locator('.overview-usage .overview-section-heading p').innerText(), new RegExp(`${staleWeek.start} – ${staleWeek.end}`));
     await trigger.click();
     assert.equal(await dates.getByRole('button', { name: 'Past 7 days', exact: true }).getAttribute('aria-pressed'), 'true');
-    assert.equal(await dates.getByLabel('Start date', { exact: true }).inputValue(), staleWeek.start);
-    assert.equal(await dates.getByLabel('End date', { exact: true }).inputValue(), staleWeek.end);
+    if (admin) {
+      assert.equal(await dates.getByLabel('Start date', { exact: true }).inputValue(), staleWeek.start);
+      assert.equal(await dates.getByLabel('End date', { exact: true }).inputValue(), staleWeek.end);
+    } else assert.equal(await dates.locator('input[type=date]').count(), 0);
     await page.keyboard.press('Escape');
     const countsBefore = await page.locator('.overview-summary-top > div:first-child .overview-stat-value,.overview-status-grid strong').allTextContents();
     await assertCostDisplays();
@@ -161,12 +166,13 @@ try {
     await sourceMenu.getByRole('checkbox', { name: 'myself', exact: true }).uncheck();
     await sourceMenu.getByRole('button', { name: 'Done', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.overview-updated')?.textContent?.startsWith('Saved account data'));
-    assert.deepEqual(Object.fromEntries(overviewCalls().at(-1).query), { sources: '2', models: 'all', period: 'week' });
+    assert.deepEqual(Object.fromEntries(overviewCalls().at(-1).query), { sources: '2', ...(admin ? { models: 'all' } : {}), period: 'week' });
     assert.equal(await page.locator('.overview-source-table tbody tr').count(), 1);
     assert.match(await page.locator('.overview-usage .overview-section-heading p').innerText(), new RegExp(`${currentWeek.start} – ${currentWeek.end}`));
     assert.equal(await page.locator('.overview-period-range').count(), 0);
     await assertCostDisplays();
 
+    if (admin) {
     // Applying dates is intentionally custom, even when exactly equal to Past 7 days.
     await trigger.click();
     await dates.getByLabel('Start date', { exact: true }).fill(currentWeek.start);
@@ -184,9 +190,15 @@ try {
     assert.equal(overviewCalls().at(-1).query.get('sources'), 'all');
     assert.equal(overviewCalls().at(-1).query.has('period'), false, 'Custom range with all sources remains live');
     assert.match(await page.locator('.overview-updated').innerText(), /^Saved account data/);
+    } else {
+      await page.locator('#overview-source').click();
+      await sourceMenu.getByRole('checkbox', { name: 'Select all', exact: true }).check();
+      await sourceMenu.getByRole('button', { name: 'Done', exact: true }).click();
+      await page.waitForFunction(() => document.querySelectorAll('.overview-source-table tbody tr').length === 2);
+    }
     await choosePreset('Past month');
     await page.locator('.overview-daily-chart.is-curve').waitFor();
-    assert.deepEqual(Object.fromEntries(overviewCalls().at(-1).query), { sources: 'all', models: 'all', period: 'month' });
+    assert.deepEqual(Object.fromEntries(overviewCalls().at(-1).query), { sources: 'all', ...(admin ? { models: 'all' } : {}), period: 'month' });
     assert.match(await page.locator('.overview-updated').innerText(), /^Summary generated/);
     await assertCostDisplays();
     const costTotal = await page.locator('.overview-summary-spent strong').innerText();

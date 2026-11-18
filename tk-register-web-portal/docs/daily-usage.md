@@ -1,10 +1,11 @@
-# Daily model usage
+# Daily usage
 
 Account details now contain **Overview** and **Daily usage**. Overview keeps the
 cumulative observation chart and adds a daily chart. Daily usage provides the
-same daily chart, a period summary and a paginated date/model breakdown.
+same daily chart, a period summary and a paginated breakdown. Personal pages
+show totals across all models by default; Management retains the model breakdown.
 
-Models default to all selected. The checkbox menu supports search, multiple
+When model details are enabled, models default to all selected. The checkbox menu supports search, multiple
 selection, Select all and Clear selection. One filter controls summaries, chart
 and table; switching the chart metric never removes table columns. Last 7 days
 means seven complete Beijing calendar days. Last 30 days and custom ranges up
@@ -85,6 +86,11 @@ Responses include `start_date`, `end_date`, `timezone`, `collection_time`,
 Each row contains date, model, input/output/cache-read/cache-write token strings,
 `cost_cny` and numeric `cost_usd`. Each day identifies `complete`, `pending`,
 `missing`, `failed` or `stale`, with the last successful `collected_at` if any.
+When Config → Overview disables model details (the default), the personal route
+omits `rows` and returns `daily_totals` without any model breakdown. Totals are
+aggregated on the server with exact token counters. The administrator Management
+route retains the model rows. The personal response includes
+`model_costs_enabled` so the UI uses the matching presentation.
 Queries are bounded to 90 complete days and 10,000 model rows. Missing days stay
 missing on the chart, and partial-period summaries are labelled accordingly.
 

@@ -1,8 +1,9 @@
 export type DailyMetric = 'cost_usd' | 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_write_tokens';
 export const dailyMetrics: Record<DailyMetric, string> = { cost_usd: 'Cost', input_tokens: 'Input tokens', output_tokens: 'Output tokens', cache_read_tokens: 'Cache read', cache_write_tokens: 'Cache write' };
 export type DailyRow = { date: string; model: string; input_tokens: string; output_tokens: string; cache_read_tokens: string; cache_write_tokens: string; cost_cny: string; cost_usd: number };
+export type DailyTotal = Omit<DailyRow, 'model'>;
 export type DailyDay = { date: string; status: 'complete' | 'stale' | 'missing' | 'failed' | 'pending'; collected_at: string | null; error?: string };
-export type DailyData = { start_date: string; end_date: string; timezone: string; collection_time: string; currency: string; exchange_rate_cny_per_usd: number; rows: DailyRow[]; days: DailyDay[] };
+export type DailyData = { start_date: string; end_date: string; timezone: string; collection_time: string; currency: string; exchange_rate_cny_per_usd: number; model_costs_enabled?: boolean; total_cost_usd?: number | null; daily_totals?: DailyTotal[]; rows?: DailyRow[]; days: DailyDay[] };
 export type ModelSelection = string[] | null;
 export function recentDailyRange(count: number, now = new Date()) {
   const china = new Date(now.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
@@ -15,11 +16,11 @@ export function validDailyRange(start: string, end: string, now = new Date()) {
 }
 export function dailyModels(rows: DailyRow[]) { return [...new Set(rows.map(row => row.model))].sort(); }
 export function filterDailyRows(rows: DailyRow[], models: ModelSelection) { return models === null ? rows : rows.filter(row => models.includes(row.model)); }
-export function dailyTotals(rows: DailyRow[]) {
+export function dailyTotals(rows: Pick<DailyRow, 'cost_usd' | 'input_tokens' | 'output_tokens'>[]) {
   return rows.reduce((sum, row) => ({ cost: sum.cost + row.cost_usd, input: sum.input + BigInt(row.input_tokens), output: sum.output + BigInt(row.output_tokens) }), { cost: 0, input: 0n, output: 0n });
 }
 export function dailySeries(data: DailyData, models: ModelSelection, metric: DailyMetric) {
-  const filtered = filterDailyRows(data.rows, models);
+  const filtered = filterDailyRows(data.rows || [], models);
   return data.days.map(day => ({ ...day, rows: filtered.filter(row => row.date === day.date), value: day.collected_at ? filtered.filter(row => row.date === day.date).reduce((sum, row) => sum + Number(row[metric]), 0) : null }));
 }
 export function dailyMoney(value: number) { return `${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`; }

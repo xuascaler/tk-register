@@ -168,7 +168,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "daily-usage" && r.Method == "GET" {
-		a.dailyUsageData(w, r, id)
+		a.dailyUsageData(w, r, id, adminAccounts)
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "auth-json" {

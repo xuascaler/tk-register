@@ -132,7 +132,7 @@ function readRoute(): Route {
   if (segments[0] === 'submissions') return segments[1] ? { page: 'detail', id: segments[1], backAccount: new URLSearchParams(query).get('account') || undefined } : { page: 'history' };
   if (segments[0] === 'account') return { page: 'account', settingsTab: segments[1] === 'members' ? 'members' : 'general' };
   if (segments[0] === 'config') return {
-    page: 'config', config: ['email', 'access', 'verification', 'sessions', 'vendors', 'account_sync', 'users', 'bill_exports'].includes(segments[1]) ? segments[1] : 'email',
+    page: 'config', config: ['email', 'access', 'verification', 'sessions', 'vendors', 'account_sync', 'overview', 'users', 'bill_exports'].includes(segments[1]) ? segments[1] : 'email',
   };
   return { page: 'submit' };
 }

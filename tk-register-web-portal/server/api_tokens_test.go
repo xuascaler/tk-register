@@ -132,6 +132,9 @@ func TestExternalSubmissionPassthroughAndOwnerAttribution(t *testing.T) {
 	for _, status := range []int{201, 400, 409, 429, 503} {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			a, _, _ := fixture(t)
+			if err := a.store.PatchSettings(context.Background(), map[string]string{"user_overview_model_costs_enabled": "true"}, 0); err != nil {
+				t.Fatal(err)
+			}
 			admin, _, _ := vendorSession(t, a, "api-vendor-admin@example.com", "admin")
 			user, _, _ := vendorSession(t, a, "api-submit@example.com", "member")
 			configuredVendor(t, a, admin.ID)
@@ -181,6 +184,9 @@ func TestExternalSubmissionPassthroughAndOwnerAttribution(t *testing.T) {
 
 func TestExternalSubmissionMasksAliasAndPreservesResponseMetadata(t *testing.T) {
 	a, _, _ := fixture(t)
+	if err := a.store.PatchSettings(context.Background(), map[string]string{"user_overview_model_costs_enabled": "true"}, 0); err != nil {
+		t.Fatal(err)
+	}
 	admin, _, _ := vendorSession(t, a, "api-alias-admin@example.com", "admin")
 	user, _, _ := vendorSession(t, a, "api-alias-submit@example.com", "member")
 	configuredVendor(t, a, admin.ID)
