@@ -15,6 +15,7 @@ self-contained; no parent GoAPI source checkout is required.
 - `tk-register-web-portal/credential-helper/`: private Claude authorization and JSON import helper.
 - `tk-register-web-portal/tests/`: frontend and integration tests.
 - `Dockerfile`, `nginx.conf`, `start.sh`: standalone HTTPS runtime.
+- `Dockerfile.aws`, `nginx.aws.conf`, `aws-rds-ca/`: AWS source-build image and public Tokyo RDS trust roots.
 
 The production working directory is `/root/Code/tk_register`. Application source
 is under `tk-register-web-portal/`. The local `compose.yaml`, `.env`, TLS material,
@@ -67,6 +68,42 @@ recreating the service. This repository import does not deploy a new version.
 
 See [the application documentation](tk-register-web-portal/README.md) for
 authentication, vendor protocols, API token usage, and configuration details.
+
+## AWS source-build image
+
+The AWS deployment builds the frontend, Go server, and credential helper from
+source instead of using the prebuilt root artifacts. From the repository root:
+
+```sh
+docker build -f Dockerfile.aws \
+  --build-arg APP_REVISION="$(git rev-parse HEAD)" \
+  -t tk-register:aws .
+```
+
+The image adds the public Amazon RDS Tokyo root certificates to the system trust
+store. These are CA certificates, not the service's private HTTPS certificate or
+key. The runtime still uses HTTPS port `8443`, private environment settings, and
+the read-only TLS mount described above. Host-specific Compose files, environment
+values, and private keys remain outside Git.
+
+Two operator-only initialization commands are included in the image. Neither is
+run at startup or exposed through an HTTP route:
+
+- `tksmtpbootstrap export-smtp` reads only the nine SMTP settings and writes JSON
+  to a pipe or protected file. The output contains plaintext mail credentials and
+  must never be logged or committed. `init-smtp` reads that JSON from standard
+  input, validates it, and encrypts secret settings with the target encryption
+  key. Initialization requires `TK_SMTP_BOOTSTRAP_CONFIRM_FRESH=1` and
+  `TK_SMTP_BOOTSTRAP_EXPECTED_HOST` to match the target DSN host; it refuses
+  existing SMTP configuration or business data. Run it before exposing the new
+  service to users.
+- `tkadminbootstrap` reads an email and password from JSON on standard input. It
+  requires an empty users table, `TK_ADMIN_BOOTSTRAP_CONFIRM_EMPTY=1`, and
+  `TK_ADMIN_BOOTSTRAP_EXPECTED_HOST` matching the target DSN host. The email must
+  match `TK_REGISTER_ADMIN_EMAIL`. It creates a verified administrator with a
+  bcrypt password hash and the required self-membership row; it cannot reset an
+  existing user's password. Normal administrator sign-in still requires the
+  password and email verification code.
 
 ## Initial import
 

@@ -1,0 +1,42 @@
+FROM node:22-bookworm-slim AS frontend
+WORKDIR /src
+COPY tk-register-web-portal/package.json tk-register-web-portal/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY tk-register-web-portal/ ./
+RUN npm test && npm run build
+
+FROM node:22-bookworm-slim AS credential-helper
+WORKDIR /helper
+COPY tk-register-web-portal/credential-helper/package*.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY tk-register-web-portal/credential-helper/ ./
+RUN npm test
+
+FROM golang:1.26-bookworm AS backend
+WORKDIR /src
+COPY tk-register-web-portal/server/go.mod tk-register-web-portal/server/go.sum ./
+RUN go mod download
+COPY tk-register-web-portal/server/ ./
+RUN --mount=type=tmpfs,target=/tmp gofmt -w cmd/tksmtpbootstrap/*.go cmd/tkadminbootstrap/*.go && GOTMPDIR=/var/tmp go vet ./...
+RUN CGO_ENABLED=0 go build -trimpath -o /out/tk-register-server . && CGO_ENABLED=0 go build -trimpath -o /out/tksmtpbootstrap ./cmd/tksmtpbootstrap && CGO_ENABLED=0 go build -trimpath -o /out/tkadminbootstrap ./cmd/tkadminbootstrap
+RUN CGO_ENABLED=0 go test -c -o /out/redis-integration.test .
+
+FROM node:22-bookworm-slim
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bash ca-certificates curl nginx tini tzdata && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled/default
+COPY --from=credential-helper /helper/ /opt/tk-register-credential-helper/
+COPY aws-rds-ca/ /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+COPY --from=backend /out/tk-register-server /usr/local/bin/tk-register-server
+COPY --from=backend /out/tksmtpbootstrap /usr/local/bin/tksmtpbootstrap
+COPY --from=backend /out/tkadminbootstrap /usr/local/bin/tkadminbootstrap
+COPY --from=backend /out/redis-integration.test /usr/local/bin/redis-integration.test
+COPY --from=frontend /src/dist/ /opt/tk-register-web-portal/
+COPY nginx.aws.conf /etc/nginx/nginx.conf
+COPY start.sh /usr/local/bin/tk-register-start
+RUN chmod 0755 /usr/local/bin/tk-register-server /usr/local/bin/tk-register-start /usr/local/bin/tksmtpbootstrap /usr/local/bin/tkadminbootstrap /usr/local/bin/redis-integration.test
+ENV TK_REGISTER_PORT=3002 TK_REGISTER_ASSETS=/opt/tk-register-web-portal TZ=Asia/Shanghai
+ARG APP_REVISION
+LABEL org.opencontainers.image.revision="$APP_REVISION"
+EXPOSE 8443
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 CMD curl --fail --silent --show-error --max-time 4 http://127.0.0.1:3002/tk-register/healthz > /dev/null || exit 1
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/tk-register-start"]

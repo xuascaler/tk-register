@@ -6,7 +6,10 @@
 !/README.md
 !/LICENSE
 !/Dockerfile
+!/Dockerfile.aws
 !/nginx.conf
+!/nginx.aws.conf
+!/aws-rds-ca/
 !/start.sh
 !/tk-register-web-portal/
 /tk-register-web-portal/node_modules
