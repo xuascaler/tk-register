@@ -90,7 +90,11 @@ The setting is checked when responding, including when reading existing summary
 cache records. It does not remove stored bills or require regenerating summaries.
 Personal single-account daily-usage endpoints also return totals only. Personal
 submission history keeps structured account-level totals and request metadata,
-but omits opaque supplier result and error bodies that might contain model usage.
+but omits opaque supplier results that might contain model usage. Saved,
+credential-redacted errors are projected to diagnostic fields such as message,
+detail, and validation errors. Model usage, costs, token counters, and request
+echoes are excluded, so ordinary submission failures remain readable while model
+details are disabled. This also applies to existing records without resubmission.
 Guided authorization submissions, including replayed results, use the same
 personal response projection while retaining submission identity and status.
 In this mode, API submission responses preserve identity/status fields and HTTP

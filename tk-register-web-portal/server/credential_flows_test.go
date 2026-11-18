@@ -346,10 +346,11 @@ func TestCredentialSubmissionRespectsPersonalModelVisibility(t *testing.T) {
 				})
 				var pushes atomic.Int32
 				const marker = "claude-model-visibility-marker"
+				const diagnostic = "账号重复录入,id:571510"
 				a.vendorTransport = vendorRoundTrip(func(*http.Request) (*http.Response, error) {
 					pushes.Add(1)
 					if upstreamStatus == http.StatusBadRequest {
-						return remoteResponse(upstreamStatus, `{"error":"rejected","model_usage":{"claude-model-visibility-marker":{"cost":1234,"input_tokens":99}}}`), nil
+						return remoteResponse(upstreamStatus, `{"detail":"账号重复录入,id:571510","error":"rejected","model_usage":{"claude-model-visibility-marker":{"cost":1234,"input_tokens":99}}}`), nil
 					}
 					return remoteResponse(upstreamStatus, `{"id":765432,"alias":"accepted account"}`), nil
 				})
@@ -368,10 +369,17 @@ func TestCredentialSubmissionRespectsPersonalModelVisibility(t *testing.T) {
 				if first.Submission.Status != wantStatus || first.Submission.ID == "" {
 					t.Fatal("guided submission identity or state changed", first.Submission)
 				}
+				if upstreamStatus == http.StatusBadRequest && (len(first.Executions) != 1 || !strings.Contains(first.Executions[0].ErrorBody, diagnostic)) {
+					t.Fatal("disabled guided submission lost its safe failure diagnostic")
+				}
 				// Replayed submissions may contain older metrics/billing executions
 				// saved before the visibility control was introduced.
 				stored := `{"models":[{"model":"claude-model-visibility-marker","cost":1234,"input_tokens":99}]}`
-				if err := a.store.DB.Model(&core.ProtocolExecution{}).Where("submission_id = ?", first.Submission.ID).Updates(map[string]any{"result_json": stored, "error_body": stored}).Error; err != nil {
+				storedError := stored
+				if upstreamStatus == http.StatusBadRequest {
+					storedError = `{"detail":"账号重复录入,id:571510","models":[{"model":"claude-model-visibility-marker","cost":1234,"input_tokens":99}]}`
+				}
+				if err := a.store.DB.Model(&core.ProtocolExecution{}).Where("submission_id = ?", first.Submission.ID).Updates(map[string]any{"result_json": stored, "error_body": storedError}).Error; err != nil {
 					t.Fatal(err)
 				}
 				for _, enabled := range []bool{false, true, false} {
@@ -387,9 +395,12 @@ func TestCredentialSubmissionRespectsPersonalModelVisibility(t *testing.T) {
 					if strings.Contains(w.Body.String(), marker) != enabled {
 						t.Fatal("guided submission did not apply current model visibility", enabled, w.Body.String())
 					}
+					if upstreamStatus == http.StatusBadRequest && (len(detail.Executions) != 1 || !strings.Contains(detail.Executions[0].ErrorBody, diagnostic)) {
+						t.Fatal("replayed guided submission lost its safe failure diagnostic", enabled)
+					}
 					if !enabled {
 						for _, execution := range detail.Executions {
-							if execution.Result != nil || execution.ErrorBody != "" || execution.RequestID == "" {
+							if execution.Result != nil || upstreamStatus == http.StatusOK && execution.ErrorBody != "" || execution.RequestID == "" {
 								t.Fatal("opaque model fields leaked or request metadata was lost")
 							}
 						}
