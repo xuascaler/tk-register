@@ -65,7 +65,7 @@ func authJSONError(err error) authJSONProblem {
 func authJSONFail(w http.ResponseWriter, p authJSONProblem) { fail(w, p.status, p.code, p.message) }
 
 // Both the cookie-authenticated editor and the personal-token API use the same
-// validation, locks, vendor write, audit and delayed account refresh. The API
+// validation, locks, vendor write and audit. The API
 // adapter supplies parsed input and a public response projection, never a fake
 // session. Both responses read saved account data without an inline collection.
 type authJSONOperation struct {
@@ -185,15 +185,44 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		return
 	}
 	inputAuthJSON := operation.Input
-	if operation.Token == nil {
+	var resolved *resolvedAuthJSONFlow
+	if operation.Token == nil && operation.Input == nil {
 		var input struct {
-			AuthJSON any `json:"auth_json"`
+			AuthJSON json.RawMessage `json:"auth_json"`
+			FlowID   json.RawMessage `json:"flow_id"`
 		}
 		if err = common.DecodeJson(http.MaxBytesReader(w, r.Body, 3<<20), &input); err != nil {
 			fail(w, 400, "INVALID_REQUEST", "Provide auth_json as a JSON object or JSON string.")
 			return
 		}
-		inputAuthJSON = input.AuthJSON
+		if (len(input.AuthJSON) > 0) == (len(input.FlowID) > 0) {
+			fail(w, 400, "INVALID_REQUEST", "Provide either auth_json or flow_id, not both.")
+			return
+		}
+		if len(input.FlowID) > 0 {
+			var flowID string
+			if json.Unmarshal(input.FlowID, &flowID) != nil || !credentialFlowID.MatchString(flowID) {
+				vendorFailure(w, credentialInvalid())
+				return
+			}
+			resolved, err = a.resolveAuthJSONFlow(r.Context(), user, target, admin, flowID)
+			if err != nil {
+				vendorFailure(w, err)
+				return
+			}
+			defer resolved.release()
+			if resolved.flow.Status == "updated" && resolved.flow.UpdateResult != nil {
+				if auditID, valid := resolved.flow.UpdateResult["audit_id"].(string); valid {
+					w.Header().Set("X-Auth-JSON-Audit-ID", auditID)
+				}
+				ok(w, resolved.flow.UpdateResult)
+				return
+			}
+			inputAuthJSON = resolved.flow.Auth
+		} else if json.Unmarshal(input.AuthJSON, &inputAuthJSON) != nil {
+			fail(w, 400, "INVALID_REQUEST", "Provide auth_json as a JSON object or JSON string.")
+			return
+		}
 	}
 	normalized, err := core.ValidateClaudeAccountAuthJSON(inputAuthJSON, target.Account)
 	if err != nil {
@@ -251,7 +280,11 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		source = "api"
 		tokenID, tokenRevision = &operation.Token.ID, &operation.Token.Revision
 	}
-	audit, err := a.store.BeginAuthJSONUpdateWithSource(ctx, target, user.ID, w.Header().Get("X-Request-ID"), source, tokenID, tokenRevision)
+	method, flowID := "manual", ""
+	if resolved != nil {
+		method, flowID = resolved.flow.Method, resolved.flow.FlowID
+	}
+	audit, err := a.store.BeginAuthJSONUpdateWithMethod(ctx, target, user.ID, w.Header().Get("X-Request-ID"), source, tokenID, tokenRevision, method, flowID)
 	if err != nil {
 		if errors.Is(err, core.ErrAccountIdentityChanged) {
 			fail(w, 409, "ACCOUNT_CHANGED", "This account changed. Reload the page before updating.")
@@ -277,7 +310,13 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		}
 		confirmed := target
 		confirmed.SupplierRecordID = &info.RecordID
-		return a.store.CheckAuthJSONOwnership(checkCtx, confirmed)
+		if err := a.store.CheckAuthJSONOwnership(checkCtx, confirmed); err != nil {
+			return err
+		}
+		if resolved != nil {
+			return resolved.beforeWrite(checkCtx, a, user)
+		}
+		return nil
 	}
 	updateCtx, updateCancel := context.WithTimeout(ctx, 35*time.Second)
 	info, updateErr := editor.UpdateAuthJSON(updateCtx, username, password, selection, json.RawMessage(raw))
@@ -302,39 +341,36 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	unchanged, persistErr := a.store.FinishAuthJSONUpdate(saveCtx, audit, status, info.RecordID, code, at)
 	saveCancel()
 	if updateErr != nil {
+		if resolved != nil {
+			resolved.finish(ctx, a, status, nil)
+		}
 		if supplierWaitFailure(w, updateErr) {
 			return
 		}
 		authJSONFail(w, problem)
 		return
 	}
-	refreshRetryAfter, refreshRetryStage := 0, ""
-	refreshStatus, refreshMessage := "failed", "Auth JSON updated, but account refresh failed. Your last successful data is retained. Try syncing again."
-	if persistErr == nil && unchanged {
-		// Successful audit persistence atomically queues five delayed reads for
-		// both API and browser updates. The response uses saved account data;
-		// refreshing never repeats the credential mutation.
-		refreshStatus, refreshMessage = "pending", "Auth JSON updated. Five account syncs are scheduled, starting after 10 seconds and waiting 10 seconds between completed syncs."
-	} else if !unchanged && persistErr == nil {
-		refreshMessage = "Auth JSON updated, but this local account changed during the request. Reload the page to view its current data."
-		recordCtx, recordCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_ = a.store.FinishAuthJSONRefresh(recordCtx, audit.ID, false)
-		recordCancel()
+	message := "Auth JSON updated. Account status is updated by scheduled background checks."
+	if persistErr != nil {
+		message = "Auth JSON updated, but local metadata could not be saved. Reload the page to check the account."
+	} else if !unchanged {
+		message = "Auth JSON updated, but this local account changed during the request. Reload the page to view its current data."
 	}
-	// A known successful vendor write is never reported as a failed write just
-	// because subsequent persistence/readback fails.
+	// Read saved state only. Credential updates never enqueue or perform an
+	// additional status/usage collection; the normal background process owns it.
 	account, lookupErr := lookup(id)
-	if lookupErr != nil {
-		if refreshStatus == "pending" {
-			ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": "pending", "refresh_message": "Auth JSON updated and account refresh is scheduled. Saved account data could not be loaded; query the account again later.", "account": nil, "updated_at": at})
-			return
+	var result any
+	if lookupErr == nil {
+		result = account
+		if operation.FormatAccount != nil {
+			result = operation.FormatAccount(account)
 		}
-		ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": "failed", "refresh_message": "Auth JSON updated, but local account data could not be loaded. Reload the page.", "account": nil, "updated_at": at})
-		return
+	} else {
+		message = "Auth JSON updated, but saved account data could not be loaded. Reload the page."
 	}
-	var result any = account
-	if operation.FormatAccount != nil {
-		result = operation.FormatAccount(account)
+	response := map[string]any{"updated": true, "audit_id": auditID, "refresh_status": "not_requested", "refresh_message": message, "account": result, "updated_at": at}
+	if resolved != nil {
+		resolved.finish(ctx, a, "updated", response)
 	}
-	ok(w, map[string]any{"updated": true, "audit_id": auditID, "refresh_status": refreshStatus, "refresh_message": refreshMessage, "refresh_retry_after": refreshRetryAfter, "refresh_retry_stage": refreshRetryStage, "account": result, "updated_at": at})
+	ok(w, response)
 }

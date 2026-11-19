@@ -14,6 +14,8 @@ import (
 // the supplier, never persisted here, and historical submissions stay immutable.
 type AccountAuthJSONAudit struct {
 	Source           string        `gorm:"size:16;not null;default:web;index"`
+	Method           string        `gorm:"size:16;not null;default:manual"`
+	CredentialFlowID string        `gorm:"size:128;not null;default:'';index"`
 	APITokenID       *uint64       `gorm:"index"`
 	APIToken         *UserAPIToken `gorm:"foreignKey:APITokenID;constraint:OnDelete:RESTRICT"`
 	APITokenRevision *uint64
@@ -133,7 +135,14 @@ func (s *Store) BeginAuthJSONUpdate(ctx context.Context, target SyncedAccount, a
 // BeginAuthJSONUpdateWithSource records the authenticated token reference and
 // revision, never its plaintext/digest. Existing web callers use the wrapper.
 func (s *Store) BeginAuthJSONUpdateWithSource(ctx context.Context, target SyncedAccount, actor uint64, requestID, source string, tokenID, revision *uint64) (AccountAuthJSONAudit, error) {
-	audit := AccountAuthJSONAudit{AccountID: target.ID, ActorID: actor, OwnerID: target.UserID, VendorID: target.VendorID, IdentityKey: target.IdentityKey, RequestID: requestID, Status: "pending", Source: source, APITokenID: tokenID, APITokenRevision: revision}
+	return s.BeginAuthJSONUpdateWithMethod(ctx, target, actor, requestID, source, tokenID, revision, "manual", "")
+}
+
+func (s *Store) BeginAuthJSONUpdateWithMethod(ctx context.Context, target SyncedAccount, actor uint64, requestID, source string, tokenID, revision *uint64, method, flowID string) (AccountAuthJSONAudit, error) {
+	if method != "manual" && method != "oauth" && method != "setup" && method != "json" && method != "cookie" && method != "token" || len(flowID) > 128 || method == "manual" && flowID != "" || method != "manual" && flowID == "" {
+		return AccountAuthJSONAudit{}, validationErrorf("invalid auth update method")
+	}
+	audit := AccountAuthJSONAudit{Method: method, CredentialFlowID: flowID, AccountID: target.ID, ActorID: actor, OwnerID: target.UserID, VendorID: target.VendorID, IdentityKey: target.IdentityKey, RequestID: requestID, Status: "pending", Source: source, APITokenID: tokenID, APITokenRevision: revision}
 	if source != "web" && source != "api" || source == "web" && (tokenID != nil || revision != nil) || source == "api" && (tokenID == nil || revision == nil || *tokenID == 0 || *revision == 0 || actor != target.UserID) {
 		return AccountAuthJSONAudit{}, validationErrorf("invalid auth update source")
 	}
@@ -202,10 +211,7 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 		}
 		refresh := ""
 		if status == "updated" {
-			refresh = "pending"
-			if !currentIdentity {
-				refresh = "failed"
-			}
+			refresh = "not_requested"
 		}
 		result := tx.Model(&AccountAuthJSONAudit{}).Where("id = ? AND status = ?", saved.ID, "pending").Updates(map[string]any{"status": status, "supplier_record_id": recordID, "error_code": code, "finished_at": at.UTC(), "refresh_status": refresh})
 		if result.Error != nil {
@@ -219,8 +225,9 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 			if err := tx.Model(&account).Updates(map[string]any{"supplier_record_id": recordID, "auth_json_updated_at": at.UTC()}).Error; err != nil {
 				return err
 			}
-			saved.Status, saved.SupplierRecordID = status, recordID
-			return enqueueAuthJSONSyncTx(tx, account, saved, at)
+			// Credential updates never schedule status collection. The regular
+			// background collector remains responsible for account status.
+			return nil
 		}
 		return nil
 	})

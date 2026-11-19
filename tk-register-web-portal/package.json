@@ -10,6 +10,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "test:e2e": "node tests/acceptance.mjs",
     "test:navigation": "node tests/navigation.responsive.mjs",
+    "test:auth-json-authorize": "node tests/auth-json-authorize.integration.mjs",
     "test:integration": "node tests/integration.mjs",
     "test:submissions": "node tests/submissions.integration.mjs"
   },

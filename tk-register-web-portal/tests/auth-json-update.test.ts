@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { APIError } from '../src/api.ts';
-import { authJSONResultMessage, authJSONUpdateError, type AuthJSONUpdateResult } from '../src/accounts/auth-json.ts';
+import { authJSONResultMessage, authJSONUpdateError, confirmedAuthJSONResult, type AuthJSONUpdateResult } from '../src/accounts/auth-json.ts';
 import { parseAuthJSON } from '../src/submissions/validation.ts';
 
 const valid = {
@@ -18,6 +18,14 @@ test('credential editor uses the submission validator for objects and encoded JS
   assert.throws(() => parseAuthJSON(JSON.stringify({ ...valid, claude_device_ids: [] })), /device ID/);
   assert.throws(() => parseAuthJSON(JSON.stringify({ ...valid, expired: '2026-12-01' })), /RFC 3339/);
   assert.throws(() => parseAuthJSON(JSON.stringify({ ...valid, proxy_url: 'file:///tmp/auth' })), /proxy_url/);
+});
+
+test('confirmed updates can leave account collection to the existing schedule', () => {
+  const result = { updated: true, refresh_status: 'not_requested', refresh_message: '', account: null, updated_at: '2026-11-19T00:00:00Z' };
+  assert.equal(confirmedAuthJSONResult(result), true);
+  assert.equal(confirmedAuthJSONResult({ ...result, updated: false }), false);
+  assert.equal(confirmedAuthJSONResult({ ...result, refresh_status: 'invalid' }), false);
+  assert.equal(authJSONResultMessage(result as AuthJSONUpdateResult), 'Auth JSON updated. Account status is updated by scheduled background checks.');
 });
 
 test('network loss and unconfirmed update cannot be labelled as a definitive failed mutation', () => {

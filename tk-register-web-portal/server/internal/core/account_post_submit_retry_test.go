@@ -137,12 +137,35 @@ func authSyncJob(t *testing.T, store *Store, auditID uint64) PostSubmissionSyncJ
 	return job
 }
 
-func TestAuthJSONAPICompletionQueuesAndDuplicateDoesNotRewriteNewerMetadata(t *testing.T) {
+// Simulate an already deployed release's pending Auth JSON job. Production
+// FinishAuthJSONUpdate intentionally no longer invokes this enqueue function.
+func completeLegacyAuthUpdateFixture(t *testing.T, store *Store, ctx context.Context, audit AccountAuthJSONAudit, status, recordID, code string, at time.Time) (bool, error) {
+	t.Helper()
+	unchanged, err := store.FinishAuthJSONUpdate(ctx, audit, status, recordID, code, at)
+	if err != nil || !unchanged || status != "updated" {
+		return unchanged, err
+	}
+	var account SyncedAccount
+	if err = store.DB.First(&account, audit.AccountID).Error; err != nil {
+		return false, err
+	}
+	audit.Status = "updated"
+	audit.SupplierRecordID = recordID
+	err = store.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&AccountAuthJSONAudit{}).Where("id = ?", audit.ID).Update("refresh_status", "pending").Error; err != nil {
+			return err
+		}
+		return enqueueAuthJSONSyncTx(tx, account, audit, at)
+	})
+	return unchanged, err
+}
+
+func TestLegacyAuthJSONQueueDuplicateDoesNotRewriteNewerMetadata(t *testing.T) {
 	store, owner, target := authAuditFixture(t)
 	ctx := context.Background()
 	base := time.Now().UTC().Truncate(time.Second)
 	first := beginAPIAuthSyncAudit(t, store, owner, target, "first-update")
-	if unchanged, err := store.FinishAuthJSONUpdate(ctx, first, "updated", "13152", "", base); err != nil || !unchanged {
+	if unchanged, err := completeLegacyAuthUpdateFixture(t, store, ctx, first, "updated", "13152", "", base); err != nil || !unchanged {
 		t.Fatal(unchanged, err)
 	}
 	job := authSyncJob(t, store, first.ID)
@@ -155,10 +178,10 @@ func TestAuthJSONAPICompletionQueuesAndDuplicateDoesNotRewriteNewerMetadata(t *t
 		t.Fatal("API update on web-created account was ineligible", err)
 	}
 	second := beginAPIAuthSyncAudit(t, store, owner, target, "second-update")
-	if unchanged, err := store.FinishAuthJSONUpdate(ctx, second, "updated", "13152", "", base.Add(time.Minute)); err != nil || !unchanged {
+	if unchanged, err := completeLegacyAuthUpdateFixture(t, store, ctx, second, "updated", "13152", "", base.Add(time.Minute)); err != nil || !unchanged {
 		t.Fatal(unchanged, err)
 	}
-	if unchanged, err := store.FinishAuthJSONUpdate(ctx, first, "updated", "99999", "", base.Add(2*time.Minute)); err != nil || unchanged {
+	if unchanged, err := completeLegacyAuthUpdateFixture(t, store, ctx, first, "updated", "99999", "", base.Add(2*time.Minute)); err != nil || unchanged {
 		t.Fatal("duplicate completion was applied", unchanged, err)
 	}
 	var account SyncedAccount
@@ -181,7 +204,7 @@ func TestAuthJSONAPICompletionQueuesAndDuplicateDoesNotRewriteNewerMetadata(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if unchanged, err := store.FinishAuthJSONUpdate(ctx, web, "updated", "13152", "", base.Add(3*time.Minute)); err != nil || !unchanged {
+	if unchanged, err := completeLegacyAuthUpdateFixture(t, store, ctx, web, "updated", "13152", "", base.Add(3*time.Minute)); err != nil || !unchanged {
 		t.Fatal(unchanged, err)
 	}
 	if _, err := store.PostSubmissionSyncTarget(ctx, authSyncJob(t, store, second.ID)); !errors.Is(err, ErrPostSubmissionSyncIneligible) {
@@ -195,7 +218,7 @@ func TestAuthJSONAPICompletionQueuesAndDuplicateDoesNotRewriteNewerMetadata(t *t
 	}
 }
 
-func TestAuthJSONWebOwnerAndAdminUpdatesQueueFiveSuccessfulRounds(t *testing.T) {
+func TestLegacyAuthJSONWebOwnerAndAdminJobsCompleteFiveRounds(t *testing.T) {
 	for _, admin := range []bool{false, true} {
 		t.Run(fmt.Sprintf("admin=%t", admin), func(t *testing.T) {
 			store, owner, target := authAuditFixture(t)
@@ -212,7 +235,7 @@ func TestAuthJSONWebOwnerAndAdminUpdatesQueueFiveSuccessfulRounds(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if unchanged, err := store.FinishAuthJSONUpdate(ctx, audit, "updated", "13152", "", base); err != nil || !unchanged {
+			if unchanged, err := completeLegacyAuthUpdateFixture(t, store, ctx, audit, "updated", "13152", "", base); err != nil || !unchanged {
 				t.Fatal("web update failed to enqueue", unchanged, err)
 			}
 			job := authSyncJob(t, store, audit.ID)
@@ -246,14 +269,14 @@ func TestAuthJSONWebOwnerAndAdminUpdatesQueueFiveSuccessfulRounds(t *testing.T) 
 	}
 }
 
-func TestAuthJSONSyncRetryAuditAndRestartRecovery(t *testing.T) {
+func TestLegacyAuthJSONSyncRetryAuditAndRestartRecovery(t *testing.T) {
 	for _, outcome := range []string{"failed", "succeeded", "skipped", "interrupted"} {
 		t.Run(outcome, func(t *testing.T) {
 			store, owner, target := authAuditFixture(t)
 			ctx := context.Background()
 			base := time.Now().UTC().Truncate(time.Second)
 			audit := beginAPIAuthSyncAudit(t, store, owner, target, "retry-audit-"+outcome)
-			if _, err := store.FinishAuthJSONUpdate(ctx, audit, "updated", "13152", "", base); err != nil {
+			if _, err := completeLegacyAuthUpdateFixture(t, store, ctx, audit, "updated", "13152", "", base); err != nil {
 				t.Fatal(err)
 			}
 			job := authSyncJob(t, store, audit.ID)
@@ -302,23 +325,23 @@ func TestAuthJSONSyncRetryAuditAndRestartRecovery(t *testing.T) {
 	}
 }
 
-func TestAuthJSONQueueFailureRollsBackAuditAndAccountMetadata(t *testing.T) {
+func TestAuthJSONCompletionDoesNotInsertCollectionJobs(t *testing.T) {
 	store, owner, target := authAuditFixture(t)
 	ctx := context.Background()
-	audit := beginAPIAuthSyncAudit(t, store, owner, target, "atomic-update")
+	audit := beginAPIAuthSyncAudit(t, store, owner, target, "no-queue-update")
 	if err := store.DB.Exec(`CREATE TRIGGER fail_auth_sync_queue BEFORE INSERT ON account_post_submit_sync_jobs BEGIN SELECT RAISE(ABORT, 'fixture queue failure'); END`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.FinishAuthJSONUpdate(ctx, audit, "updated", "13152", "", time.Now().UTC()); err == nil {
-		t.Fatal("queue failure was hidden")
+	if unchanged, err := store.FinishAuthJSONUpdate(ctx, audit, "updated", "13152", "", time.Now().UTC()); err != nil || !unchanged {
+		t.Fatal(unchanged, err)
 	}
 	var saved AccountAuthJSONAudit
-	var account SyncedAccount
-	if err := store.DB.First(&saved, audit.ID).Error; err != nil || saved.Status != "pending" || saved.FinishedAt != nil || saved.RefreshStatus != "" {
-		t.Fatal("audit escaped failed queue transaction", saved, err)
+	if err := store.DB.First(&saved, audit.ID).Error; err != nil || saved.Status != "updated" || saved.RefreshStatus != "not_requested" {
+		t.Fatal(saved, err)
 	}
-	if err := store.DB.First(&account, target.ID).Error; err != nil || account.AuthJSONUpdatedAt != nil || account.SupplierRecordID != nil {
-		t.Fatal("account metadata escaped failed queue transaction", account, err)
+	var count int64
+	if err := store.DB.Model(&PostSubmissionSyncJob{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatal(count, err)
 	}
 }
 

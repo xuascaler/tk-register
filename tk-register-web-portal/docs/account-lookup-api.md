@@ -174,7 +174,7 @@ The response does not contain account passwords, `auth_json`, personal token val
 
 The response is a stored view, not a real-time supplier query. Use `last_success_at` and `snapshot.collected_at` to decide how current the data is. Repeating this API request does not make the underlying snapshot newer.
 
-An accepted browser/API submission or confirmed Auth JSON update queues five background collections, starting ten seconds after that operation and waiting ten seconds after each completed round. Earlier success does not cancel the remaining rounds. Lookup responses continue to read the database during this process and do not consume or trigger a round. Use the collection timestamps to distinguish an older saved result from a newly collected result; queueing, request duration and supplier cooldowns can delay collection.
+An accepted browser/API submission queues five background collections, starting ten seconds after acceptance and waiting ten seconds after each completed round. Earlier success does not cancel the remaining rounds. Auth JSON replacement does not queue collections; status and usage continue to be updated by the existing scheduled collector. Lookup reads saved database data and never triggers collection. Use collection timestamps to distinguish an older saved result from a newly collected result.
 
 | Situation | Response behavior | Client presentation |
 | --- | --- | --- |

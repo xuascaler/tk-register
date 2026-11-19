@@ -12,7 +12,7 @@ export type AuthJSONEligibility = {
 
 export type AuthJSONUpdateResult = {
   updated: true;
-  refresh_status: 'pending' | 'succeeded' | 'failed';
+  refresh_status: 'not_requested' | 'pending' | 'succeeded' | 'failed';
   refresh_message: string;
   account: SyncedAccount | null;
   updated_at: string;
@@ -34,10 +34,17 @@ export function authJSONUpdateError(cause: unknown): { message: string; uncertai
 }
 
 export function authJSONResultMessage(result: AuthJSONUpdateResult) {
+  if (result.refresh_status === 'not_requested') return 'Auth JSON updated. Account status is updated by scheduled background checks.';
   if (result.refresh_status === 'pending') return result.refresh_message?.trim() || 'Auth JSON updated. Account status and usage will sync in the background.';
   if (result.refresh_status === 'succeeded') return 'Auth JSON updated. Account status and usage refreshed.';
   const prefix = 'Auth JSON updated, but account refresh failed.';
   const details = result.refresh_message?.trim();
   if (details?.startsWith(prefix)) return details;
   return `${prefix} ${details || 'Your last successful data is retained. Use Sync now to try again.'}`;
+}
+
+export function confirmedAuthJSONResult(value: unknown): value is AuthJSONUpdateResult {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as Partial<AuthJSONUpdateResult>;
+  return result.updated === true && 'account' in result && (result.account === null || typeof result.account === 'object') && ['not_requested', 'pending', 'succeeded', 'failed'].includes(result.refresh_status || '');
 }

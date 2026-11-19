@@ -36,13 +36,14 @@ type credentialProxyCheck struct {
 }
 
 type credentialFlowView struct {
-	FlowID     string               `json:"flow_id"`
-	AuthURL    string               `json:"auth_url,omitempty"`
-	Auth       map[string]any       `json:"auth,omitempty"`
-	Notes      []string             `json:"notes"`
-	ProxyCheck credentialProxyCheck `json:"proxy_check"`
-	ExpiresAt  time.Time            `json:"expires_at"`
-	Status     string               `json:"status"`
+	FlowID       string               `json:"flow_id"`
+	AuthURL      string               `json:"auth_url,omitempty"`
+	Auth         map[string]any       `json:"auth,omitempty"`
+	Notes        []string             `json:"notes"`
+	ProxyCheck   credentialProxyCheck `json:"proxy_check"`
+	ExpiresAt    time.Time            `json:"expires_at"`
+	Status       string               `json:"status"`
+	UpdateResult map[string]any       `json:"update_result,omitempty"`
 }
 
 type credentialHelperResult struct {
@@ -61,9 +62,11 @@ type credentialProxyTestContextKey struct{}
 
 type credentialFlowRecord struct {
 	credentialFlowView
-	OwnerID     uint64 `json:"owner_id"`
-	AuthVersion uint64 `json:"auth_version"`
-	ProxyURL    string `json:"proxy_url"`
+	OwnerID      uint64              `json:"owner_id"`
+	AuthVersion  uint64              `json:"auth_version"`
+	ProxyURL     string              `json:"proxy_url"`
+	UpdateTarget *authJSONFlowTarget `json:"update_target,omitempty"`
+	Method       string              `json:"method,omitempty"`
 }
 
 func credentialFlowKey(owner uint64, id string) string {
@@ -369,6 +372,9 @@ func (a *app) loadCredentialFlow(ctx context.Context, user *core.User, id string
 	if json.Unmarshal([]byte(plain), &flow) != nil || flow.OwnerID != user.ID || flow.AuthVersion != user.AuthVersion || flow.FlowID != id || !flow.ExpiresAt.After(time.Now()) {
 		return flow, "", credentialMissing()
 	}
+	if err := a.authorizeCredentialFlowTarget(ctx, user, flow); err != nil {
+		return flow, "", err
+	}
 	return flow, value, nil
 }
 
@@ -594,6 +600,9 @@ func (a *app) newCredentialFlow(ctx context.Context, user *core.User, result cre
 		expires = max
 	}
 	flow := credentialFlowRecord{OwnerID: user.ID, AuthVersion: user.AuthVersion, ProxyURL: proxy, credentialFlowView: credentialFlowView{FlowID: result.FlowID, AuthURL: result.AuthURL, Notes: result.Notes, ProxyCheck: result.ProxyCheck, ExpiresAt: expires, Status: "awaiting_code"}}
+	if scope, ok := ctx.Value(authJSONFlowContextKey{}).(authJSONFlowTarget); ok {
+		flow.UpdateTarget = &scope
+	}
 	if flow.Notes == nil {
 		flow.Notes = []string{}
 	}
@@ -609,13 +618,16 @@ func (a *app) newCredentialFlow(ctx context.Context, user *core.User, result cre
 			return flow, credentialProblem(502, "CREDENTIAL_HELPER_INVALID_RESPONSE", "The authorization service returned an invalid response.")
 		}
 	}
+	if method, ok := ctx.Value(authJSONFlowMethodKey{}).(string); ok {
+		flow.Method = method
+	}
 	err := a.saveCredentialFlow(ctx, flow, "")
 	var problem *core.VendorError
 	if ready && errors.As(err, &problem) && problem.Code == "CREDENTIAL_FLOW_CONFLICT" {
 		// The helper caches imports by owner and input. Restore the same draft
 		// without replacing manually completed fields or extending its expiry.
 		existing, _, loadErr := a.loadCredentialFlow(ctx, user, flow.FlowID)
-		if loadErr == nil && existing.Status == "ready" && existing.ProxyURL == proxy {
+		if loadErr == nil && existing.Status == "ready" && existing.ProxyURL == proxy && sameAuthJSONFlowTarget(existing.UpdateTarget, flow.UpdateTarget) {
 			return existing, nil
 		}
 	}
@@ -646,7 +658,7 @@ func (a *app) startCredentialFlow(w http.ResponseWriter, r *http.Request, user *
 		vendorFailure(w, err)
 		return
 	}
-	flow, err := a.newCredentialFlow(r.Context(), user, result, input.ProxyURL, false)
+	flow, err := a.newCredentialFlow(withAuthJSONFlowMethod(r.Context(), input.Mode), user, result, input.ProxyURL, false)
 	if err != nil {
 		vendorFailure(w, err)
 		return
@@ -723,7 +735,7 @@ func (a *app) importCredentialFlow(w http.ResponseWriter, r *http.Request, user 
 		vendorFailure(w, err)
 		return
 	}
-	flow, err := a.newCredentialFlow(r.Context(), user, result, input.ProxyURL, true)
+	flow, err := a.newCredentialFlow(withAuthJSONFlowMethod(r.Context(), input.Kind), user, result, input.ProxyURL, true)
 	if err != nil {
 		vendorFailure(w, err)
 		return
@@ -754,6 +766,10 @@ func (a *app) updateCredentialFlow(w http.ResponseWriter, r *http.Request, user 
 	}
 	defer release()
 	if action == "exchange" {
+		if flow.UpdateTarget != nil && flow.Status != "awaiting_code" && flow.Status != "ready" {
+			vendorFailure(w, credentialProblem(409, "CREDENTIAL_FLOW_UPDATE_FINISHED", "This authorization has already been used for an update. Check the account before trying again."))
+			return
+		}
 		if flow.Status == "ready" {
 			ok(w, flow.credentialFlowView)
 			return

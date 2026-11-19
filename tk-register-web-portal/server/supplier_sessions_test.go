@@ -113,14 +113,19 @@ func TestSupplierSessionsAuthJSONWaitDoesNotReplayWrite(t *testing.T) {
 	if len(audits) != 1 || audits[0].Status != "failed" || audits[0].ErrorCode != "SUPPLIER_RATE_LIMITED" {
 		t.Fatalf("incorrect wait audit: %+v", audits)
 	}
-	// A confirmed web write queues its reads without waiting for query cooldowns.
+	// A confirmed web write leaves status collection to the normal background
+	// process. Query cooldowns cannot delay the update or create follow-up jobs.
 	fake.updateErr = nil
 	fake.refreshErr = waitingSupplier("accounts", false, time.Now().UTC().Add(240*time.Second))
 	w = request(t, a, "POST", authRoute(target.ID), authInput(), cookie, csrf)
 	requireStatus(t, w, 200)
 	result := data(t, w)
-	if result["updated"] != true || result["refresh_status"] != "pending" || fake.updates != 2 || fake.refreshes != 0 {
+	if result["updated"] != true || result["refresh_status"] != "not_requested" || fake.updates != 2 || fake.refreshes != 0 {
 		t.Fatal("successful web write waited for a supplier refresh", w.Body.String())
+	}
+	var jobs int64
+	if err := a.store.DB.Model(&core.PostSubmissionSyncJob{}).Count(&jobs).Error; err != nil || jobs != 0 {
+		t.Fatal("credential update scheduled an extra collection during cooldown", jobs, err)
 	}
 	if strings.Contains(w.Body.String(), "private-access-token") {
 		t.Fatal("private upstream text leaked")
