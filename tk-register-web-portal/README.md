@@ -214,6 +214,11 @@ Each executed update has an audit record with source, actor, owner, account, tok
 
 See the [Auth JSON Update API reference](docs/auth-json-update-api.md) for the full validation, cURL, response, audit, and error contract. The in-app guide is at `/tk-register#/docs/update-auth-json`.
 
+The adjacent **Deactivate** action generates Auth JSON for the same existing
+account and offers download/copy without submitting it to the supplier or
+triggering status collection. It uses independent account-bound authorization
+drafts and metadata audits. See [account-scoped credential generation](docs/account-deactivate.md).
+
 ## Administrator users and account pool
 
 **Config → Users** lists TK Register users, roles, account status and registration time. **Add admin** and **Del admin** accept an existing user's email; changing a role does not create or delete an account. Roles are read-only in the table. The current administrator and bootstrap administrator cannot be demoted, and the server prevents removing the last active administrator. A promoted administrator must sign in with a password and email code.

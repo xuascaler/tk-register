@@ -1,4 +1,4 @@
-import { Check, FilePenLine, LoaderCircle, LockKeyhole, RefreshCw, Upload, UserRound, X } from 'lucide-react';
+import { Check, FilePenLine, LoaderCircle, LockKeyhole, Power, RefreshCw, Upload, UserRound, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { APIError, errorMessage, request } from '../api';
 import { MAX_AUTH_BYTES, parseAuthJSON } from '../submissions/validation';
@@ -10,15 +10,15 @@ import { deletionInProgress } from './account-state';
 import AuthorizeAuthJSON from './AuthorizeAuthJSON';
 import './auth-json.css';
 
-export function AuthenticationCard({ account, disabled, onEdit, timezone }: {
-  account: SyncedAccount; disabled: boolean; onEdit: () => void; timezone: string;
+export function AuthenticationCard({ account, disabled, onEdit, onDeactivate, timezone }: {
+  account: SyncedAccount; disabled: boolean; onEdit: () => void; onDeactivate: () => void; timezone: string;
 }) {
   return <section className='account-authentication' aria-label='Authentication'>
     <div className='account-auth-copy'><h2>Authentication</h2><p>Update this account’s Auth JSON when its credentials change.</p>
       {account.auth_json_updated_at && <span className='account-auth-updated'>Last updated {formatTime(account.auth_json_updated_at, timezone)}</span>}
       {deletionInProgress(account) ? <span className='account-auth-updated'>Unavailable while this account is being deleted.</span> : !account.current_submission_id && <span className='account-auth-updated'>Available after the account submission is accepted.</span>}
     </div>
-    <button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />Update Auth JSON</button>
+    <div className='account-auth-actions'><button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />Update Auth JSON</button><button type='button' className='button secondary account-deactivate-button' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onDeactivate}><Power aria-hidden='true' />Deactivate</button></div>
   </section>;
 }
 

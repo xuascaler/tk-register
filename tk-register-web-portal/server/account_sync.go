@@ -147,7 +147,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		return true
 	}
 	parts := strings.Split(strings.TrimPrefix(route, base+"/"), "/")
-	if len(parts) < 1 || (len(parts) > 2 && !(len(parts) >= 4 && len(parts) <= 5 && parts[1] == "auth-json" && parts[2] == "flows")) {
+	if len(parts) < 1 || (len(parts) > 2 && !(len(parts) >= 4 && len(parts) <= 5 && (parts[1] == "auth-json" || parts[1] == "deactivate") && parts[2] == "flows")) {
 		fail(w, 404, "NOT_FOUND", "This endpoint does not exist.")
 		return true
 	}
@@ -169,6 +169,14 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 	}
 	if len(parts) >= 4 && parts[1] == "auth-json" && parts[2] == "flows" {
 		a.accountAuthJSONFlows(w, r, user, id, adminAccounts, strings.Join(parts[3:], "/"))
+		return true
+	}
+	if len(parts) == 2 && parts[1] == "deactivate" || len(parts) >= 4 && parts[1] == "deactivate" && parts[2] == "flows" {
+		action := ""
+		if len(parts) >= 4 {
+			action = strings.Join(parts[3:], "/")
+		}
+		a.accountDeactivate(w, r, user, id, adminAccounts, action)
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "daily-usage" && r.Method == "GET" {

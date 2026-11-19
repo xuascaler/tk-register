@@ -44,6 +44,8 @@ type credentialFlowView struct {
 	ExpiresAt    time.Time            `json:"expires_at"`
 	Status       string               `json:"status"`
 	UpdateResult map[string]any       `json:"update_result,omitempty"`
+	GeneratedAt  *time.Time           `json:"generated_at,omitempty"`
+	AuditID      string               `json:"audit_id,omitempty"`
 }
 
 type credentialHelperResult struct {
@@ -62,15 +64,27 @@ type credentialProxyTestContextKey struct{}
 
 type credentialFlowRecord struct {
 	credentialFlowView
-	OwnerID      uint64              `json:"owner_id"`
-	AuthVersion  uint64              `json:"auth_version"`
-	ProxyURL     string              `json:"proxy_url"`
-	UpdateTarget *authJSONFlowTarget `json:"update_target,omitempty"`
-	Method       string              `json:"method,omitempty"`
+	OwnerID          uint64              `json:"owner_id"`
+	AuthVersion      uint64              `json:"auth_version"`
+	ProxyURL         string              `json:"proxy_url"`
+	UpdateTarget     *authJSONFlowTarget `json:"update_target,omitempty"`
+	DeactivateTarget *authJSONFlowTarget `json:"deactivate_target,omitempty"`
+	Method           string              `json:"method,omitempty"`
 }
 
 func credentialFlowKey(owner uint64, id string) string {
 	return redisPrefix + "credential-flow:" + strconv.FormatUint(owner, 10) + ":" + id
+}
+
+func deactivateFlowKey(owner uint64, id string) string {
+	return redisPrefix + "account-deactivate-flow:" + strconv.FormatUint(owner, 10) + ":" + id
+}
+
+func credentialRecordKey(flow credentialFlowRecord) string {
+	if flow.DeactivateTarget != nil {
+		return deactivateFlowKey(flow.OwnerID, flow.FlowID)
+	}
+	return credentialFlowKey(flow.OwnerID, flow.FlowID)
 }
 
 var replaceCredentialFlow = redis.NewScript(`
@@ -358,14 +372,24 @@ func (a *app) loadCredentialFlow(ctx context.Context, user *core.User, id string
 	if !credentialFlowID.MatchString(id) {
 		return flow, "", credentialMissing()
 	}
-	value, err := a.redis.Get(ctx, credentialFlowKey(user.ID, id)).Result()
+	_, deactivate := ctx.Value(deactivateFlowContextKey{}).(authJSONFlowTarget)
+	key := credentialFlowKey(user.ID, id)
+	if deactivate {
+		key = deactivateFlowKey(user.ID, id)
+	}
+	value, err := a.redis.Get(ctx, key).Result()
 	if errors.Is(err, redis.Nil) {
 		return flow, "", credentialMissing()
 	}
 	if err != nil {
 		return flow, "", err
 	}
-	plain, err := a.store.OpenCredentialFlow(user.ID, id, value)
+	var plain string
+	if deactivate {
+		plain, err = a.store.OpenAccountDeactivateFlow(user.ID, id, value)
+	} else {
+		plain, err = a.store.OpenCredentialFlow(user.ID, id, value)
+	}
 	if err != nil {
 		return flow, "", credentialMissing()
 	}
@@ -390,11 +414,16 @@ func (a *app) saveCredentialFlow(ctx context.Context, flow credentialFlowRecord,
 	if err != nil {
 		return err
 	}
-	encrypted, err := a.store.SealCredentialFlow(flow.OwnerID, flow.FlowID, string(encoded))
+	var encrypted string
+	if flow.DeactivateTarget != nil {
+		encrypted, err = a.store.SealAccountDeactivateFlow(flow.OwnerID, flow.FlowID, string(encoded))
+	} else {
+		encrypted, err = a.store.SealCredentialFlow(flow.OwnerID, flow.FlowID, string(encoded))
+	}
 	if err != nil {
 		return err
 	}
-	key := credentialFlowKey(flow.OwnerID, flow.FlowID)
+	key := credentialRecordKey(flow)
 	if previous == "" {
 		saved, e := a.redis.SetNX(ctx, key, encrypted, ttl).Result()
 		if e != nil {
@@ -424,7 +453,7 @@ func (a *app) lockCredentialFlow(ctx context.Context, user *core.User, id string
 	if err != nil {
 		return flow, previous, nil, err
 	}
-	key := credentialFlowKey(user.ID, id) + ":lease"
+	key := credentialRecordKey(flow) + ":lease"
 	acquired, err := a.redis.SetNX(ctx, key, token, 100*time.Second).Result()
 	if err != nil {
 		return flow, previous, nil, err
@@ -531,6 +560,12 @@ func (a *app) testCredentialProxy(w http.ResponseWriter, r *http.Request, user *
 			vendorFailure(w, err)
 			return
 		}
+		if binding, scoped := ctx.Value(deactivateFlowContextKey{}).(authJSONFlowTarget); scoped {
+			if _, err = a.validateAuthJSONFlowTarget(ctx, user, binding); err != nil {
+				vendorFailure(w, err)
+				return
+			}
+		}
 		ok(w, map[string]any{"proxy_check": result.ProxyCheck})
 		return
 	}
@@ -553,6 +588,12 @@ func (a *app) testCredentialProxy(w http.ResponseWriter, r *http.Request, user *
 	if result.FlowID != flow.FlowID || result.ProxyCheck.IP != flow.ProxyCheck.IP {
 		vendorFailure(w, credentialProxyFailure("proxy_ip_mismatch"))
 		return
+	}
+	if flow.DeactivateTarget != nil {
+		if err = a.authorizeCredentialFlowTarget(ctx, user, flow); err != nil {
+			vendorFailure(w, err)
+			return
+		}
 	}
 	flow.ProxyCheck = result.ProxyCheck
 	if result.ExpiresAt.Before(flow.ExpiresAt) {
@@ -603,6 +644,12 @@ func (a *app) newCredentialFlow(ctx context.Context, user *core.User, result cre
 	if scope, ok := ctx.Value(authJSONFlowContextKey{}).(authJSONFlowTarget); ok {
 		flow.UpdateTarget = &scope
 	}
+	if scope, ok := ctx.Value(deactivateFlowContextKey{}).(authJSONFlowTarget); ok {
+		if flow.UpdateTarget != nil {
+			return flow, credentialInvalid()
+		}
+		flow.DeactivateTarget = &scope
+	}
 	if flow.Notes == nil {
 		flow.Notes = []string{}
 	}
@@ -621,13 +668,18 @@ func (a *app) newCredentialFlow(ctx context.Context, user *core.User, result cre
 	if method, ok := ctx.Value(authJSONFlowMethodKey{}).(string); ok {
 		flow.Method = method
 	}
+	if flow.DeactivateTarget != nil {
+		if err := a.authorizeCredentialFlowTarget(ctx, user, flow); err != nil {
+			return flow, err
+		}
+	}
 	err := a.saveCredentialFlow(ctx, flow, "")
 	var problem *core.VendorError
 	if ready && errors.As(err, &problem) && problem.Code == "CREDENTIAL_FLOW_CONFLICT" {
 		// The helper caches imports by owner and input. Restore the same draft
 		// without replacing manually completed fields or extending its expiry.
 		existing, _, loadErr := a.loadCredentialFlow(ctx, user, flow.FlowID)
-		if loadErr == nil && existing.Status == "ready" && existing.ProxyURL == proxy && sameAuthJSONFlowTarget(existing.UpdateTarget, flow.UpdateTarget) {
+		if loadErr == nil && existing.Status == "ready" && existing.ProxyURL == proxy && sameAuthJSONFlowTarget(existing.UpdateTarget, flow.UpdateTarget) && sameAuthJSONFlowTarget(existing.DeactivateTarget, flow.DeactivateTarget) {
 			return existing, nil
 		}
 	}
@@ -766,6 +818,10 @@ func (a *app) updateCredentialFlow(w http.ResponseWriter, r *http.Request, user 
 	}
 	defer release()
 	if action == "exchange" {
+		if flow.DeactivateTarget != nil && flow.Status != "awaiting_code" && flow.Status != "ready" {
+			vendorFailure(w, credentialProblem(409, "CREDENTIAL_FLOW_EXPORT_FINISHED", "Auth JSON has already been generated. Download the saved result instead."))
+			return
+		}
 		if flow.UpdateTarget != nil && flow.Status != "awaiting_code" && flow.Status != "ready" {
 			vendorFailure(w, credentialProblem(409, "CREDENTIAL_FLOW_UPDATE_FINISHED", "This authorization has already been used for an update. Check the account before trying again."))
 			return
@@ -782,6 +838,12 @@ func (a *app) updateCredentialFlow(w http.ResponseWriter, r *http.Request, user 
 		if result.FlowID != flow.FlowID || credentialAuthShape(result.Auth, flow.ProxyURL) != nil {
 			vendorFailure(w, credentialInvalid())
 			return
+		}
+		if flow.DeactivateTarget != nil {
+			if err = a.authorizeCredentialFlowTarget(r.Context(), user, flow); err != nil {
+				vendorFailure(w, err)
+				return
+			}
 		}
 		flow.Auth = result.Auth
 		flow.Notes = result.Notes

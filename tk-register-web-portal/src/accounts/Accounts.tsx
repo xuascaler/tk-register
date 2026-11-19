@@ -12,6 +12,7 @@ import { ErrorPopover } from './ErrorPopover';
 import { UsageTrend } from './UsageTrend';
 import { DailyUsage } from './DailyUsage';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
+import DeactivateAccount from './DeactivateAccount';
 import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
 import { loadAccountPage, mergeSyncedAccount, syncAccountRow, syncRetryLabel, type AccountRowSyncResult } from './row-sync';
 import { deletionInProgress } from './account-state';
@@ -177,6 +178,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [deactivateOpen, setDeactivateOpen] = useState(false);
   const [refreshWarning, setRefreshWarning] = useState('');
   const [syncRetry, setSyncRetry] = useState<{ until: number; stage?: RetryStage } | null>(null);
   const [syncNow, setSyncNow] = useState(Date.now);
@@ -186,7 +188,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   const [attempt, setAttempt] = useState(0);
   const pending = useRef<AbortController | null>(null);
   useEffect(() => {
-    setEditorOpen(false); setRefreshWarning(''); setNotice(''); setSyncing(false); setSyncRetry(null);
+    setEditorOpen(false); setDeactivateOpen(false); setRefreshWarning(''); setNotice(''); setSyncing(false); setSyncRetry(null);
     return () => pending.current?.abort();
   }, [id, endpoint]);
   useEffect(() => {
@@ -274,7 +276,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       <div className='member-settings-tabs account-usage-tabs' role='tablist' aria-label='Account information'>{(['overview', 'daily'] as const).map(value => <button key={value} role='tab' id={`usage-tab-${value}`} aria-selected={tab === value} aria-controls={`usage-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => changeTab(value)} onKeyDown={e => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'overview' : e.key === 'End' ? 'daily' : tab === 'daily' ? 'overview' : 'daily'; changeTab(next); requestAnimationFrame(() => document.getElementById(`usage-tab-${next}`)?.focus()); } }}>{value === 'overview' ? 'Overview' : 'Daily usage'}</button>)}</div>
       <div role='tabpanel' id={`usage-panel-${tab}`} aria-labelledby={`usage-tab-${tab}`}>
       {tab === 'overview' && <>
-      {(admin || account.can_manage !== false) && <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} />}
+      {(admin || account.can_manage !== false) && <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} onDeactivate={() => setDeactivateOpen(true)} />}
       <div className='usage-metrics'>
         <div><span>Total spent</span><strong>{formatCost(snapshot?.cost_total_usd, 'USD')}</strong><small>{account.last_error && snapshot ? 'Last known cumulative total' : 'Cumulative total'}</small></div>
         <div><span>Input tokens</span><strong>{formatTokens(snapshot?.input_tokens_total, true)}</strong><small>{formatTokens(snapshot?.input_tokens_total)} tokens</small></div>
@@ -289,6 +291,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       <DailyUsage key={`${endpoint}:${id}`} endpoint={`${endpoint}/${encodeURIComponent(id)}`} compact={tab === 'overview'} onOpen={() => changeTab('daily')} />
       </div>
       {editorOpen && <AuthJSONEditor account={account} endpoint={endpoint} onClose={() => setEditorOpen(false)} onSaved={credentialsSaved} />}
+      {deactivateOpen && <DeactivateAccount account={account} endpoint={endpoint} onClose={() => setDeactivateOpen(false)} onGenerated={() => { setDeactivateOpen(false); setNotice('Auth JSON generated. Your account will go offline after a while.'); }} />}
     </>}
   </section>;
 }

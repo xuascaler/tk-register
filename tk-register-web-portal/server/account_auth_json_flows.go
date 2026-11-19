@@ -77,6 +77,12 @@ func (a *app) validateAuthJSONFlowTarget(ctx context.Context, user *core.User, b
 }
 
 func (a *app) authorizeCredentialFlowTarget(ctx context.Context, user *core.User, flow credentialFlowRecord) error {
+	if flow.DeactivateTarget != nil {
+		return a.authorizeDeactivateFlowTarget(ctx, user, flow)
+	}
+	if _, scoped := ctx.Value(deactivateFlowContextKey{}).(authJSONFlowTarget); scoped {
+		return credentialMissing()
+	}
 	binding, scoped := ctx.Value(authJSONFlowContextKey{}).(authJSONFlowTarget)
 	if flow.UpdateTarget == nil {
 		if scoped {

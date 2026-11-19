@@ -10,3 +10,13 @@ func (s *Store) SealCredentialFlow(owner uint64, flowID, value string) (string, 
 func (s *Store) OpenCredentialFlow(owner uint64, flowID, value string) (string, error) {
 	return s.decrypt("credential-flow:"+idString(owner)+":"+flowID, value)
 }
+
+// Account-scoped generation has a separate authenticated purpose so a
+// downgraded server cannot interpret its drafts as legacy submission drafts.
+func (s *Store) SealAccountDeactivateFlow(owner uint64, flowID, value string) (string, error) {
+	return s.encrypt("account-deactivate-flow:"+idString(owner)+":"+flowID, value)
+}
+
+func (s *Store) OpenAccountDeactivateFlow(owner uint64, flowID, value string) (string, error) {
+	return s.decrypt("account-deactivate-flow:"+idString(owner)+":"+flowID, value)
+}
