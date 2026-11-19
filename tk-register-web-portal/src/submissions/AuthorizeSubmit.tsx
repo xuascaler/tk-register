@@ -57,6 +57,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
   const clientKey = useRef('');
   const confirmedEmail = useRef('');
   const upload = useRef<HTMLInputElement>(null);
+  const otherMethods = useRef<HTMLDetailsElement>(null);
   const storageKey = `tk-register:credential-flow:${user.id}`;
   const vendor = vendors?.find(item => item.id === vendorID);
   const protocols = vendor?.protocols.filter(item => item.operation === 'push') || [];
@@ -252,7 +253,9 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
     resetAuthorization(); setDocument(''); setSessionKey(''); setAccessToken(''); setRefreshToken(''); setTokenExpiry(''); setFileName(''); setAccountIndex('0');
   }
   function changeMethod(value: CredentialMethod) {
-    if (value === method || locked) return;
+    if (locked) return;
+    otherMethods.current?.removeAttribute('open');
+    if (value === method) return;
     if (flow && !window.confirm('Start a different authorization method? Your account settings will be kept.')) return;
     resetAuthorization(); setMethod(value);
   }
@@ -314,7 +317,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
       </section>
       {!finished && !hasCredentials && <section className='authorize-section'>
         <div className='section-heading'><div><h2>Authorization</h2><p className='field-help'>{goal === 'submit' ? 'After authorization, your account is submitted automatically.' : 'Generate credentials without submitting the account.'}</p></div></div>
-        <div className='authorize-method-row'><div className='authorize-method-tabs' role='tablist' aria-label='Credential source'>{(['oauth', 'setup', 'json'] as const).map(value => <button type='button' role='tab' key={value} aria-selected={method === value} disabled={locked} onClick={() => changeMethod(value)}>{methodLabels[value]}</button>)}</div><details className='authorize-other-methods'><summary>{method === 'cookie' || method === 'token' ? methodLabels[method] : 'Other methods'}<ChevronDown aria-hidden='true' /></summary><div>{(['cookie', 'token'] as const).map(value => <button type='button' className='text-link' key={value} disabled={locked} onClick={() => changeMethod(value)}>{methodLabels[value]}</button>)}</div></details></div>
+        <div className='authorize-method-row'><div className='authorize-method-tabs' role='tablist' aria-label='Credential source'>{(['oauth', 'setup', 'json'] as const).map(value => <button type='button' role='tab' key={value} aria-selected={method === value} disabled={locked} onClick={() => changeMethod(value)}>{methodLabels[value]}</button>)}</div><details ref={otherMethods} className='authorize-other-methods'><summary>{method === 'cookie' || method === 'token' ? methodLabels[method] : 'Other methods'}<ChevronDown aria-hidden='true' /></summary><div>{(['cookie', 'token'] as const).map(value => <button type='button' className='text-link' key={value} disabled={locked} onClick={() => changeMethod(value)}>{methodLabels[value]}</button>)}</div></details></div>
         {method === 'setup' && <Select id='auto-setup-kind' label='Authorization type' value={setupKind} options={[{ value: 'full', label: 'Full access · Recommended' }, { value: 'official', label: 'Inference only · Long-lived token' }]} disabled={locked || Boolean(flow)} onChange={setSetupKind} />}
         {(method === 'oauth' || method === 'setup') ? <>
           {flow?.auth_url && <><div className='field'><label>Authorization link</label><div className='authorize-link-row'><div className='authorize-link-display'>{flow.auth_url}</div><button type='button' className='button secondary compact' disabled={locked} onClick={() => void navigator.clipboard.writeText(flow.auth_url!).then(() => setAnnouncement('Authorization link copied.')).catch(() => setError('Unable to copy. Select and copy the authorization link.'))}><Copy aria-hidden='true' />Copy</button></div><p className='field-help'>Expires {new Date(flow.expires_at).toLocaleTimeString()}.</p></div><div className='field'><label htmlFor='auto-code'>Authorization code or callback URL</label><textarea id='auto-code' className='authorize-mono' value={code} onChange={event => setCode(event.target.value)} disabled={locked} rows={3} placeholder='Paste code#state or the full callback URL' spellCheck={false} autoComplete='off' /></div></>}

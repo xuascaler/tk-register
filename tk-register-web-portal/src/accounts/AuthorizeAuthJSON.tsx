@@ -125,9 +125,11 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
     resetFlow(); setProxy(value);
   }
   function changeMethod(next: CredentialMethod) {
-    if (locked || testing || next === method) return;
+    if (locked || testing) return;
+    otherMethods.current?.removeAttribute('open');
+    if (next === method) return;
     if (flow && !window.confirm('Discard this authorization and choose another method?')) return;
-    resetFlow(true); setMethod(next); otherMethods.current?.removeAttribute('open');
+    resetFlow(true); setMethod(next);
   }
   function requireTestedProxy() {
     if (testing) { setProxyPrompt('Wait for the proxy test to finish, then try again.'); return false; }

@@ -281,7 +281,8 @@ export default function Select({
               </div>
             ))}
           </div>,
-          document.body,
+          // Body-level portals are inert while a native modal is open.
+          trigger.current?.closest("dialog") ?? document.body,
         )}
     </div>
   );
