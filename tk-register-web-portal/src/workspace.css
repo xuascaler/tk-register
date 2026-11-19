@@ -7,7 +7,8 @@
   position: sticky;
   top: 0;
   height: calc(100dvh - 76px);
-  min-height: 440px;
+  min-height: 0;
+  overflow-y: auto;
   padding: 28px 14px 24px;
   gap: 28px;
 }
@@ -873,6 +874,8 @@
   }
   .workspace .sidebar.is-open {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
     position: fixed;
     top: 0;
     left: 0;
@@ -894,9 +897,12 @@
     display: block;
   }
   .workspace .sidebar .signout {
-    margin-top: auto;
+    margin: auto 0 0;
     border-top: 1px solid var(--border);
     padding-top: 16px;
+  }
+  .workspace .sidebar .signout .nav-item span {
+    display: inline;
   }
   .workspace .sidebar .nav-item {
     width: 100%;
