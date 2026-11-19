@@ -279,6 +279,11 @@ export default function App() {
   }, [dirty, route]);
   useEffect(() => {
     if (!menuOpen) return;
+    const drawerViewport = window.matchMedia('(max-width: 820px)');
+    if (!drawerViewport.matches) {
+      setMenuOpen(false);
+      return;
+    }
     const oldOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     sidebar.current?.querySelector<HTMLButtonElement>('button')?.focus();
@@ -303,10 +308,21 @@ export default function App() {
         }
       }
     };
+    const handleViewportChange = () => {
+      if (drawerViewport.matches) return;
+      setMenuOpen(false);
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && sidebar.current?.contains(focused) && focused.getClientRects().length === 0) {
+        const navigation = sidebar.current;
+        (navigation.querySelector<HTMLButtonElement>('.nav-item[aria-current="page"]') || navigation.querySelector<HTMLButtonElement>('.nav-item'))?.focus();
+      }
+    };
     window.addEventListener('keydown', handleKey);
+    drawerViewport.addEventListener('change', handleViewportChange);
     return () => {
       document.body.style.overflow = oldOverflow;
       window.removeEventListener('keydown', handleKey);
+      drawerViewport.removeEventListener('change', handleViewportChange);
     };
   }, [menuOpen]);
   async function logout() {

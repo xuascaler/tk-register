@@ -250,10 +250,17 @@ cd tk-register-web-portal
 npm ci
 npm test
 npm run build
+npm run test:navigation
 cd server
 go test ./...
 go vet ./...
 ```
+
+The navigation browser checks serve the built frontend with local API fixtures.
+They cover member and administrator drawers at phone, tablet, and desktop sizes,
+including crossing the 820px breakpoint while a drawer is open. The drawer must
+remain vertical and scrollable; closing it or entering desktop layout restores
+the previous page scroll state and allows the main content to receive input.
 
 Run the real-backend browser fixture and vendor workflow in two terminals:
 
