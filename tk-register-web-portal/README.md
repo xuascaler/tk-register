@@ -219,6 +219,11 @@ account and offers download/copy without submitting it to the supplier or
 triggering status collection. It uses independent account-bound authorization
 drafts and metadata audits. See [account-scoped credential generation](docs/account-deactivate.md).
 
+All three guided authorization entries share bounded error details and correlated
+operational logs, including the Cookie/sessionKey flow. See
+[authorization diagnostics](docs/authorization-diagnostics.md) for stages, response
+fields, and log privacy.
+
 ## Administrator users and account pool
 
 **Config → Users** lists TK Register users, roles, account status and registration time. **Add admin** and **Del admin** accept an existing user's email; changing a role does not create or delete an account. Roles are read-only in the table. The current administrator and bootstrap administrator cannot be demoted, and the server prevents removing the last active administrator. A promoted administrator must sign in with a password and email code.

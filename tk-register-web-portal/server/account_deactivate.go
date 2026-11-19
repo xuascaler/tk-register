@@ -90,6 +90,7 @@ func (a *app) exportAccountDeactivate(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	defer release()
+	r = r.WithContext(withAuthJSONFlowMethod(r.Context(), flow.Method))
 	if flow.Status != "ready" && flow.Status != "exported" || flow.Auth == nil {
 		vendorFailure(w, credentialProblem(409, "CREDENTIAL_DRAFT_NOT_READY", "Finish authorization before generating Auth JSON."))
 		return

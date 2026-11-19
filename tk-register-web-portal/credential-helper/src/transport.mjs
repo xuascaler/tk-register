@@ -3,7 +3,7 @@ import tls from 'node:tls';
 import http from 'node:http';
 import { once } from 'node:events';
 import { resolveProxy } from './proxy.mjs';
-import { fail } from './errors.mjs';
+import { fail, safeUpstreamCode } from './errors.mjs';
 
 const MAX_RESPONSE = 2 * 1024 * 1024;
 
@@ -129,7 +129,7 @@ export function createTransport({ lookup, dial = defaultDial, secure = defaultSe
     const target = allowedTarget(urlValue);
     if (!['GET', 'POST'].includes(method)) throw fail('invalid_request', 'Invalid method.');
     const sockets = new Set();
-    let request, agent, timedOut = false, finished = false;
+    let request, agent, upstreamStatus, responseKind, timedOut = false, finished = false;
     const track = socket => {
       // The connect may finish after a DNS/connect timeout: close late sockets too.
       if (finished) socket.destroy();
@@ -162,29 +162,37 @@ export function createTransport({ lookup, dial = defaultDial, secure = defaultSe
           request.end(payload);
           socket.resume();
         });
+        upstreamStatus = response.statusCode;
+        responseKind = /^text\/html(?:\s*;|$)/i.test(response.headers['content-type'] || '') ? 'html' : 'other';
         const chunks = [];
         let size = 0;
         for await (const chunk of response) {
           size += chunk.length;
-          if (size > MAX_RESPONSE) throw fail('upstream_invalid_response', 'Response too large.', 502);
+          if (size > MAX_RESPONSE) throw fail('upstream_invalid_response', 'Response too large.', 502,
+            { upstreamStatus, responseKind });
           chunks.push(chunk);
         }
+        const text = Buffer.concat(chunks).toString('utf8');
+        let document, parsed = false;
+        try { document = JSON.parse(text); parsed = true; responseKind = 'json'; }
+        catch { if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(text)) responseKind = 'html'; }
         if (response.statusCode < 200 || response.statusCode >= 300) {
+          const upstreamCode = safeUpstreamCode(typeof document?.error === 'string' ? document.error : document?.error?.type);
           throw fail(response.statusCode === 429 ? 'upstream_rate_limited' : 'upstream_rejected',
             'Upstream rejected the request.', response.statusCode === 429 ? 429 : 502,
-            { upstreamStatus: response.statusCode });
+            { upstreamStatus, responseKind, ...(upstreamCode ? { upstreamCode } : {}) });
         }
-        try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-        catch { throw fail('upstream_invalid_response', 'Invalid JSON response.', 502); }
+        if (!parsed) throw fail('upstream_invalid_response', 'Invalid JSON response.', 502, { upstreamStatus, responseKind });
+        return document;
       };
       return await Promise.race([operation(), new Promise((_resolve, reject) => {
         timer = setTimeout(() => { timedOut = true; finished = true; destroy(); reject(fail('upstream_timeout', 'Request timed out.', 504)); },
           Math.max(1, Math.min(Number(timeout) || 25000, 60000)));
       })]);
     } catch (error) {
-      if (timedOut) throw fail('upstream_timeout', 'Request timed out.', 504);
+      if (timedOut) throw fail('upstream_timeout', 'Request timed out.', 504, { upstreamStatus, responseKind });
       if (error?.code && error?.status) throw error;
-      throw fail('upstream_network_error', 'Proxy transport failed.', 502);
+      throw fail('upstream_network_error', 'Proxy transport failed.', 502, { upstreamStatus, responseKind });
     } finally {
       finished = true;
       clearTimeout(timer);

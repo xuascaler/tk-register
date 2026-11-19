@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { requestJson as defaultRequestJson } from './transport.mjs'
+import { withStage, logDiagnostic } from './diagnostics.mjs'
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const FULL_SCOPE = 'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload'
@@ -13,8 +14,8 @@ const DEFAULT_ENDPOINTS = {
   cookieAuthorizeBase: 'https://claude.ai/v1/oauth',
 }
 
-function fail(code, message, status = 400) {
-  return Object.assign(new Error(message), { code, status })
+function fail(code, message, status = 400, extra = {}) {
+  return Object.assign(new Error(message), { code, status, ...extra })
 }
 
 function text(...values) {
@@ -101,6 +102,7 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
   const urls = { ...DEFAULT_ENDPOINTS, ...endpoints }
   const sessions = new Map()
   const pendingGrants = new Map()
+  const checkedProxy = (...args) => withStage('proxy_check', () => verifyProxy(...args))
 
   function grantKey(kind, secret, proxyUrl, extra = '') {
     return createHash('sha256').update(JSON.stringify([kind, secret, proxyUrl, extra])).digest('hex')
@@ -148,7 +150,7 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
       ...flow(mode, setup_kind), ...pkce(), proxy_url: requiredProxy(proxy_url),
       proxy_label: String(proxy_label), expiresAt: now() + SESSION_TTL, busy: false,
     }
-    const proxyCheck = await verifyProxy(session.proxy_url)
+    const proxyCheck = await checkedProxy(session.proxy_url)
     session.exit_ip = text(proxyCheck?.ip)
     const id = randomBytes(24).toString('base64url')
     sessions.set(id, session)
@@ -163,13 +165,16 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
 
   async function enrich(credential, proxyUrl, notes) {
     try {
-      const profile = await requestJson(urls.profileUrl, {
-        proxy_url: proxyUrl,
-        headers: { authorization: `Bearer ${credential.access_token}`, 'anthropic-beta': 'oauth-2025-04-20' },
+      await withStage('profile', async () => {
+        const profile = await requestJson(urls.profileUrl, {
+          proxy_url: proxyUrl,
+          headers: { authorization: `Bearer ${credential.access_token}`, 'anthropic-beta': 'oauth-2025-04-20' },
+        })
+        mergeIdentity(credential, profile)
       })
-      mergeIdentity(credential, profile)
     } catch (error) {
       if (['upstream_network_error', 'upstream_timeout', 'invalid_proxy', 'proxy_required', 'proxy_forbidden', 'proxy_check_failed', 'proxy_authentication_failed', 'proxy_ip_mismatch'].includes(error.code)) throw error
+      logDiagnostic('warning', error)
       notes.push(error.upstreamStatus === 403
         ? 'Credentials were obtained, but the granted scope did not return complete account information.'
         : 'Credentials were obtained, but the profile query did not return complete account information.')
@@ -199,25 +204,27 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
   }
 
   async function exchangeToken(session, parsed, { expectedState = '' } = {}) {
-    if (!parsed.code) throw fail('code_required', '授权码为空。')
-    if (expectedState && parsed.state && parsed.state !== expectedState) {
-      throw fail('state_mismatch', 'Cookie 授权返回的会话状态不匹配，请重新授权。')
-    }
-    const body = {
-      grant_type: 'authorization_code', code: parsed.code, redirect_uri: urls.redirectUri,
-      client_id: CLIENT_ID, code_verifier: session.verifier,
-    }
-    // Manual copy/paste callbacks may return a state different from the authorize nonce.
-    // PKCE binds the code to this session. Send only the state actually returned upstream.
-    if (parsed.state) body.state = parsed.state
-    if (session.official) body.expires_in = 31536000
-    const token = await requestJson(urls.tokenUrl, {
-      method: 'POST', body, proxy_url: session.proxy_url,
+    return withStage('oauth_token', async () => {
+      if (!parsed.code) throw fail('code_required', '授权码为空。')
+      if (expectedState && parsed.state && parsed.state !== expectedState) {
+        throw fail('state_mismatch', 'Cookie 授权返回的会话状态不匹配，请重新授权。')
+      }
+      const body = {
+        grant_type: 'authorization_code', code: parsed.code, redirect_uri: urls.redirectUri,
+        client_id: CLIENT_ID, code_verifier: session.verifier,
+      }
+      // Manual copy/paste callbacks may return a state different from the authorize nonce.
+      // PKCE binds the code to this session. Send only the state actually returned upstream.
+      if (parsed.state) body.state = parsed.state
+      if (session.official) body.expires_in = 31536000
+      const token = await requestJson(urls.tokenUrl, {
+        method: 'POST', body, proxy_url: session.proxy_url,
+      })
+      const credential = fromToken(token, session.proxy_url)
+      credential.proxy_exit_ip = session.exit_ip || ''
+      if (!credential.scope) credential.scope = session.scope
+      return credential
     })
-    const credential = fromToken(token, session.proxy_url)
-    credential.proxy_exit_ip = session.exit_ip || ''
-    if (!credential.scope) credential.scope = session.scope
-    return credential
   }
 
   async function finish(credential, proxyUrl, official) {
@@ -236,7 +243,7 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
     const parsed = session.credential ? null : parseCode(code)
     session.busy = true
     try {
-      await verifyProxy(requiredProxy(session.proxy_url), session.exit_ip)
+      await checkedProxy(requiredProxy(session.proxy_url), session.exit_ip)
       if (!session.credential) session.credential = await exchangeToken(session, parsed)
       const result = await finish(session.credential, session.proxy_url, session.official)
       sessions.delete(session_id)
@@ -253,7 +260,7 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
     const cacheKey = grantKey('cookie', key, session.proxy_url, `${mode}:${setup_kind}`)
     const pending = takePending(cacheKey)
     try {
-      const proxyCheck = await verifyProxy(session.proxy_url, text(pending.credential?.proxy_exit_ip))
+      const proxyCheck = await checkedProxy(session.proxy_url, text(pending.credential?.proxy_exit_ip))
       session.exit_ip = text(proxyCheck?.ip)
       if (!pending.credential) {
         const webOrigin = new URL(urls.organizationsUrl).origin
@@ -261,20 +268,26 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
           cookie: `sessionKey=${key}`, origin: webOrigin, referer: `${webOrigin}/`,
           'user-agent': 'Mozilla/5.0',
         }
-        const organizations = await requestJson(urls.organizationsUrl, { headers, proxy_url: session.proxy_url })
-        if (!Array.isArray(organizations) || !organizations.length) {
-          throw fail('organization_missing', '此 sessionKey 没有返回可用组织。', 502)
-        }
-        const candidates = organizations.filter(org => org?.uuid && Array.isArray(org.capabilities) && org.capabilities.includes('chat'))
-        const organization = candidates.sort((a, b) => b.capabilities.length - a.capabilities.length)[0]
-          || organizations.find(org => org?.uuid)
-        if (!organization) throw fail('organization_missing', '账号响应中没有组织 UUID。', 502)
-        const authorized = await requestJson(`${urls.cookieAuthorizeBase}/${encodeURIComponent(organization.uuid)}/authorize`, {
-          method: 'POST', headers, proxy_url: session.proxy_url,
-          body: { ...authorizeParams(session), organization_uuid: organization.uuid },
+        const organization = await withStage('cookie_organizations', async () => {
+          const organizations = await requestJson(urls.organizationsUrl, { headers, proxy_url: session.proxy_url })
+          if (!Array.isArray(organizations) || !organizations.length) {
+            throw fail('organization_missing', '此 sessionKey 没有返回可用组织。', 502)
+          }
+          const candidates = organizations.filter(org => org?.uuid && Array.isArray(org.capabilities) && org.capabilities.includes('chat'))
+          const selected = candidates.sort((a, b) => b.capabilities.length - a.capabilities.length)[0]
+            || organizations.find(org => org?.uuid)
+          if (!selected) throw fail('organization_missing', '账号响应中没有组织 UUID。', 502)
+          return selected
         })
-        if (!authorized?.redirect_uri) throw fail('authorization_response_invalid', 'Cookie 授权没有返回授权回调地址。', 502)
-        pending.credential = await exchangeToken(session, parseCode(authorized.redirect_uri), { expectedState: session.state })
+        const callback = await withStage('cookie_authorize', async () => {
+          const authorized = await requestJson(`${urls.cookieAuthorizeBase}/${encodeURIComponent(organization.uuid)}/authorize`, {
+            method: 'POST', headers, proxy_url: session.proxy_url,
+            body: { ...authorizeParams(session), organization_uuid: organization.uuid },
+          })
+          if (!authorized?.redirect_uri) throw fail('authorization_response_invalid', 'Cookie 授权没有返回授权回调地址。', 502)
+          return parseCode(authorized.redirect_uri)
+        })
+        pending.credential = await exchangeToken(session, callback, { expectedState: session.state })
         if (!pending.credential.organization_uuid) pending.credential.organization_uuid = organization.uuid
         if (!pending.credential.organization_name && organization.name) pending.credential.organization_name = organization.name
       }
@@ -291,7 +304,7 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
       access_token: requiredAccess(access_token), refresh_token: text(refresh_token),
       proxy_url: requiredProxy(proxy_url),
     }
-    const proxyCheck = await verifyProxy(credential.proxy_url)
+    const proxyCheck = await checkedProxy(credential.proxy_url)
     credential.proxy_exit_ip = text(proxyCheck?.ip)
     if (expires_at) credential.expires_at = expires_at
     const notes = []
@@ -309,12 +322,12 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
     const cacheKey = grantKey('refresh', refreshToken, proxyUrl)
     const pending = takePending(cacheKey)
     try {
-      const proxyCheck = await verifyProxy(proxyUrl, text(pending.credential?.proxy_exit_ip, auth.proxy_exit_ip))
+      const proxyCheck = await checkedProxy(proxyUrl, text(pending.credential?.proxy_exit_ip, auth.proxy_exit_ip))
       if (!pending.credential) {
-        const token = await requestJson(urls.tokenUrl, {
+        const token = await withStage('oauth_token', () => requestJson(urls.tokenUrl, {
           method: 'POST', proxy_url: proxyUrl,
           body: { grant_type: 'refresh_token', refresh_token: refreshToken, client_id: CLIENT_ID },
-        })
+        }))
         pending.credential = fromToken(token, proxyUrl, auth)
         pending.credential.proxy_exit_ip = text(proxyCheck?.ip)
       }

@@ -1,3 +1,5 @@
+import { readAuthorizationDiagnostics, type AuthorizationDiagnostics } from './authorization-diagnostics';
+
 export type User = {
   id: number;
   email: string;
@@ -64,15 +66,20 @@ export function retryStage(value: unknown): RetryStage | undefined {
 }
 
 export class APIError extends Error {
+  public readonly diagnostics?: AuthorizationDiagnostics;
+  public readonly requestId: string;
   constructor(
     message: string,
     public status: number,
     public code = '',
     public retryAfter = 0,
     public retryStage?: RetryStage,
+    diagnostics?: AuthorizationDiagnostics,
   ) {
     super(message);
     this.name = 'APIError';
+    this.diagnostics = readAuthorizationDiagnostics(diagnostics);
+    this.requestId = this.diagnostics?.request_id || '';
   }
 }
 
@@ -114,6 +121,7 @@ export async function request<T>(
       payload?.code || '',
       retryAfter,
       retryStage(payload?.retry_stage ?? payload?.data?.retry_stage),
+      readAuthorizationDiagnostics(payload?.data?.diagnostics, response.headers.get('X-Request-ID')),
     );
     if (response.status === 401 && csrfToken) {
       csrfToken = '';
@@ -125,6 +133,8 @@ export async function request<T>(
     throw new APIError(
       'An unexpected response was received. Please try again.',
       response.status,
+      '', 0, undefined,
+      readAuthorizationDiagnostics(undefined, response.headers.get('X-Request-ID')),
     );
   return payload.data as T;
 }

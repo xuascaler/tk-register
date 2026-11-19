@@ -2,6 +2,7 @@ import { Check, ChevronDown, CircleAlert, CircleCheck, Copy, Info, LoaderCircle,
 import { useEffect, useId, useRef, useState } from 'react';
 import { APIError, errorMessage, request } from '../api';
 import { Loading, PasswordField } from '../ui';
+import AuthorizationErrorDetails from '../AuthorizationErrorDetails';
 import Select from '../submissions/Select';
 import { MAX_AUTH_BYTES } from '../submissions/validation';
 import { authEditorValue, completionPatch, emailDiffers, importAccountOptions, parseImportDocument, proxyTestFailure, readProxyCheck, validateProxy, type CredentialFlow, type CredentialMethod, type ProxyCheck } from '../submissions/credential-flow';
@@ -10,7 +11,7 @@ import { generationResultUncertain, readGeneratedAuthJSON, type GeneratedAuthJSO
 import '../submissions/authorize-submit.css';
 
 type UpdateFlow = Omit<CredentialFlow, 'status'> & { status?: CredentialFlow['status'] | 'updated' | 'unknown' | 'updating' | 'rejected' | 'failed' | 'exported'; update_result?: AuthJSONUpdateResult; generated_at?: string; audit_id?: string };
-type ProxyTest = { status: 'idle' | 'testing' } | { status: 'success'; check: ProxyCheck } | { status: 'error'; message: string };
+type ProxyTest = { status: 'idle' | 'testing' } | { status: 'success'; check: ProxyCheck } | { status: 'error'; message: string; error?: APIError | null };
 type Stage = 'prepare' | 'link' | 'ready' | 'missing' | 'mismatch' | 'failed' | 'unknown';
 type Props = {
   path: string; accountEmail: string; disabled: boolean;
@@ -41,7 +42,8 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
   const [authText, setAuthText] = useState('');
   const [stage, setStage] = useState<Stage>('prepare');
   const [busy, setBusy] = useState('');
-  const [error, setError] = useState('');
+  const [error, setErrorText] = useState('');
+  const [errorDetails, setErrorDetails] = useState<APIError | null>(null);
   const [credentialError, setCredentialError] = useState('');
   const [announcement, setAnnouncement] = useState('');
   const [credentialsOpen, setCredentialsOpen] = useState(false);
@@ -93,7 +95,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
       else if (value.status === 'unknown' || value.status === 'updating') { setStage('unknown'); setError(generation ? 'The previous generation result is unconfirmed. Check the saved result before generating again.' : 'The previous update result is unconfirmed. Check the account before trying again.'); }
       else if (value.status === 'rejected' || value.status === 'failed' || value.status === 'exported') { setStage('failed'); setError(generation ? 'This authorization has already finished a generation attempt. Start a new authorization to try again.' : 'This authorization has already finished an update attempt. Start a new authorization to try again.'); }
       else setStage(value.auth ? 'ready' : 'link');
-    }).catch(cause => { if (!controller.signal.aborted && alive.current) { clearStorage(); setError(errorMessage(cause)); } })
+    }).catch(cause => { if (!controller.signal.aborted && alive.current) { clearStorage(); showError(cause); } })
       .finally(() => { if (!controller.signal.aborted && alive.current) { active.current = false; setBusy(''); } });
     return () => controller.abort();
   }, [base, storageKey, disabled]);
@@ -104,6 +106,8 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
     try { sessionStorage.setItem(storageKey, JSON.stringify({ flow_id: flow.flow_id, expires_at: flow.expires_at, method, setup_kind: setupKind })); } catch { /* Optional storage. */ }
   }, [flow, method, setupKind, storageKey]);
 
+  function setError(message: string) { setErrorText(message); setErrorDetails(null); }
+  function showError(cause: unknown, message = errorMessage(cause)) { setErrorText(message); setErrorDetails(cause instanceof APIError ? cause : null); }
   function clearStorage() { try { sessionStorage.removeItem(storageKey); } catch { /* Optional storage. */ } }
   function acceptFlow(value: UpdateFlow) {
     if (!value?.flow_id || !Number.isFinite(Date.parse(value.expires_at))) throw new Error('The authorization response could not be confirmed.');
@@ -149,7 +153,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
       setProxyTest({ status: 'success', check: readProxyCheck(result.proxy_check) }); setProxyPrompt('');
     } catch (cause) {
       if (!alive.current || controller.signal.aborted || revision !== proxyRevision.current) return;
-      setProxyTest({ status: 'error', ...proxyTestFailure(cause) });
+      setProxyTest({ status: 'error', ...proxyTestFailure(cause), error: cause instanceof APIError ? cause : null });
     } finally { if (proxyPending.current === controller) proxyPending.current = null; }
   }
   async function perform(action: (signal: AbortSignal) => Promise<void>) {
@@ -159,10 +163,10 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
     try { await action(controller.signal); }
     catch (cause) { if (alive.current && !controller.signal.aborted) {
       const failure = authJSONUpdateError(cause);
-      setError(errorMessage(cause));
+      showError(cause);
       if (cause instanceof APIError && cause.code === 'AUTH_JSON_EMAIL_MISMATCH') setStage('mismatch');
-      else if (generation && cause instanceof APIError && cause.code === 'CREDENTIAL_GENERATION_UNCONFIRMED') { setStage('unknown'); setError('The generated result could not be confirmed. Your authorization is retained. Check the saved result before trying again.'); }
-      else if (cause instanceof APIError && ['AUTH_JSON_UPDATE_UNCONFIRMED', 'CREDENTIAL_FLOW_UPDATE_FINISHED'].includes(cause.code)) { setStage('unknown'); setError(failure.message); }
+      else if (generation && cause instanceof APIError && cause.code === 'CREDENTIAL_GENERATION_UNCONFIRMED') { setStage('unknown'); showError(cause, 'The generated result could not be confirmed. Your authorization is retained. Check the saved result before trying again.'); }
+      else if (cause instanceof APIError && ['AUTH_JSON_UPDATE_UNCONFIRMED', 'CREDENTIAL_FLOW_UPDATE_FINISHED'].includes(cause.code)) { setStage('unknown'); showError(cause, failure.message); }
       else if (flowRef.current?.auth && stage !== 'missing') setStage('failed');
     } }
     finally { if (pending.current === controller) pending.current = null; active.current = false; if (alive.current) setBusy(''); }
@@ -203,7 +207,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
         catch { throw new APIError('The generated result could not be confirmed.', 200, 'CREDENTIAL_GENERATION_UNCONFIRMED'); }
         clearStorage(); onGenerated?.(confirmed);
       } catch (cause) {
-        if (alive.current && !signal.aborted && generationResultUncertain(cause)) { setStage('unknown'); setError('The generated result could not be confirmed. Your authorization is retained. Check the saved result before trying again.'); return; }
+        if (alive.current && !signal.aborted && generationResultUncertain(cause)) { setStage('unknown'); showError(cause, 'The generated result could not be confirmed. Your authorization is retained. Check the saved result before trying again.'); return; }
         throw cause;
       }
       return;
@@ -218,7 +222,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
       if (alive.current && !signal.aborted) {
         const failure = authJSONUpdateError(cause);
         if (failure.uncertain || cause instanceof APIError && cause.code === 'CREDENTIAL_FLOW_UPDATE_FINISHED') {
-          setStage('unknown'); setError('We could not confirm whether the update completed. Your input is retained. Check the account before trying again.'); return;
+          setStage('unknown'); showError(cause, 'We could not confirm whether the update completed. Your input is retained. Check the account before trying again.'); return;
         }
       }
       throw cause;
@@ -268,7 +272,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
     if (file.size > MAX_AUTH_BYTES) { setError('Choose a JSON file no larger than 2 MB.'); return; }
     setReading(true);
     try { const text = await file.text(); if (!alive.current || revision !== readingFile.current) return; parseImportDocument(text); setDocumentText(text); setAccountIndex('0'); setFileName(file.name); }
-    catch (cause) { if (alive.current && revision === readingFile.current) setError(errorMessage(cause)); }
+    catch (cause) { if (alive.current && revision === readingFile.current) showError(cause); }
     finally { if (alive.current && revision === readingFile.current) setReading(false); }
   }
   function restart() {
@@ -284,6 +288,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
       <section className='account-auth-proxy' ref={proxyField}>
         <div className='authorize-proxy-row'><PasswordField label='Account proxy' value={proxy} onChange={event => changeProxy(event.target.value)} disabled={locked || uncertain} autoComplete='off' spellCheck={false} aria-describedby={`${prefix}-proxy-status ${prefix}-proxy-prompt`} placeholder={flow && !proxy ? 'Proxy retained securely by the authorization flow' : 'http://user:password@host:port'} /><button ref={testButton} type='button' className='button secondary authorize-proxy-test' data-required={!!proxyPrompt && !testing} disabled={locked || testing || uncertain} onClick={() => void testProxy()}>{testing ? <LoaderCircle className='spin' aria-hidden='true' /> : <PlugZap aria-hidden='true' />}<span>{testing ? 'Testing…' : 'Test connection'}</span></button></div>
         <div id={`${prefix}-proxy-status`} className='authorize-proxy-status' data-kind={proxyTest.status === 'success' ? 'success' : proxyTest.status === 'error' ? 'error' : 'idle'} role='status' aria-live='polite'>{testing ? <span>Checking proxy connection…</span> : proxyTest.status === 'success' ? <><CircleCheck aria-hidden='true' /><span>Connected · Exit IP {proxyTest.check.ip}</span></> : proxyTest.status === 'error' ? <><CircleAlert aria-hidden='true' /><span>{proxyTest.message}</span></> : <span>Test this proxy connection before continuing.</span>}</div>
+        {proxyTest.status === 'error' && <AuthorizationErrorDetails error={proxyTest.error || null} />}
         {proxyPrompt && <div id={`${prefix}-proxy-prompt`} className='notice account-auth-proxy-prompt' role='alert'><strong>{testing ? 'Connection test in progress' : 'Test connection required'}</strong><p>{proxyPrompt}</p></div>}
       </section>
       {!flow?.auth && <section className='account-auth-authorization'>
@@ -294,7 +299,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
       </section>}
       {busy && <Loading label={busy} />}
       {stage === 'mismatch' && <div className='notice error account-auth-mismatch' role='alert'><strong>Account email does not match</strong><p>Target: {accountEmail}</p>{authorizedEmail && <p>Authorized: {authorizedEmail}</p>}<p>{generation ? 'Reauthorize with the target account.' : 'No update was sent. Reauthorize with the target account.'}</p></div>}
-      {error && stage !== 'mismatch' && <div className={`notice ${uncertain ? 'account-auth-uncertain' : 'error'}`} role='alert'>{error}</div>}
+      {error && stage !== 'mismatch' && <><div className={`notice ${uncertain ? 'account-auth-uncertain' : 'error'}`} role='alert'>{error}</div><AuthorizationErrorDetails error={errorDetails} /></>}
       {expired && <p className='field-error' role='alert'>This authorization has expired. Generate a new authorization.</p>}
       {flow?.auth && !uncertain && stage !== 'mismatch' && <details className='authorize-credentials' open={credentialsOpen} onToggle={event => setCredentialsOpen(event.currentTarget.open)}><summary>Complete missing credential fields<ChevronDown aria-hidden='true' /></summary><div className='field'><label htmlFor={`${prefix}-auth-json`}>Standard Auth JSON</label><textarea id={`${prefix}-auth-json`} value={authText} onChange={event => { setAuthText(event.target.value); setCredentialError(''); }} disabled={locked} autoComplete='off' spellCheck={false} rows={8} /><p className='field-help'>Complete missing fields only. The authorized email and proxy cannot be replaced.</p>{credentialError && <p className='field-error' role='alert'>{credentialError}</p>}</div></details>}
       {flow && !busy && <div className='authorize-small-actions'>{uncertain ? <button type='button' className='text-link' onClick={() => void checkResult()}>{generation ? 'Check saved generation result' : 'Check saved update result'}</button> : null}<button type='button' className='text-link' disabled={testing} onClick={restart}><RefreshCw aria-hidden='true' />Start a new authorization</button></div>}

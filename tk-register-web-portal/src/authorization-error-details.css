@@ -1,0 +1,18 @@
+.authorization-error-details { min-width: 0; max-width: 100%; margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.authorization-error-details > summary { cursor: pointer; width: fit-content; max-width: 100%; color: var(--navy); padding: 5px 0; }
+.authorization-error-details dl { display: grid; gap: 10px; margin: 7px 0 0; padding: 13px 14px; border: 1px solid var(--border); border-radius: 7px; background: #f8fafd; }
+.authorization-error-details dl > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px 14px; min-width: 0; }
+.authorization-error-details dt { color: var(--muted); }
+.authorization-error-details dd { margin: 0; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+.authorization-error-details code { font: 11px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
+.authorization-error-request dd { display: flex; gap: 6px 12px; align-items: flex-start; flex-wrap: wrap; }
+.authorization-error-request dd > code { flex: 1; min-width: 0; }
+.authorization-error-request button { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; font-size: 12px; }
+.authorization-error-request button svg { width: 13px; height: 13px; }
+.authorization-error-announcement { margin-top: 7px; font-size: 11px; }
+.authorization-error-announcement:empty { display: none; }
+@media (max-width: 480px) {
+  .authorization-error-details dl > div { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .authorization-error-details > summary { min-height: 36px; }
+  .authorization-error-request button { min-height: 36px; }
+}

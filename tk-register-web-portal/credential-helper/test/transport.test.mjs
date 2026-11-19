@@ -39,8 +39,8 @@ async function mockProxy(t, scheme, responseStatus = 200, options = {}) {
             socket.write(`HTTP/1.1 ${options.connectStatus ?? 200} Proxy reply\r\n\r\n`); stage = 'request';
           } else {
             observed.request = headers;
-            const body = JSON.stringify({ ip: '8.8.4.4', secret_upstream_detail: 'never shown on error' });
-            socket.end(`HTTP/1.1 ${responseStatus} Mock\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+            const body = options.responseBody ?? JSON.stringify({ ip: '8.8.4.4', secret_upstream_detail: 'never shown on error' });
+            socket.end(`HTTP/1.1 ${responseStatus} Mock\r\nContent-Type: ${options.contentType || 'application/json'}\r\nContent-Length: ${Buffer.byteLength(body) + (options.truncateResponse ? 10 : 0)}\r\nConnection: close\r\n\r\n${body}`);
             return;
           }
         }
@@ -98,6 +98,47 @@ test('upstream errors never include body and redirects are not followed', async 
     });
     assert.equal(dials, 1);
   }
+});
+
+test('transport retains only real status, response kind and fixed upstream error codes', async t => {
+  for (const [status, body, contentType, kind, upstreamCode] of [
+    [401, JSON.stringify({ error: { type: 'authentication_error', message: 'private-response-secret' } }), 'application/json', 'json', 'authentication_error'],
+    [400, JSON.stringify({ error: 'invalid_grant', error_description: 'private-response-secret' }), 'application/json', 'json', 'invalid_grant'],
+    [403, JSON.stringify({ error: { type: 'private-response-secret' } }), 'application/json', 'json', undefined],
+    [403, '<!doctype html><html>private-response-secret</html>', 'text/html', 'html', undefined],
+    [200, 'private-response-secret', 'text/plain', 'other', undefined],
+  ]) {
+    const mock = await mockProxy(t, 'http', status, { responseBody: body, contentType });
+    const transport = createTransport({
+      lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+      dial: async (_options, track) => { const socket = track(net.connect({ host: '127.0.0.1', port: mock.port })); await once(socket, 'connect'); return socket; },
+      secure: async socket => socket,
+    });
+    await assert.rejects(transport('https://api.ipify.org/?format=json', { proxy_url: 'http://proxy.example' }), error => {
+      assert.equal(error.upstreamStatus, status);
+      assert.equal(error.responseKind, kind);
+      assert.equal(error.upstreamCode, upstreamCode);
+      assert.equal(error.code, status === 200 ? 'upstream_invalid_response' : 'upstream_rejected');
+      assert(!JSON.stringify(error).includes('private-response-secret'));
+      assert(!error.message.includes('private-response-secret'));
+      return true;
+    });
+  }
+});
+
+test('an interrupted response retains received status without exposing partial body contents', async t => {
+  const mock = await mockProxy(t, 'http', 503, { responseBody: '<html>private-partial-secret', contentType: 'text/html', truncateResponse: true });
+  const transport = createTransport({
+    lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+    dial: async (_options, track) => { const socket = track(net.connect({ host: '127.0.0.1', port: mock.port })); await once(socket, 'connect'); return socket; },
+    secure: async socket => socket,
+  });
+  await assert.rejects(transport('https://api.ipify.org/?format=json', { proxy_url: 'http://proxy.example' }), error => {
+    assert.equal(error.code, 'upstream_network_error');
+    assert.equal(error.upstreamStatus, 503); assert.equal(error.responseKind, 'html');
+    assert(!JSON.stringify(error).includes('private-partial-secret'));
+    return true;
+  });
 });
 
 test('proxy negotiation timeout closes the only connection and never attempts direct access', async t => {

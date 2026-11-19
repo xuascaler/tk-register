@@ -191,7 +191,7 @@ func (a *app) resolveAuthJSONFlow(ctx context.Context, user *core.User, target c
 		release()
 		return nil, err
 	}
-	result, err := a.callCredentialHelper(ctx, user.ID, "/verify", map[string]any{"flow_id": flow.FlowID, "proxy_url": flow.ProxyURL})
+	result, err := a.callCredentialHelper(withAuthJSONFlowMethod(ctx, flow.Method), user.ID, "/verify", map[string]any{"flow_id": flow.FlowID, "proxy_url": flow.ProxyURL})
 	if err != nil {
 		release()
 		return nil, err

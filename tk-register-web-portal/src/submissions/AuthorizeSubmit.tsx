@@ -1,14 +1,15 @@
 import { ArrowRight, Check, ChevronDown, CircleAlert, CircleCheck, Copy, Download, ExternalLink, Info, LoaderCircle, LockKeyhole, PlugZap, RefreshCw, Upload } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { errorMessage, request, type User } from '../api';
+import { APIError, errorMessage, request, type User } from '../api';
 import { ErrorNotice, Loading, PasswordField } from '../ui';
+import AuthorizationErrorDetails from '../AuthorizationErrorDetails';
 import Select from './Select';
 import type { SubmissionDetail, Vendor } from './types';
 import { MAX_AUTH_BYTES, parseAuthJSON, paymentMethods, plans, registrationLocations, submissionParameters, validateDraft, type AccountDraft } from './validation';
 import { authEditorValue, automaticDraft, completionPatch, emailDiffers, flowMetadata, importAccountOptions, parseImportDocument, proxyTestFailure, readFlowMetadata, readProxyCheck, submissionPassword, validateProxy, type CredentialFlow, type CredentialGoal, type CredentialMethod, type ProxyCheck } from './credential-flow';
 
 type Stage = 'prepare' | 'link' | 'ready' | 'missing' | 'mismatch' | 'failed' | 'success' | 'exported';
-type ProxyTest = { status: 'idle' | 'testing' } | { status: 'success'; check: ProxyCheck } | { status: 'error'; message: string; code?: string };
+type ProxyTest = { status: 'idle' | 'testing' } | { status: 'success'; check: ProxyCheck } | { status: 'error'; message: string; code?: string; error?: APIError | null };
 type Props = { user: User; onDirty: (dirty: boolean) => void; onCreated: (id: string) => void; onHistory: () => void; onConfig: () => void };
 const methodLabels: Record<CredentialMethod, string> = { oauth: 'OAuth', setup: 'Setup Token', json: 'Import JSON', cookie: 'Cookie', token: 'Existing token' };
 const paymentLabels: Record<string, string> = { physical_credit_card: 'Physical credit card', virtual_credit_card: 'Virtual credit card', paypal: 'PayPal', apple_pay: 'Apple Pay', google_pay: 'Google Pay', third_party_payment: 'Third-party payment' };
@@ -41,7 +42,8 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
   const [authText, setAuthText] = useState('');
   const [stage, setStage] = useState<Stage>('prepare');
   const [busy, setBusy] = useState('');
-  const [error, setError] = useState('');
+  const [error, setErrorText] = useState('');
+  const [errorDetails, setErrorDetails] = useState<APIError | null>(null);
   const [credentialError, setCredentialError] = useState('');
   const [announcement, setAnnouncement] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -96,7 +98,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
       acceptFlow(restored);
       setStage(restored.auth ? 'ready' : 'link');
       setAnnouncement('Authorization restored. Credentials stay in memory. Continue when you are ready.');
-    }).catch(cause => { if (!controller.signal.aborted) { setError(errorMessage(cause)); try { sessionStorage.removeItem(storageKey); } catch { /* Storage is optional. */ } } })
+    }).catch(cause => { if (!controller.signal.aborted) { showError(cause); try { sessionStorage.removeItem(storageKey); } catch { /* Storage is optional. */ } } })
       .finally(() => { if (!controller.signal.aborted) { active.current = false; setBusy(''); } });
     return () => controller.abort();
   }, [storageKey]);
@@ -107,6 +109,8 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
   const dirty = !finished && Boolean(proxy || declaredEmail || code || document || sessionKey || accessToken || refreshToken || flow || JSON.stringify(draft) !== JSON.stringify(initialDraft.current));
   useEffect(() => { onDirty(dirty || Boolean(busy) || proxyTesting); return () => onDirty(false); }, [dirty, busy, proxyTesting, onDirty]);
 
+  function setError(message: string) { setErrorText(message); setErrorDetails(null); }
+  function showError(cause: unknown, message = errorMessage(cause)) { setErrorText(message); setErrorDetails(cause instanceof APIError ? cause : null); }
   function invalidateProxyTest() {
     proxyTestRevision.current++;
     proxyTestRequest.current?.controller.abort();
@@ -130,7 +134,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
       setProxyTest({ status: 'success', check: readProxyCheck(value?.proxy_check) });
     } catch (cause) {
       if (!alive.current || pending.controller.signal.aborted || pending.revision !== proxyTestRevision.current) return;
-      setProxyTest({ status: 'error', ...proxyTestFailure(cause) });
+      setProxyTest({ status: 'error', ...proxyTestFailure(cause), error: cause instanceof APIError ? cause : null });
     } finally { if (proxyTestRequest.current === pending) proxyTestRequest.current = null; }
   }
 
@@ -163,7 +167,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
     if (active.current || proxyTestRequest.current || proxyNeedsAuthorization || finished) return;
     active.current = true; setError(''); setAnnouncement('');
     try { await action(); }
-    catch (cause) { if (alive.current) { setError(errorMessage(cause)); if (flowRef.current?.auth) setStage('failed'); } }
+    catch (cause) { if (alive.current) { showError(cause); if (flowRef.current?.auth) setStage('failed'); } }
     finally { active.current = false; if (alive.current) setBusy(''); }
   }
   async function generateLink() {
@@ -257,7 +261,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
     if (!file) return;
     if (file.size > MAX_AUTH_BYTES) { setError('Choose a JSON file no larger than 2 MB.'); return; }
     try { const text = await file.text(); parseImportDocument(text); if (alive.current) { setDocument(text); setAccountIndex('0'); setFileName(file.name); setError(''); } }
-    catch (cause) { setError(errorMessage(cause)); }
+    catch (cause) { showError(cause); }
   }
   async function exportJSON(download: boolean) {
     if (!flow || busy || proxyTestRequest.current || proxyNeedsAuthorization) return;
@@ -271,7 +275,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
         const link = window.document.createElement('a'); link.href = url; link.download = 'auth.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
       } else await navigator.clipboard.writeText(text);
       setAnnouncement(download ? 'Auth JSON downloaded.' : 'Auth JSON copied.');
-    } catch (cause) { setError(errorMessage(cause)); }
+    } catch (cause) { showError(cause); }
   }
   const attrs = (key: keyof AccountDraft) => ({ id: `auto-${key}`, name: key, value: draft[key], disabled: locked, 'aria-invalid': Boolean(settingsErrors[key]), onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => update(key, event.target.value) });
   const fieldError = (key: keyof AccountDraft) => settingsErrors[key] ? <p className='field-error'>{settingsErrors[key]}</p> : null;
@@ -292,6 +296,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
             <div id='auto-proxy-status' className='authorize-proxy-status' data-kind={proxyTest.status === 'success' || (proxyTest.status === 'idle' && flow?.proxy_check?.ok) ? 'success' : proxyTest.status === 'error' ? 'error' : 'idle'} role='status' aria-live='polite' aria-atomic='true'>
               {proxyTest.status === 'testing' ? <span>Checking proxy connection…</span> : proxyTest.status === 'success' ? <><CircleCheck aria-hidden='true' /><span>Connected · Exit IP {proxyTest.check.ip} · {Math.round(proxyTest.check.elapsed_ms)} ms</span></> : proxyTest.status === 'error' ? <><CircleAlert aria-hidden='true' /><span>{proxyTest.message}</span>{proxyNeedsAuthorization && <button type='button' className='text-link' onClick={() => hasCredentials ? startNewAuthorization() : resetAuthorization()}>Start a new authorization</button>}</> : flow?.proxy_check?.ok ? <><Check aria-hidden='true' /><span>Exit IP bound{exitIP ? ` · ${exitIP}` : ''}</span></> : <span>Check the proxy before authorization.</span>}
             </div>
+            {proxyTest.status === 'error' && <AuthorizationErrorDetails error={proxyTest.error || null} />}
           </div>
           <div className='field'><label htmlFor='auto-declared-email'>Account email <span className='muted small'>Optional</span></label><input id='auto-declared-email' type='email' value={declaredEmail} onChange={event => setDeclaredEmail(event.target.value)} disabled={Boolean(busy) || finished || hasCredentials} placeholder='Read from authorization if left blank' autoComplete='off' /><p className='field-help'>We’ll confirm if the authorized email differs.</p></div>
         </div>
@@ -330,6 +335,7 @@ export default function AuthorizeSubmit({ user, onDirty, onCreated, onHistory, o
       </section>}
     </div>
     <ErrorNotice>{error || vendorError}</ErrorNotice>
+    {error && <AuthorizationErrorDetails error={errorDetails} />}
     {vendorError && <button type='button' className='text-link' onClick={() => setVendorAttempt(value => value + 1)}>Reload platforms</button>}
     {vendors && !vendorReady && goal === 'submit' && <div className='notice setup-notice'><LockKeyhole aria-hidden='true' /><div><strong>This platform is not ready for submissions.</strong><p>{user.role === 'admin' ? 'Configure the platform credential and enable it in Config.' : 'Your administrator needs to finish setting up this platform.'}</p>{user.role === 'admin' && <button type='button' className='text-link' onClick={onConfig}>Open vendor configuration<ArrowRight aria-hidden='true' /></button>}</div></div>}
     {!vendors && !vendorError && <Loading label='Loading platforms…' />}

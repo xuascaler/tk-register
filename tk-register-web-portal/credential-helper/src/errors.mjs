@@ -43,9 +43,43 @@ const messages = {
   internal_error: 'The credential operation could not be completed.',
 };
 
+const stages = new Set(['request_validation', 'proxy_check', 'cookie_organizations',
+  'cookie_authorize', 'oauth_token', 'profile', 'auth_json_conversion', 'helper_transport']);
+const upstreamCodes = new Set(['invalid_grant', 'invalid_scope', 'invalid_request',
+  'authentication_error', 'permission_error', 'rate_limit_error',
+  'overloaded_error', 'invalid_client', 'unauthorized_client', 'unsupported_grant_type']);
+const responseKinds = new Set(['json', 'html', 'other']);
+
+export function safeUpstreamCode(value) {
+  return typeof value === 'string' && upstreamCodes.has(value) ? value : undefined;
+}
+
+// Copy a fixed schema, never arbitrary properties or native exception messages.
+export function safeErrorDetails(error) {
+  const details = {};
+  if (stages.has(error?.stage)) details.stage = error.stage;
+  const status = error?.upstreamStatus ?? error?.upstream_status;
+  if (Number.isInteger(status) && status >= 100 && status <= 599) details.upstream_status = status;
+  const code = safeUpstreamCode(error?.upstreamCode ?? error?.upstream_code);
+  if (code) details.upstream_code = code;
+  const kind = error?.responseKind ?? error?.response_kind;
+  if (responseKinds.has(kind)) details.response_kind = kind;
+  return details;
+}
+
+export function atStage(error, stage) {
+  const safe = publicError(error);
+  const details = safeErrorDetails(error);
+  return fail(safe.body.error.code, safe.body.error.message, safe.status, {
+    ...details, stage: details.stage || stage,
+    // The OAuth profile fallback already uses this internal field.
+    ...(safe.body.error.upstream_status ? { upstreamStatus: safe.body.error.upstream_status } : {}),
+  });
+}
+
 export function publicError(error) {
   const code = Object.hasOwn(messages, error?.code) ? error.code : 'internal_error';
   const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599
     ? error.status : 500;
-  return { status, body: { error: { code, message: messages[code] } } };
+  return { status, body: { error: { code, message: messages[code], ...safeErrorDetails(error) } } };
 }

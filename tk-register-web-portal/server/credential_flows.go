@@ -19,6 +19,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"goapi-tk-register/server/common"
 	"goapi-tk-register/server/internal/core"
+	"goapi-tk-register/server/internal/diagnostics"
 )
 
 const credentialFlowLifetime = 30 * time.Minute
@@ -164,8 +165,24 @@ func credentialHelperHealthy(ctx context.Context) bool {
 	return json.NewDecoder(io.LimitReader(resp.Body, 1024)).Decode(&result) == nil && result.OK
 }
 
-func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint string, payload map[string]any) (credentialHelperResult, error) {
-	var result credentialHelperResult
+func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint string, payload map[string]any) (result credentialHelperResult, returnedErr error) {
+	started := time.Now()
+	entry, method := credentialCallEntry(ctx), credentialCallMethod(ctx, endpoint, payload)
+	diagnostic := credentialAuthorizationDiagnostics{RequestID: safeDiagnosticRequestID(diagnostics.TraceFrom(ctx).TraceID), Stage: "helper_transport"}
+	helperStatus, helperCode := 0, "unknown"
+	defer func() {
+		if returnedErr == nil {
+			return
+		}
+		diagnostic = diagnostic.safe()
+		problem := credentialErrorProblem(returnedErr)
+		returnedErr = &credentialAuthorizationError{problem: problem, diagnostics: diagnostic}
+		diagnostics.LogCredentialAuth(ctx, diagnostics.CredentialAuthEvent{
+			Entry: entry, Operation: credentialCallOperation(endpoint), Method: method, Code: problem.Code, HelperCode: helperCode,
+			Stage: diagnostic.Stage, HelperStatus: helperStatus, UpstreamStatus: diagnostic.UpstreamStatus,
+			UpstreamCode: diagnostic.UpstreamCode, ResponseKind: diagnostic.ResponseKind, DurationMS: time.Since(started).Milliseconds(),
+		})
+	}()
 	proxyTest := endpoint == "/proxy-test" || ctx.Value(credentialProxyTestContextKey{}) == true
 	address, err := credentialHelperAddress()
 	token := os.Getenv("TK_REGISTER_CREDENTIAL_HELPER_TOKEN")
@@ -178,16 +195,23 @@ func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint s
 	payload["owner_id"] = strconv.FormatUint(owner, 10)
 	raw, err := json.Marshal(payload)
 	if err != nil || len(raw) > credentialBodyLimit {
+		diagnostic.Stage = "request_validation"
 		return result, credentialInvalid()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, address+endpoint, bytes.NewReader(raw))
 	if err != nil {
+		diagnostic.Stage = "request_validation"
 		return result, credentialInvalid()
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	if diagnostic.RequestID != "" {
+		req.Header.Set("X-Request-ID", diagnostic.RequestID)
+	}
+	req.Header.Set("X-TK-Credential-Entry", entry)
+	req.Header.Set("X-TK-Credential-Method", method)
 	client := &http.Client{Transport: credentialHelperTransport, Timeout: 55 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(req)
 	if err != nil {
@@ -201,6 +225,7 @@ func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint s
 		return result, credentialProblem(503, "CREDENTIAL_HELPER_UNAVAILABLE", "Authorization could not complete. Please try again.")
 	}
 	defer response.Body.Close()
+	helperStatus = response.StatusCode
 	data, err := io.ReadAll(io.LimitReader(response.Body, credentialResponseLimit+1))
 	if err != nil || len(data) > credentialResponseLimit {
 		if proxyTest {
@@ -212,16 +237,17 @@ func (a *app) callCredentialHelper(ctx context.Context, owner uint64, endpoint s
 		return result, credentialProblem(502, "CREDENTIAL_HELPER_INVALID_RESPONSE", "The authorization service returned an invalid response.")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		var failure struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
+		var helperDiagnostic credentialAuthorizationDiagnostics
+		helperCode, helperDiagnostic = credentialHelperDiagnostic(data)
+		helperDiagnostic.RequestID = diagnostic.RequestID
+		if helperDiagnostic.Stage == "" {
+			helperDiagnostic.Stage = "helper_transport"
 		}
-		_ = json.Unmarshal(data, &failure)
+		diagnostic = helperDiagnostic
 		if proxyTest {
-			return result, credentialProxyFailure(failure.Error.Code)
+			return result, credentialProxyFailure(helperCode)
 		}
-		return result, credentialHelperFailure(failure.Error.Code)
+		return result, credentialHelperFailure(helperCode)
 	}
 	invalidResponse := json.Unmarshal(data, &result) != nil || result.OwnerID != strconv.FormatUint(owner, 10) ||
 		!result.ProxyCheck.OK || net.ParseIP(result.ProxyCheck.IP) == nil || result.ProxyCheck.CheckedAt.IsZero() ||
@@ -257,7 +283,7 @@ func credentialProxyFailure(code string) error {
 		return credentialProblem(400, "INVALID_PROXY", "Enter a supported, reachable public proxy URL.")
 	case "proxy_ip_mismatch", "proxy_mismatch":
 		return credentialProblem(409, "PROXY_CHANGED", "The proxy exit IP has changed. Start a new authorization with the intended proxy.")
-	case "flow_not_found":
+	case "flow_not_found", "session_expired":
 		return credentialMissing()
 	case "flow_busy", "session_busy", "credential_busy":
 		return credentialProblem(409, "CREDENTIAL_FLOW_BUSY", "A request for this draft is already running. Please wait.")
@@ -272,7 +298,7 @@ func credentialProxyFailure(code string) error {
 
 func credentialHelperFailure(code string) error {
 	switch code {
-	case "flow_not_found":
+	case "flow_not_found", "session_expired":
 		return credentialMissing()
 	case "flow_busy", "session_busy", "credential_busy":
 		return credentialProblem(409, "CREDENTIAL_FLOW_BUSY", "This authorization is still being processed. Please wait.")
@@ -282,10 +308,22 @@ func credentialHelperFailure(code string) error {
 		return credentialProblem(400, "INVALID_PROXY", "Enter a supported, reachable proxy URL.")
 	case "proxy_ip_mismatch", "proxy_mismatch":
 		return credentialProblem(409, "PROXY_CHANGED", "The proxy no longer matches this authorization. Start again with the intended proxy.")
+	case "proxy_authentication_failed":
+		return credentialProblem(502, "PROXY_AUTHENTICATION_FAILED", "The proxy rejected its username or password. Check the proxy credentials.")
 	case "invalid_code", "code_mismatch", "state_mismatch", "code_required", "authorization_declined":
 		return credentialProblem(400, "INVALID_AUTHORIZATION_CODE", "The authorization code is invalid or does not match this flow. Check the code or start again.")
-	case "invalid_request", "invalid_owner", "invalid_mode", "invalid_setup_kind", "invalid_document", "access_token_required", "session_key_required", "invalid_session_key":
+	case "invalid_request", "invalid_owner", "invalid_mode", "invalid_setup_kind", "invalid_document", "access_token_required", "session_key_required":
 		return credentialInvalid()
+	case "invalid_session_key", "invalid_access_token", "invalid_refresh_token", "invalid_token", "invalid_credentials":
+		return credentialProblem(400, "INVALID_CREDENTIAL", "Check the credential format or authorize this account again.")
+	case "organization_missing":
+		return credentialProblem(502, "AUTHORIZATION_ORGANIZATION_MISSING", "The authorization provider did not return an available organization for this account.")
+	case "authorization_response_invalid", "invalid_token_response", "upstream_invalid_response":
+		return credentialProblem(502, "AUTHORIZATION_INVALID_RESPONSE", "The authorization provider returned an incomplete or invalid response. Please try again.")
+	case "upstream_rejected":
+		return credentialProblem(502, "AUTHORIZATION_REJECTED", "The authorization provider rejected the request. Please try again or authorize this account again.")
+	case "unauthorized":
+		return credentialProblem(503, "CREDENTIAL_HELPER_UNAVAILABLE", "Authorization is temporarily unavailable. Please try again later.")
 	case "upstream_timeout", "upstream_network_error", "proxy_check_failed":
 		return credentialProblem(502, "AUTHORIZATION_CONNECTION_FAILED", "The authorization provider could not be reached. Please try again.")
 	default:
@@ -580,6 +618,7 @@ func (a *app) testCredentialProxy(w http.ResponseWriter, r *http.Request, user *
 		return
 	}
 	defer release()
+	ctx = withAuthJSONFlowMethod(ctx, flow.Method)
 	result, err := a.callCredentialHelper(ctx, user.ID, "/verify", map[string]any{"flow_id": flow.FlowID, "proxy_url": flow.ProxyURL})
 	if err != nil {
 		vendorFailure(w, err)
@@ -817,6 +856,7 @@ func (a *app) updateCredentialFlow(w http.ResponseWriter, r *http.Request, user 
 		return
 	}
 	defer release()
+	r = r.WithContext(withAuthJSONFlowMethod(r.Context(), flow.Method))
 	if action == "exchange" {
 		if flow.DeactivateTarget != nil && flow.Status != "awaiting_code" && flow.Status != "ready" {
 			vendorFailure(w, credentialProblem(409, "CREDENTIAL_FLOW_EXPORT_FINISHED", "Auth JSON has already been generated. Download the saved result instead."))

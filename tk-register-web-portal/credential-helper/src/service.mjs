@@ -4,6 +4,7 @@ import { convertDocument } from './convert.mjs';
 import { requestJson as defaultRequestJson } from './transport.mjs';
 import { isPublicIP, parseProxy } from './proxy.mjs';
 import { fail } from './errors.mjs';
+import { withStage } from './diagnostics.mjs';
 
 export const FLOW_TTL_MS = 30 * 60 * 1000;
 const OPERATION_BUDGET_MS = 50000; // Leave headroom below Go's 55-second helper deadline.
@@ -57,13 +58,15 @@ export function createCredentialService({ requestJson = defaultRequestJson, now 
   timer.unref();
 
   async function checkProxy(proxy, expectedIP = '', deadline = Infinity) {
-    const started = now();
-    const remaining = deadline - now();
-    if (remaining <= 0) throw fail('upstream_timeout', 'Operation timed out.', 504);
-    const reply = await requestJson('https://api.ipify.org/?format=json', { proxy_url: proxy, timeout: Math.min(15000, remaining) });
-    if (!isPublicIP(reply?.ip)) throw fail('proxy_check_failed', 'Invalid exit IP.', 502);
-    if (expectedIP && expectedIP !== reply.ip) throw fail('proxy_ip_mismatch', 'Proxy exit IP changed.', 409);
-    return { ok: true, ip: reply.ip, checked_at: new Date(now()).toISOString(), elapsed_ms: Math.max(0, now() - started) };
+    return withStage('proxy_check', async () => {
+      const started = now();
+      const remaining = deadline - now();
+      if (remaining <= 0) throw fail('upstream_timeout', 'Operation timed out.', 504);
+      const reply = await requestJson('https://api.ipify.org/?format=json', { proxy_url: proxy, timeout: Math.min(15000, remaining) });
+      if (!isPublicIP(reply?.ip)) throw fail('proxy_check_failed', 'Invalid exit IP.', 502);
+      if (expectedIP && expectedIP !== reply.ip) throw fail('proxy_ip_mismatch', 'Proxy exit IP changed.', 409);
+      return { ok: true, ip: reply.ip, checked_at: new Date(now()).toISOString(), elapsed_ms: Math.max(0, now() - started) };
+    });
   }
 
   function newFlow(owner, proxyURL) {
@@ -112,7 +115,7 @@ export function createCredentialService({ requestJson = defaultRequestJson, now 
   function finish(flow, document, notes = [], index = undefined) {
     let converted;
     try { converted = convertDocument(document, { proxy_url: flow.proxy, now: now(), account_index: index, deviceStore: flow.devices }); }
-    catch { throw fail('invalid_document', 'Invalid credential document.'); }
+    catch { throw fail('invalid_document', 'Invalid credential document.', 400, { stage: 'auth_json_conversion' }); }
     // "verified" is the original export-format marker, not a claim that credentials were verified.
     const warnings = [...notes, ...converted.notes,
       'verification_status is an export-format marker; successful supplier validation is still required.'];
@@ -172,8 +175,8 @@ export function createCredentialService({ requestJson = defaultRequestJson, now 
         // Parse before making any network request. Never use a proxy embedded in the document.
         let document = body.document;
         try { if (typeof document === 'string') document = JSON.parse(document); }
-        catch { throw fail('invalid_document', 'Invalid JSON.'); }
-        if (!document || typeof document !== 'object') throw fail('invalid_document', 'Object required.');
+        catch { throw fail('invalid_document', 'Invalid JSON.', 400, { stage: 'auth_json_conversion' }); }
+        if (!document || typeof document !== 'object') throw fail('invalid_document', 'Object required.', 400, { stage: 'auth_json_conversion' });
         if (Array.isArray(document)) document = { accounts: document };
         flow.check = await checkProxy(flow.proxy, '', flow.deadline);
         return finish(flow, document, [], body.account_index);

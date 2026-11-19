@@ -11,6 +11,16 @@ import (
 )
 
 func vendorFailure(w http.ResponseWriter, err error) {
+	var authorization *credentialAuthorizationError
+	if errors.As(err, &authorization) {
+		diagnostic := authorization.diagnostics.safe()
+		// The API response's server-generated ID is authoritative, even if an
+		// error was created under another request's context.
+		diagnostic.RequestID = safeDiagnosticRequestID(w.Header().Get("X-Request-ID"))
+		respond(w, authorization.problem.Status, envelope{Code: authorization.problem.Code, Message: authorization.problem.Message,
+			Data: map[string]any{"diagnostics": diagnostic}})
+		return
+	}
 	var problem *core.VendorError
 	if errors.As(err, &problem) {
 		fail(w, problem.Status, problem.Code, problem.Message)
