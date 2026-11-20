@@ -1,0 +1,22 @@
+# Signed-in password changes
+
+Every active, email-verified TK user, including administrators, can change their own TK sign-in password. The account email comes from the current browser session. This does not edit vendor account passwords or personal API tokens. Registration, password-login and email-code-login switches do not disable this operation.
+
+Both endpoints require the existing browser cookie, same-origin request and `X-CSRF-Token`. Unknown JSON properties (including email or user IDs) are rejected.
+
+- `POST /tk-register/api/account/password/code` takes `{}`. Returns `challenge_id`, `expires_in`, `retry_after`, `code_length: 6`.
+- `POST /tk-register/api/account/password` takes `challenge_id`, `code`, `password`, `confirmation`, `request_id`. Generate a random UUID for a submitted operation and retain it with the same body for network or 503 retries. Returns `password_changed: true`, `sign_in_required: true` and clears the browser cookie.
+
+The dedicated `password_change_code_ttl_seconds` setting defaults to 600 seconds. Sending uses the shared 60-second email cooldown, email/IP hourly delivery limits and maximum five incorrect attempts (all configurable through existing settings). Code expiry is capped by the current session's absolute expiry. SMTP uses the stored TLS mail configuration and a dedicated password-change template.
+
+The password must contain at least eight Unicode characters and at most 72 UTF-8 bytes, match confirmation, and differ from the current password. Invalid password fields do not consume proof. Codes are case-insensitive, use the existing six-character alphabet, and cannot be exchanged for registration, login or member-connection codes.
+
+Challenges bind the user, verified email, role, AuthVersion and exact browser session. A successful resend revokes previous challenges from the same session/version; SMTP failure leaves the old challenge usable. Redis stores the keyed code hash with TTL and atomic attempt counting. Successful verification deliberately leaves proof intact. A SQL transaction conditionally updates the password hash and AuthVersion, marks the unique challenge consumed, and updates delivery audit metadata. A database failure rolls all of this back and leaves the same code and request retryable until expiry. The completion receipt stores only hashed request identity and a keyed operation fingerprint, never passwords or verification codes. Concurrent uses cannot change the password twice.
+
+Every existing browser session and pending administrator sign-in challenge becomes invalid through AuthVersion checking even if Redis cleanup fails. The next request requires sign-in. If the successful response is lost, a retry may return 401 because the original browser session has already been revoked; direct the user to sign in again rather than bypass session validation to expose a completion receipt.
+
+Errors retain the existing safe envelope and locally generated `X-Request-ID`. Password-specific codes are `INVALID_PASSWORD`, `PASSWORD_MISMATCH`, `PASSWORD_UNCHANGED`, `INVALID_REQUEST`, `INVALID_CODE` (400), and `PASSWORD_CHANGE_CONFLICT` (409). Existing 401/403/429/503 behavior applies. Operational `TK_PASSWORD_CHANGE` log entries contain generated trace ID, numeric actor ID, fixed stage and outcome only. No request body, email, code, password or arbitrary database/SMTP error is logged.
+
+Regression coverage is in `password_change_test.go`, including authentication/CSRF/own-user binding, toggles, validation, shared sending limits, purpose/resend/expiry/attempt limits, database rollback and retry, concurrent proof use, receipt idempotence, changed account permissions, browser/admin challenge invalidation, and unchanged API token access. These use temporary SQLite, miniredis and a fake mailer; they send no real mail or vendor requests.
+
+Run `go test ./...` and `go vet ./...` from `server`. From the portal directory, run `npm run typecheck`, `npm test`, `npm run build -- --configLoader runner`, and `node tests/password-change.browser.mjs`. The browser checks use the built assets, a fresh browser context, synthetic accounts and intercepted business endpoints, with external network requests rejected. They cover member/administrator views, desktop and small-screen layouts, rotation, focus and scroll restoration, validation, throttling, retry identity, secret cleanup and the sign-in success message. `npm run test:navigation` covers the existing responsive navigation independently.

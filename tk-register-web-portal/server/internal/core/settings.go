@@ -65,6 +65,7 @@ var specs = []settingSpec{
 	{"email_code_login_enabled", "access", "boolean", "true", "Allow members to sign in with an email code. Administrators always require both factors.", 0, 0, nil},
 	{"registration_code_ttl_seconds", "verification", "integer", "600", "Registration code lifetime, in seconds.", 60, 3600, nil},
 	{"login_code_ttl_seconds", "verification", "integer", "600", "Member sign-in code lifetime, in seconds.", 60, 3600, nil},
+	{"password_change_code_ttl_seconds", "verification", "integer", "600", "Signed-in password change code lifetime, in seconds.", 60, 3600, nil},
 	{"admin_login_code_ttl_seconds", "verification", "integer", "600", "Administrator sign-in code lifetime, in seconds.", 60, 1800, nil},
 	{"admin_login_challenge_ttl_seconds", "verification", "integer", "600", "Time to finish administrator email verification after password verification, in seconds.", 60, 1800, nil},
 	{"email_send_cooldown_seconds", "verification", "integer", "60", "Minimum time between code requests for the same email, in seconds.", 60, 3600, nil},

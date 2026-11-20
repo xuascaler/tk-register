@@ -62,6 +62,9 @@ func sendCode(ctx context.Context, values Values, email, code, purpose string, t
 	case "login":
 		subject = "Your TK Register sign-in code"
 		action = "sign in to your account"
+	case "password_change":
+		subject = "Confirm your TK Register password change"
+		action = "change your TK Register sign-in password. Completing this change signs out all your browser sessions"
 	case "admin_login", "admin":
 		subject = "Confirm your TK Register administrator sign-in"
 		action = "complete your administrator sign-in"

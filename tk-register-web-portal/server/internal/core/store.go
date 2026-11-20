@@ -156,7 +156,7 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{DB: db, aead: aead, macKey: key[:]}
-	if err = db.AutoMigrate(&User{}, &Setting{}, &EmailVerification{}, &UserAPIToken{}); err != nil {
+	if err = db.AutoMigrate(&User{}, &Setting{}, &EmailVerification{}, &UserAPIToken{}, &PasswordChangeChallenge{}); err != nil {
 		s.Close()
 		return nil, errors.New("could not migrate TK Register database")
 	}

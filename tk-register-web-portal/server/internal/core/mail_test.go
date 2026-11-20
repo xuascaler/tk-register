@@ -23,8 +23,13 @@ import (
 )
 
 func TestSMTPWithVerifiedTLSAndBothAuthMethods(t *testing.T) {
-	for _, mode := range []string{"starttls", "tls"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, scenario := range []struct{ mode, purpose, action string }{
+		{"starttls", "registration", "registration"},
+		{"tls", "member_link:parent@example.com", "parent@example.com"},
+		{"starttls", "password_change", "change your TK Register sign-in password"},
+	} {
+		mode := scenario.mode
+		t.Run(mode+"-"+scenario.purpose, func(t *testing.T) {
 			certificateServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 			serverTLS := certificateServer.TLS.Clone()
 			roots := x509.NewCertPool()
@@ -123,10 +128,7 @@ func TestSMTPWithVerifiedTLSAndBothAuthMethods(t *testing.T) {
 			if mode == "tls" {
 				values["smtp_force_auth_login"] = "true"
 			}
-			purpose, action := "registration", "registration"
-			if mode == "tls" {
-				purpose, action = "member_link:parent@example.com", "parent@example.com"
-			}
+			purpose, action := scenario.purpose, scenario.action
 			if err = sendCode(context.Background(), values, "member@example.com", "A1b2C3", purpose, 600, &tls.Config{RootCAs: roots}); err != nil {
 				t.Fatal(err)
 			}
