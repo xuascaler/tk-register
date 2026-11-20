@@ -32,12 +32,13 @@ import SubmissionHistory from './submissions/SubmissionHistory';
 import SubmissionDetails from './submissions/SubmissionDetail';
 import { AdminHistory, PoolAccountDetails } from './admin/AccountPool';
 import APIToken from './account/APIToken';
+import ChangePassword from './account/ChangePassword';
 import { AccountUsageDetails } from './accounts/Accounts';
 import AccountsWorkspace from './accounts/AccountsWorkspace';
 import { accountListHistoryState, clearAccountListReturns, cloneAccountListReturn, readAccountListReturn, type AccountListReturn } from './accounts/list-navigation';
 import APIDocumentation, { type DocTopic, type DocSection } from './docs/APIDocumentation';
 
-function Account({ user, status, tab, onTab, onViewAccounts }: { user: User; status: AuthStatus; tab: 'general' | 'members'; onTab: (tab: 'general' | 'members') => void; onViewAccounts: () => void }) {
+function Account({ user, status, tab, onTab, onViewAccounts, onPasswordChanged }: { user: User; status: AuthStatus; tab: 'general' | 'members'; onTab: (tab: 'general' | 'members') => void; onViewAccounts: () => void; onPasswordChanged: () => void }) {
   return (
     <>
       <div className='title-row'>
@@ -92,6 +93,7 @@ function Account({ user, status, tab, onTab, onViewAccounts }: { user: User; sta
             </p>
           </div>
         </div>
+        <ChangePassword email={user.email} onChanged={onPasswordChanged} />
       </section>
       <APIToken key={user.id} />
       </>}
@@ -346,6 +348,18 @@ export default function App() {
       setSigningOut(false);
     }
   }
+  function passwordChanged() {
+    clearAccountListReturns();
+    setCSRFToken('');
+    setUser(null);
+    setDirty(false);
+    setError('');
+    setMenuOpen(false);
+    setRoute({ page: 'submit' });
+    window.history.replaceState(null, '', '#/submit');
+    setMessage('Password updated. Please sign in again.');
+    requestAnimationFrame(() => document.getElementById('auth-title')?.focus());
+  }
   return (
     <div id='tk-app'>
       <a href='#main-content' className='skip-link'>
@@ -535,7 +549,7 @@ export default function App() {
             ) : page === 'account-usage' && route.id ? (
               <AccountUsageDetails key={`member-${route.id}`} id={route.id} onBack={() => backToAccountList(false)} onSubmission={id => navigate({ page: 'detail', id, backAccount: route.id })} />
             ) : page === 'account' ? (
-              <Account user={user} status={status} tab={route.settingsTab || 'general'} onTab={settingsTab => navigate({ page:'account', settingsTab })} onViewAccounts={() => navigate({ page:'accounts', accountsTab: 'list' })} />
+              <Account user={user} status={status} tab={route.settingsTab || 'general'} onTab={settingsTab => navigate({ page:'account', settingsTab })} onViewAccounts={() => navigate({ page:'accounts', accountsTab: 'list' })} onPasswordChanged={passwordChanged} />
             ) : page === 'docs' ? (
               <APIDocumentation
                 topic={route.docTopic}

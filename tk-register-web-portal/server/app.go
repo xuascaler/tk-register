@@ -148,6 +148,9 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	route := strings.TrimPrefix(r.URL.Path, basePath+"/api/")
+	if a.passwordRoutes(w, r, route) {
+		return
+	}
 	if a.memberRoutes(w, r, route) {
 		return
 	}
@@ -398,6 +401,10 @@ type deliveryError struct {
 
 func (e *deliveryError) Error() string { return "delivery unavailable" }
 func (a *app) deliver(ctx context.Context, email, purpose, ip string, ttl int, v core.Values, send bool, mailPurpose ...string) error {
+	return a.deliverPrepared(ctx, email, purpose, ip, ttl, v, send, nil, mailPurpose...)
+}
+
+func (a *app) deliverPrepared(ctx context.Context, email, purpose, ip string, ttl int, v core.Values, send bool, prepare func() error, mailPurpose ...string) error {
 	request, err := randomToken()
 	if err != nil {
 		return err
@@ -434,6 +441,11 @@ func (a *app) deliver(ctx context.Context, email, purpose, ip string, ttl int, v
 			_, _ = releaseSend.Run(cleanup, a.redis, []string{cooldownKey(email)}, request).Result()
 		}
 	}()
+	if prepare != nil {
+		if err = prepare(); err != nil {
+			return err
+		}
+	}
 	code, err := randomCode()
 	if err != nil {
 		return err

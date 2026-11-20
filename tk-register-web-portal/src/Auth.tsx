@@ -214,7 +214,7 @@ export default function Auth({
             <strong>Password verified</strong> · Step 2 of 2
           </p>
         )}
-        <h1 id='auth-title'>
+        <h1 id='auth-title' tabIndex={-1}>
           {challenge
             ? 'Check your email'
             : page === 'register'

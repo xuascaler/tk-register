@@ -23,6 +23,21 @@ func decoded(t *testing.T, line, prefix string) map[string]any {
 	return out
 }
 
+func TestPasswordChangeDiagnosticsOnlyAcceptFixedMetadata(t *testing.T) {
+	var output bytes.Buffer
+	ctx := WithLogger(WithTrace(context.Background(), Trace{TraceID: "request-123", ActorID: 7}), log.New(&output, "", 0))
+	LogPasswordChange(ctx, "change", "changed")
+	event := decoded(t, strings.TrimSpace(output.String()), "TK_PASSWORD_CHANGE")
+	if event["trace_id"] != "request-123" || event["actor_id"] != float64(7) || event["stage"] != "change" || event["outcome"] != "changed" {
+		t.Fatal("password change metadata missing", event)
+	}
+	output.Reset()
+	LogPasswordChange(ctx, "secret-password", "person@example.com")
+	if strings.Contains(output.String(), "secret") || strings.Contains(output.String(), "@") {
+		t.Fatal("password diagnostic accepted arbitrary detail")
+	}
+}
+
 func TestDiagnosticsTracePropagationAndConcurrentCounts(t *testing.T) {
 	t.Setenv("TK_REGISTER_SUPPLIER_DIAGNOSTICS", "errors")
 	var output bytes.Buffer
