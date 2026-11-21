@@ -12,11 +12,11 @@ import (
 const exchangeRateSettingKey = "exchange_rate_cny_per_usd"
 const defaultExchangeRate = "7.2"
 
-var exchangeRatePattern = regexp.MustCompile(`^[0-9]{1,5}(\.[0-9]{1,6})?$`)
+var plainDecimalPattern = regexp.MustCompile(`^[0-9]{1,5}(\.[0-9]{1,6})?$`)
 
 func parseExchangeRate(value string) (float64, error) {
 	rate, err := strconv.ParseFloat(value, 64)
-	if err != nil || !exchangeRatePattern.MatchString(value) || rate <= 0 || rate > 10000 {
+	if err != nil || !plainDecimalPattern.MatchString(value) || rate <= 0 || rate > 10000 {
 		return 0, errors.New("enter a number greater than 0 and at most 10000, with up to 6 decimal places")
 	}
 	return rate, nil

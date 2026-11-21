@@ -193,3 +193,17 @@ test('session cleanup removes saved account-list returns while retaining unrelat
   current.history.state = accountListHistoryState(saved);
   assert.equal(readAccountListReturn(1, false), null, 'A surviving browser-history reference cannot revive data after sign-out');
 });
+
+test('Raw account filter URLs and detail return positions stay separate from the standard pool', t => {
+  const { current } = browser(t);
+  const saved = rememberAccountList(1, true, filters, '29', true);
+  assert.ok(saved);
+  assert.match(current.location.hash, /^#\/account-pool\/raw-accounts\?tab=list&/);
+  assert.equal(readAccountListReturn(1, true), null);
+  assert.equal(readAccountListReturn(1, true, true)?.accountID, '29');
+  const cloned = cloneAccountListReturn(saved);
+  assert.ok(cloned);
+  current.history.state = accountListHistoryState(cloned);
+  assert.equal(readAccountListReturn(1, true, true)?.scrollY, 640);
+  assert.equal(readAccountListReturn(1, true), null);
+});

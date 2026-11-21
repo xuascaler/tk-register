@@ -41,6 +41,9 @@ export function validateSetting(setting: Setting, value: SettingValue): string {
     return '';
   if (setting.type === 'decimal') {
     const number = Number(value);
+    if (setting.category === 'daily_usage' && setting.key.endsWith('_percent')) {
+      return /^\d{1,3}(\.\d{1,6})?$/.test(String(value)) && number <= 100 ? '' : 'Enter a percentage from 0 to 100, with up to 6 decimal places.';
+    }
     if (!/^[0-9]{1,5}(\.[0-9]{1,6})?$/.test(String(value)) || !Number.isFinite(number) || number <= 0 || number > (setting.max ?? 10000))
       return 'Enter a number greater than 0 and at most 10000, with up to 6 decimal places.';
   }

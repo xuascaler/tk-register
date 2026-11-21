@@ -46,11 +46,12 @@ function SubmittedTime({ value }: { value: string | null | undefined }) {
   </time>;
 }
 
-export function MemberAccounts({ userID, onOpen, admin = false, embedded = false }: { userID: number; onOpen: (id: string) => void; admin?: boolean; embedded?: boolean }) {
+export function MemberAccounts({ userID, onOpen, admin = false, embedded = false, raw = false }: { userID: number; onOpen: (id: string) => void; admin?: boolean; embedded?: boolean; raw?: boolean }) {
   const memberScope = useMemberScope();
-  const navigation = useAccountListNavigation(userID, admin, memberScope.selection);
+  const navigation = useAccountListNavigation(userID, admin, memberScope.selection, raw);
   const { page, search: query, status, sources } = navigation.filters;
-  const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
+  const actionEndpoint = admin ? '/admin/synced-accounts' : '/accounts';
+  const endpoint = raw ? '/admin/raw-accounts' : actionEndpoint;
   const [data, setData] = useState<AccountPage | null>(null);
   const [search, setSearch] = useState(query);
   const [attempt, setAttempt] = useState(0);
@@ -112,7 +113,7 @@ export function MemberAccounts({ userID, onOpen, admin = false, embedded = false
     pending.current = operation; setSyncingID(account.id);
     setRowResults(current => { const next = { ...current }; delete next[account.id]; return next; });
     try {
-      const result = await syncAccountRow(endpoint, account, operation.controller.signal);
+      const result = await syncAccountRow(actionEndpoint, account, operation.controller.signal);
       if (operation.controller.signal.aborted || pending.current !== operation || version !== revision.current) return;
       setData(current => current && mergeSyncedAccount(current, result));
       setRowResults(current => ({ ...current, [account.id]: { ...result, retryAt: result.retryAfter ? Date.now() + result.retryAfter * 1000 : undefined } }));
@@ -168,8 +169,9 @@ export function MemberAccounts({ userID, onOpen, admin = false, embedded = false
 
 const metricNames: Record<Metric, string> = { cost_total_usd: 'Total spent', input_tokens_total: 'Input tokens', output_tokens_total: 'Output tokens' };
 
-export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }: { id: string; onBack: () => void; onSubmission: (id: string) => void; admin?: boolean }) {
-  const endpoint = admin ? '/admin/synced-accounts' : '/accounts';
+export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, raw = false }: { id: string; onBack: () => void; onSubmission: (id: string) => void; admin?: boolean; raw?: boolean }) {
+  const actionEndpoint = admin ? '/admin/synced-accounts' : '/accounts';
+  const endpoint = raw ? '/admin/raw-accounts' : actionEndpoint;
   const [data, setData] = useState<AccountDetails | null>(null);
   const [tab, setTab] = useState<'overview' | 'daily'>(() => new URLSearchParams(window.location.hash.split('?')[1]).get('tab') === 'daily-usage' ? 'daily' : 'overview');
   function changeTab(next: 'overview' | 'daily') { setTab(next); const path = window.location.hash.split('?')[0]; window.history.replaceState(window.history.state, '', `${path}${next === 'daily' ? '?tab=daily-usage' : ''}`); }
@@ -214,7 +216,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
     setSyncing(true); setError(''); setNotice(''); setRefreshWarning(''); setSyncRetry(null);
     try {
       if (!data?.account) return;
-      const result = await syncAccountRow(endpoint, data.account, controller.signal);
+      const result = await syncAccountRow(actionEndpoint, data.account, controller.signal);
       if (!controller.signal.aborted) {
         if (result.status !== 'updated') {
           setError(result.message || 'The account could not be updated.');
@@ -263,7 +265,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
   }
   const account = data?.account, snapshot = account?.snapshot;
   return <section className='usage-detail'>
-    <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />{admin ? 'Account pool / Accounts' : 'Accounts'}</button>
+    <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />{raw ? 'Account pool / Raw account' : admin ? 'Account pool / Accounts' : 'Accounts'}</button>
     {!account || !data ? <><ErrorNotice>{error}</ErrorNotice>{loading ? <Loading label='Loading account…' /> : <button className='button pale' onClick={() => setAttempt(v => v + 1)}>Try again</button>}</> : <>
       <div className='title-row usage-detail-title'><div><h1>{account.account}</h1><p className='subtitle'>{account.plan} <span aria-hidden='true'>·</span> {account.vendor_name}</p></div><div className='usage-detail-actions'><Status account={account} /><button className='button pale' disabled={syncing || loading || deletionInProgress(account) || syncRetryIn > 0 || !account.current_submission_id} onClick={sync}><RefreshCw className={syncing ? 'usage-spinning' : ''} aria-hidden='true' />{syncing ? 'Updating…' : 'Sync now'}</button></div></div>
       <div className='usage-meta'>{!admin && account.account_source && <span>Source <strong>{account.account_source.label}</strong></span>}{admin && <span className='usage-owner-meta'>User <strong>{account.user_email || '—'}</strong></span>}<span>Account ID <strong>{account.platform_account_id || account.remote_id || '—'}</strong></span><span>Last updated <strong>{formatTime(account.last_success_at, data.timezone)}</strong></span>{account.latest_submission_id && <button className='usage-text-button' onClick={() => onSubmission(account.current_submission_id || account.latest_submission_id)}>View submission<ArrowUpRight aria-hidden='true' /></button>}</div>
@@ -290,8 +292,8 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false }:
       </>}
       <DailyUsage key={`${endpoint}:${id}`} endpoint={`${endpoint}/${encodeURIComponent(id)}`} compact={tab === 'overview'} onOpen={() => changeTab('daily')} />
       </div>
-      {editorOpen && <AuthJSONEditor account={account} endpoint={endpoint} onClose={() => setEditorOpen(false)} onSaved={credentialsSaved} />}
-      {deactivateOpen && <DeactivateAccount account={account} endpoint={endpoint} onClose={() => setDeactivateOpen(false)} onGenerated={() => { setDeactivateOpen(false); setNotice('Auth JSON generated. Your account will go offline after a while.'); }} />}
+      {editorOpen && <AuthJSONEditor account={account} endpoint={actionEndpoint} onClose={() => setEditorOpen(false)} onSaved={credentialsSaved} />}
+      {deactivateOpen && <DeactivateAccount account={account} endpoint={actionEndpoint} onClose={() => setDeactivateOpen(false)} onGenerated={() => { setDeactivateOpen(false); setNotice('Auth JSON generated. Your account will go offline after a while.'); }} />}
     </>}
   </section>;
 }

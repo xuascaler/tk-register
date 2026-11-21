@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type AccountListFilters = { page: number; search: string; status: string; sources: string };
-export type AccountListReturn = { key: string; userID: number; admin: boolean; hash: string; filters: AccountListFilters; scrollY: number; accountID?: string };
+export type AccountListReturn = { key: string; userID: number; admin: boolean; raw?: boolean; hash: string; filters: AccountListFilters; scrollY: number; accountID?: string };
 const prefix = 'tk-register:account-list:';
 const historyKey = 'tkAccountListKey';
 const statuses = new Set(['', 'active', 'offline', 'banned', 'sync_failed', 'login_failed', 're_login_failed', 'bound_failed', 'cooking_failed', 'pending', 'unknown']);
@@ -22,24 +22,24 @@ export function readListFilters(hash: string, fallbackSources = 'all'): AccountL
   return normalizeListFilters({ page: Number(params.get('page')), search: params.get('search') || '', status: params.get('status') || '', sources: params.get('sources') ?? fallbackSources });
 }
 
-export function accountListHash(admin: boolean, filters: AccountListFilters) {
+export function accountListHash(admin: boolean, filters: AccountListFilters, raw = false) {
   const state = normalizeListFilters(filters);
   const params = new URLSearchParams({ tab: 'list' });
   if (state.page > 1) params.set('page', String(state.page));
   if (state.search) params.set('search', state.search);
   if (state.status) params.set('status', state.status);
   if (state.sources !== 'all' && !admin) params.set('sources', state.sources);
-  return `#/${admin ? 'account-pool/accounts' : 'accounts'}?${params}`;
+  return `#/${raw ? 'account-pool/raw-accounts' : admin ? 'account-pool/accounts' : 'accounts'}?${params}`;
 }
 
-export function readAccountListReturn(userID: number, admin: boolean): AccountListReturn | null {
+export function readAccountListReturn(userID: number, admin: boolean, raw = false): AccountListReturn | null {
   const key = window.history.state?.[historyKey];
-  if (typeof key !== 'string' || !key.startsWith(`${prefix}${userID}:${admin ? 'admin' : 'member'}:`)) return null;
+  if (typeof key !== 'string' || !key.startsWith(`${prefix}${userID}:${raw ? 'raw' : admin ? 'admin' : 'member'}:`)) return null;
   try {
     const saved = JSON.parse(sessionStorage.getItem(key) || 'null') as AccountListReturn | null;
     if (!saved || saved.key !== key || saved.userID !== userID || saved.admin !== admin || !Number.isFinite(saved.scrollY) || saved.scrollY < 0) return null;
     const filters = normalizeListFilters(saved.filters || {});
-    if (accountListHash(admin, filters) !== saved.hash) return null;
+    if (accountListHash(admin, filters, raw) !== saved.hash) return null;
     return { ...saved, filters };
   } catch { return null; }
 }
@@ -57,17 +57,17 @@ function storeAccountListReturn(saved: AccountListReturn) {
 
 export function cloneAccountListReturn(saved: AccountListReturn): AccountListReturn | null {
   try {
-    const cloned = { ...saved, key: `${prefix}${saved.userID}:${saved.admin ? 'admin' : 'member'}:${crypto.randomUUID()}`, filters: { ...saved.filters } };
+    const cloned = { ...saved, key: `${prefix}${saved.userID}:${saved.raw ? 'raw' : saved.admin ? 'admin' : 'member'}:${crypto.randomUUID()}`, filters: { ...saved.filters } };
     storeAccountListReturn(cloned);
     return cloned;
   } catch { return null; }
 }
 
-export function rememberAccountList(userID: number, admin: boolean, filters: AccountListFilters, accountID?: string): AccountListReturn | null {
-  const current = readAccountListReturn(userID, admin);
-  const hash = accountListHash(admin, filters);
-  const key = current?.hash === hash ? current.key : `${prefix}${userID}:${admin ? 'admin' : 'member'}:${crypto.randomUUID()}`;
-  const saved = { key, userID, admin, hash, filters: normalizeListFilters(filters), scrollY: Math.max(0, window.scrollY), accountID };
+export function rememberAccountList(userID: number, admin: boolean, filters: AccountListFilters, accountID?: string, raw = false): AccountListReturn | null {
+  const current = readAccountListReturn(userID, admin, raw);
+  const hash = accountListHash(admin, filters, raw);
+  const key = current?.hash === hash ? current.key : `${prefix}${userID}:${raw ? 'raw' : admin ? 'admin' : 'member'}:${crypto.randomUUID()}`;
+  const saved = { key, userID, admin, raw, hash, filters: normalizeListFilters(filters), scrollY: Math.max(0, window.scrollY), accountID };
   try {
     storeAccountListReturn(saved);
     window.history.replaceState({ ...window.history.state, ...accountListHistoryState(saved) }, '', hash);
@@ -79,9 +79,9 @@ export function clearAccountListReturns() {
   try { for (const key of Object.keys(sessionStorage)) if (key.startsWith(prefix)) sessionStorage.removeItem(key); } catch { /* Storage can be disabled. */ }
 }
 
-export function useAccountListNavigation(userID: number, admin: boolean, fallbackSources: string) {
+export function useAccountListNavigation(userID: number, admin: boolean, fallbackSources: string, raw = false) {
   const initial = () => {
-    const saved = readAccountListReturn(userID, admin);
+    const saved = readAccountListReturn(userID, admin, raw);
     return saved?.hash === window.location.hash ? saved : null;
   };
   const restoring = useRef<AccountListReturn | null>(initial());
@@ -90,27 +90,27 @@ export function useAccountListNavigation(userID: number, admin: boolean, fallbac
   const restoringPosition = useRef(Boolean(restoring.current));
   useEffect(() => {
     const followHistory = () => {
-      const saved = readAccountListReturn(userID, admin);
+      const saved = readAccountListReturn(userID, admin, raw);
       restoring.current = saved?.hash === window.location.hash ? saved : null;
       restoringPosition.current = Boolean(restoring.current);
       setFilters(restoring.current?.filters || readListFilters(window.location.hash));
     };
     window.addEventListener('hashchange', followHistory);
     return () => { window.removeEventListener('hashchange', followHistory); frames.current.forEach(cancelAnimationFrame); };
-  }, [userID, admin]);
+  }, [userID, admin, raw]);
 
   const change = useCallback((patch: Partial<AccountListFilters>, options: { replace?: boolean; keepScroll?: boolean } = {}) => {
     const next = normalizeListFilters({ ...filters, ...patch });
     if (admin) next.sources = 'all';
-    const hash = accountListHash(admin, next);
-    if (hash === accountListHash(admin, filters)) return;
-    if (!options.keepScroll) rememberAccountList(userID, admin, filters);
+    const hash = accountListHash(admin, next, raw);
+    if (hash === accountListHash(admin, filters, raw)) return;
+    if (!options.keepScroll) rememberAccountList(userID, admin, filters, undefined, raw);
     if (!options.keepScroll) { restoring.current = null; restoringPosition.current = false; }
     window.history[options.replace ? 'replaceState' : 'pushState'](null, '', hash);
     setFilters(next);
-  }, [filters, userID, admin]);
+  }, [filters, userID, admin, raw]);
 
-  const remember = useCallback((accountID?: string) => rememberAccountList(userID, admin, filters, accountID), [filters, userID, admin]);
+  const remember = useCallback((accountID?: string) => rememberAccountList(userID, admin, filters, accountID, raw), [filters, userID, admin, raw]);
   const restoreScroll = useCallback(() => {
     const saved = restoring.current;
     if (!saved) return;
@@ -127,10 +127,10 @@ export function useAccountListNavigation(userID: number, admin: boolean, fallbac
     const save = () => {
       // A delayed scrollend from the old screen must not rewrite a detail URL
       // or save old filters into a newer pagination/history entry.
-      if (!restoringPosition.current && window.location.hash === accountListHash(admin, filters)) rememberAccountList(userID, admin, filters);
+      if (!restoringPosition.current && window.location.hash === accountListHash(admin, filters, raw)) rememberAccountList(userID, admin, filters, undefined, raw);
     };
     window.addEventListener('scrollend', save);
     return () => window.removeEventListener('scrollend', save);
-  }, [filters, userID, admin]);
+  }, [filters, userID, admin, raw]);
   return { filters, change, remember, restoreScroll };
 }

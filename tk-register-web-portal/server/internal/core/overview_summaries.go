@@ -77,6 +77,7 @@ type overviewSummarySource struct {
 	CostCNY       *string          `json:"cost_cny"`
 	CostKnown     int64            `json:"cost_known"`
 	CollectedDays int64            `json:"collected_days"`
+	TotalCostDays int64            `json:"total_cost_days,omitempty"`
 }
 type overviewSummaryUsage struct {
 	UsageDate        string `json:"usage_date"`
@@ -92,7 +93,13 @@ type overviewSummaryModelCost struct {
 	Model    string `json:"model"`
 	CostCNY  string `json:"cost_cny"`
 }
+type summaryModelBreakdown struct {
+	Rows        []overviewSummaryUsage      `json:"rows"`
+	ModelCosts  []overviewSummaryModelCost  `json:"model_costs"`
+	Collections []overviewSummaryCollection `json:"collections"`
+}
 type overviewSummaryPayload struct {
+	Modified          *summaryModelBreakdown     `json:"modified,omitempty"`
 	Version           int                        `json:"version"`
 	EarliestDate      *string                    `json:"earliest_date"`
 	LatestAccountData *time.Time                 `json:"latest_account_data"`
@@ -118,12 +125,14 @@ type overviewSummaryCollection struct {
 }
 type overviewSummaryUsageKey struct{ Source, Date, Model string }
 type overviewSummaryInput struct {
-	sources     []overviewSummarySource
-	accounts    []overviewSummaryAccount
-	collections []overviewSummaryCollection
-	usage       map[overviewSummaryUsageKey]*overviewExactUsage
-	earliest    *string
-	latest      *time.Time
+	sources             []overviewSummarySource
+	accounts            []overviewSummaryAccount
+	collections         []overviewSummaryCollection
+	modifiedUsage       map[overviewSummaryUsageKey]*overviewExactUsage
+	modifiedCollections []overviewSummaryCollection
+	usage               map[overviewSummaryUsageKey]*overviewExactUsage
+	earliest            *string
+	latest              *time.Time
 }
 
 // Exact accumulation also avoids SQLite's integer overflow/float coercion in
@@ -241,31 +250,42 @@ func (s *Store) loadOverviewSummaryInput(ctx context.Context, scope overviewScop
 		first := out.collections[0].Date
 		out.earliest = &first
 	}
-	// Stream bill lines once. Only aggregated source/date/model values stay in
-	// memory; deriving day/week/month/all_time does not rescan account tables.
-	rows, err := days().Joins("JOIN account_daily_usages u ON u.day_id=d.id").Select(scope.sourceExpr + " AS source, d.usage_date, u.model, u.cost_cny, u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens").Rows()
+	if err = days().Joins("JOIN account_daily_fable_ratios r ON r.day_id=d.id").Select(scope.sourceExpr + " AS source, d.usage_date AS date, COUNT(*) AS count").Group(scope.sourceExpr + ",d.usage_date").Scan(&out.modifiedCollections).Error; err != nil {
+		return out, err
+	}
+	out.usage, err = loadSummaryLines(ctx, days(), scope.sourceExpr, "raw")
 	if err != nil {
 		return out, err
 	}
+	out.modifiedUsage, err = loadSummaryLines(ctx, days(), scope.sourceExpr, "modified")
+	return out, err
+}
+
+func loadSummaryLines(ctx context.Context, days *gorm.DB, sourceExpr, source string) (map[overviewSummaryUsageKey]*overviewExactUsage, error) {
+	rows, err := days.Joins("JOIN " + usageLineTable(source) + " u ON u.day_id=d.id").Select(sourceExpr + " AS source, d.usage_date, u.model, u.cost_cny, u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens").Rows()
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
+	result := map[overviewSummaryUsageKey]*overviewExactUsage{}
 	for rows.Next() {
-		var source uint64
+		var owner uint64
 		var row overviewSummaryUsage
-		if err = rows.Scan(&source, &row.UsageDate, &row.Model, &row.CostCNY, &row.InputTokens, &row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens); err != nil {
-			return out, err
+		if err = rows.Scan(&owner, &row.UsageDate, &row.Model, &row.CostCNY, &row.InputTokens, &row.OutputTokens, &row.CacheReadTokens, &row.CacheWriteTokens); err != nil {
+			return nil, err
 		}
-		key := overviewSummaryUsageKey{overviewSourceID(source), row.UsageDate, row.Model}
-		if out.usage[key] == nil {
-			out.usage[key] = &overviewExactUsage{}
+		key := overviewSummaryUsageKey{overviewSourceID(owner), row.UsageDate, row.Model}
+		if result[key] == nil {
+			result[key] = &overviewExactUsage{}
 		}
-		if err = out.usage[key].add(row); err != nil {
-			return out, err
+		if err = result[key].add(row); err != nil {
+			return nil, err
 		}
 	}
 	if err = rows.Err(); err != nil {
-		return out, err
+		return nil, err
 	}
-	return out, ctx.Err()
+	return result, ctx.Err()
 }
 
 func (input overviewSummaryInput) period(start, end string) (overviewSummaryPayload, error) {
@@ -281,56 +301,24 @@ func (input overviewSummaryInput) period(start, end string) (overviewSummaryPayl
 		}
 		coverage[collection.Date] += collection.Count
 		out.Sources[bySource[overviewSourceID(collection.Source)]].CollectedDays += collection.Count
+		out.Sources[bySource[overviewSourceID(collection.Source)]].TotalCostDays++
 	}
-	rows := map[overviewSummaryUsageKey]*overviewExactUsage{}
-	costs := map[overviewSummaryUsageKey]*big.Rat{}
-	for key, value := range input.usage {
-		if key.Date < start || key.Date > end {
-			continue
-		}
-		row, err := value.row(key.Date, key.Model)
-		if err != nil {
-			return out, err
-		}
-		dailyKey := overviewSummaryUsageKey{Date: key.Date, Model: key.Model}
-		if rows[dailyKey] == nil {
-			rows[dailyKey] = &overviewExactUsage{}
-		}
-		if err = rows[dailyKey].add(row); err != nil {
-			return out, err
-		}
-		modelKey := overviewSummaryUsageKey{Source: key.Source, Model: key.Model}
-		if costs[modelKey] == nil {
-			costs[modelKey] = new(big.Rat)
-		}
-		costs[modelKey].Add(costs[modelKey], &value.cost)
+	var err error
+	out.Rows, out.ModelCosts, err = periodModelUsage(input.usage, start, end)
+	if err != nil {
+		return out, err
 	}
-	for key, value := range rows {
-		row, err := value.row(key.Date, key.Model)
-		if err != nil {
-			return out, err
-		}
-		out.Rows = append(out.Rows, row)
+	modified := &summaryModelBreakdown{}
+	modified.Rows, modified.ModelCosts, err = periodModelUsage(input.modifiedUsage, start, end)
+	if err != nil {
+		return out, err
 	}
-	sort.Slice(out.Rows, func(i, j int) bool {
-		if out.Rows[i].UsageDate != out.Rows[j].UsageDate {
-			return out.Rows[i].UsageDate < out.Rows[j].UsageDate
+	for _, c := range input.modifiedCollections {
+		if c.Date >= start && c.Date <= end {
+			modified.Collections = append(modified.Collections, c)
 		}
-		return out.Rows[i].Model < out.Rows[j].Model
-	})
-	for key, cost := range costs {
-		raw, err := overviewDecimal(cost)
-		if err != nil {
-			return out, err
-		}
-		out.ModelCosts = append(out.ModelCosts, overviewSummaryModelCost{SourceID: key.Source, Model: key.Model, CostCNY: raw})
 	}
-	sort.Slice(out.ModelCosts, func(i, j int) bool {
-		if out.ModelCosts[i].SourceID != out.ModelCosts[j].SourceID {
-			return out.ModelCosts[i].SourceID < out.ModelCosts[j].SourceID
-		}
-		return out.ModelCosts[i].Model < out.ModelCosts[j].Model
-	})
+	out.Modified = modified
 	cohorts := []string{}
 	for _, account := range input.accounts {
 		if account.CurrentSubmissionID != nil && strings.HasPrefix(account.Plan, "claude/") {
@@ -353,6 +341,61 @@ func (input overviewSummaryInput) period(start, end string) (overviewSummaryPayl
 		out.Days = append(out.Days, OverviewDay{Date: date, Status: status, Expected: int64(expected), Collected: coverage[date]})
 	}
 	return out, nil
+}
+
+func periodModelUsage(usage map[overviewSummaryUsageKey]*overviewExactUsage, start, end string) ([]overviewSummaryUsage, []overviewSummaryModelCost, error) {
+	daily := []overviewSummaryUsage{}
+	modelCosts := []overviewSummaryModelCost{}
+	rows := map[overviewSummaryUsageKey]*overviewExactUsage{}
+	costs := map[overviewSummaryUsageKey]*big.Rat{}
+	for key, value := range usage {
+		if key.Date < start || key.Date > end {
+			continue
+		}
+		row, err := value.row(key.Date, key.Model)
+		if err != nil {
+			return nil, nil, err
+		}
+		dailyKey := overviewSummaryUsageKey{Date: key.Date, Model: key.Model}
+		if rows[dailyKey] == nil {
+			rows[dailyKey] = &overviewExactUsage{}
+		}
+		if err = rows[dailyKey].add(row); err != nil {
+			return nil, nil, err
+		}
+		modelKey := overviewSummaryUsageKey{Source: key.Source, Model: key.Model}
+		if costs[modelKey] == nil {
+			costs[modelKey] = new(big.Rat)
+		}
+		costs[modelKey].Add(costs[modelKey], &value.cost)
+	}
+	for key, value := range rows {
+		row, err := value.row(key.Date, key.Model)
+		if err != nil {
+			return nil, nil, err
+		}
+		daily = append(daily, row)
+	}
+	sort.Slice(daily, func(i, j int) bool {
+		if daily[i].UsageDate != daily[j].UsageDate {
+			return daily[i].UsageDate < daily[j].UsageDate
+		}
+		return daily[i].Model < daily[j].Model
+	})
+	for key, cost := range costs {
+		raw, err := overviewDecimal(cost)
+		if err != nil {
+			return nil, nil, err
+		}
+		modelCosts = append(modelCosts, overviewSummaryModelCost{SourceID: key.Source, Model: key.Model, CostCNY: raw})
+	}
+	sort.Slice(modelCosts, func(i, j int) bool {
+		if modelCosts[i].SourceID != modelCosts[j].SourceID {
+			return modelCosts[i].SourceID < modelCosts[j].SourceID
+		}
+		return modelCosts[i].Model < modelCosts[j].Model
+	})
+	return daily, modelCosts, nil
 }
 
 // OverviewSummaryClaim fences publication against an expired daily-worker lease.
@@ -475,6 +518,7 @@ func (s *Store) ReadOverviewSummary(ctx context.Context, viewerID uint64, admini
 	}
 	available := false
 	out := AccountsOverview{StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", CollectionTime: "03:00", SummaryAvailable: &available, SummaryPeriod: period, Sources: []OverviewSource{}, Rows: []DailyUsageRowDTO{}, ModelCosts: []OverviewModelCost{}, Days: []OverviewDay{}}
+	out.ModelUsageSource = reportSource(ctx)
 	out.ExchangeRate, err = s.ExchangeRate(ctx)
 	if err != nil {
 		return out, err
@@ -499,8 +543,46 @@ func (s *Store) ReadOverviewSummary(ctx context.Context, viewerID uint64, admini
 	out.SummaryGeneratedAt = &generated
 	out.StartDate, out.EndDate, out.Timezone = saved.StartDate, saved.EndDate, saved.Timezone
 	out.EarliestDate, out.LatestAccountData = payload.EarliestDate, payload.LatestAccountData
+	rawCosts := newUpstreamPeriodCosts()
+	for _, r := range payload.Rows {
+		if err = addUsageCost(rawCosts.dates, r.UsageDate, r.CostCNY); err != nil {
+			return out, err
+		}
+	}
+	for _, r := range payload.ModelCosts {
+		if err = addUsageCost(rawCosts.sources, r.SourceID, r.CostCNY); err != nil {
+			return out, err
+		}
+	}
+	rawDays := append([]OverviewDay(nil), payload.Days...)
+	modelCollected := map[string]int64{}
+	if out.ModelUsageSource == "modified" {
+		detail := payload.Modified
+		if detail == nil {
+			detail = &summaryModelBreakdown{}
+		}
+		payload.Rows, payload.ModelCosts = detail.Rows, detail.ModelCosts
+		perDate := map[string]int64{}
+		for _, c := range detail.Collections {
+			perDate[c.Date] += c.Count
+			modelCollected[overviewSourceID(c.Source)] += c.Count
+		}
+		for i := range payload.Days {
+			d := &payload.Days[i]
+			d.Collected = perDate[d.Date]
+			if d.Collected == 0 {
+				d.Status = "missing"
+			}
+		}
+	}
 	for _, source := range payload.Sources {
-		row := OverviewSource{AccountSource: source.AccountSource, Total: source.Total, Statuses: source.Statuses, CostKnown: source.CostKnown, CollectedDays: source.CollectedDays}
+		row := OverviewSource{AccountSource: source.AccountSource, Total: source.Total, Statuses: source.Statuses, CostKnown: source.CostKnown, CollectedDays: source.CollectedDays, TotalCostDays: source.TotalCostDays}
+		// V1 did not save distinct dates per source. Keep its known cost even
+		// when the selected source has no corresponding model breakdown.
+		row.hasUpstreamBill = source.CollectedDays > 0
+		if out.ModelUsageSource == "modified" {
+			row.CollectedDays = modelCollected[source.ID]
+		}
 		if row.Statuses == nil {
 			row.Statuses = map[string]int64{}
 		}
@@ -513,20 +595,28 @@ func (s *Store) ReadOverviewSummary(ctx context.Context, viewerID uint64, admini
 		}
 		out.Sources = append(out.Sources, row)
 	}
-	for _, row := range payload.Rows {
+	if err = out.assignOverviewModels(payload.Rows, payload.ModelCosts); err != nil {
+		return out, err
+	}
+	out.Days = append(out.Days, payload.Days...)
+	err = out.setUpstreamCosts(rawCosts, rawDays)
+	return out, err
+}
+
+func (out *AccountsOverview) assignOverviewModels(rows []overviewSummaryUsage, costs []overviewSummaryModelCost) error {
+	for _, row := range rows {
 		value, e := overviewUSD(row.CostCNY, out.ExchangeRate)
 		if e != nil {
-			return out, e
+			return e
 		}
 		out.Rows = append(out.Rows, DailyUsageRowDTO{UsageDate: row.UsageDate, CostUSD: value, AccountDailyUsage: AccountDailyUsage{Model: row.Model, CostCNY: row.CostCNY, InputTokens: row.InputTokens, OutputTokens: row.OutputTokens, CacheReadTokens: row.CacheReadTokens, CacheWriteTokens: row.CacheWriteTokens}})
 	}
-	for _, cost := range payload.ModelCosts {
+	for _, cost := range costs {
 		value, e := overviewUSD(cost.CostCNY, out.ExchangeRate)
 		if e != nil {
-			return out, e
+			return e
 		}
 		out.ModelCosts = append(out.ModelCosts, OverviewModelCost{SourceID: cost.SourceID, Model: cost.Model, CostCNY: cost.CostCNY, CostUSD: value})
 	}
-	out.Days = append(out.Days, payload.Days...)
-	return out, nil
+	return nil
 }

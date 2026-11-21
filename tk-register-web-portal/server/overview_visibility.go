@@ -13,11 +13,16 @@ import (
 // Read the saved setting for each request, including responses from an existing
 // summary. Turning model visibility off never requires rebuilding the summary.
 func (a *app) userModelCostsEnabled(ctx context.Context) (bool, error) {
-	settings, err := a.store.Settings(ctx)
-	if err != nil {
-		return false, err
+	_, enabled, err := a.store.ModelUsageSettings(ctx)
+	return enabled, err
+}
+
+func (a *app) modelUsageView(ctx context.Context, administrative, rawAccount bool) (context.Context, bool, error) {
+	if rawAccount {
+		return core.WithModelUsageSource(ctx, "raw"), true, nil
 	}
-	return settings.Bool("user_overview_model_costs_enabled"), nil
+	source, personal, err := a.store.ModelUsageSettings(ctx)
+	return core.WithModelUsageSource(ctx, source), administrative || personal, err
 }
 
 type dailyUsageTotal struct {
@@ -76,42 +81,16 @@ type personalDailyUsageResponse struct {
 }
 
 func personalDailyUsage(out core.DailyUsageDTO, enabled bool) (personalDailyUsageResponse, error) {
-	response := personalDailyUsageResponse{DailyUsageDTO: out, ModelCostsEnabled: enabled}
+	response := personalDailyUsageResponse{DailyUsageDTO: out, ModelCostsEnabled: enabled, TotalCostUSD: out.TotalCostUSD}
 	if enabled {
 		response.Rows = &out.Rows
 		return response, nil
 	}
-	// Reuse Overview's cent allocation so the all-model daily totals have the
-	// same rounding semantics as the selected-period total, including refunds.
-	projected := core.AccountsOverview{ExchangeRate: out.ExchangeRate, Rows: append([]core.DailyUsageRowDTO(nil), out.Rows...), Sources: []core.OverviewSource{{AccountSource: core.AccountSource{ID: "myself"}, CollectedDays: 1}}}
-	models := map[string]*big.Rat{}
-	for _, row := range out.Rows {
-		amount, valid := new(big.Rat).SetString(row.CostCNY)
-		if !valid {
-			return response, errors.New("invalid daily billing amount")
-		}
-		if models[row.Model] == nil {
-			models[row.Model] = new(big.Rat)
-		}
-		models[row.Model].Add(models[row.Model], amount)
-	}
-	for model, amount := range models {
-		projected.ModelCosts = append(projected.ModelCosts, core.OverviewModelCost{SourceID: "myself", Model: model, CostCNY: amount.FloatString(8)})
-	}
-	if err := core.ProjectOverviewBilling(&projected); err != nil {
-		return response, err
-	}
-	totals, err := aggregateDailyTotals(projected.Rows)
+	totals, err := aggregateDailyTotals(out.Rows)
 	if err != nil {
 		return response, err
 	}
 	response.DailyTotals = &totals
-	for _, day := range out.Days {
-		if day.CollectedAt != nil {
-			response.TotalCostUSD = projected.Sources[0].CostUSD
-			break
-		}
-	}
 	return response, nil
 }
 

@@ -64,6 +64,28 @@ func TestUserIdentityVerifiedAndUnique(t *testing.T) {
 	}
 }
 
+func TestSuperAdministratorUpgradeIsIdempotent(t *testing.T) {
+	s := testStore(t)
+	root := User{Email: InitialSuperAdminEmail, Role: "admin", PasswordHash: "hash", Status: "active", EmailVerifiedAt: time.Now(), AuthVersion: 7}
+	other := User{Email: "other@example.com", Role: "admin", PasswordHash: "hash", Status: "active", EmailVerifiedAt: time.Now(), AuthVersion: 4}
+	for _, user := range []*User{&root, &other} {
+		if err := s.DB.Create(user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := s.migrateAdmin(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.DB.First(&root, root.ID).Error; err != nil || !root.IsSuperAdmin || root.AuthVersion != 8 {
+		t.Fatalf("bootstrap role migration: super=%v version=%d err=%v", root.IsSuperAdmin, root.AuthVersion, err)
+	}
+	if err := s.DB.First(&other, other.ID).Error; err != nil || other.IsSuperAdmin || other.AuthVersion != 4 {
+		t.Fatalf("unrelated admin changed: super=%v version=%d err=%v", other.IsSuperAdmin, other.AuthVersion, err)
+	}
+}
+
 func TestSettingsSecretsAndAtomicValidation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

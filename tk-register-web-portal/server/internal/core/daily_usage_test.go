@@ -107,8 +107,8 @@ func TestDailyUsageIdempotencyEmptyDaysStaleDataRateAndIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err = s.AccountDailyUsage(ctx, account.ID, "2026-11-14", "2026-11-14")
-	if err != nil || len(out.Rows) != 0 || out.Days[0].Status != "complete" || out.Days[0].CollectedAt == nil {
-		t.Fatal("confirmed empty day missing", out, err)
+	if err != nil || len(out.Rows) != 1 || out.Rows[0].InputTokens != "9007199254740993" || out.Days[0].Status != "complete" || out.Days[0].CollectedAt == nil {
+		t.Fatal("a later empty bill must not revise a saved successful day", out, err)
 	}
 	s.DB.Model(&SyncedAccount{}).Where("id = ?", account.ID).Update("identity_key", "new-lifetime")
 	if err = s.SaveDailyUsageAccount(ctx, *job, result, now); err == nil {

@@ -79,7 +79,8 @@ func (a *app) syncConfig(ctx context.Context) (accountSyncConfig, error) {
 
 func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route string) bool {
 	configRoute := route == "admin/account-sync" || strings.HasPrefix(route, "admin/account-sync/")
-	adminAccounts := route == "admin/synced-accounts" || strings.HasPrefix(route, "admin/synced-accounts/")
+	rawAccounts := route == "admin/raw-accounts" || strings.HasPrefix(route, "admin/raw-accounts/")
+	adminAccounts := rawAccounts || route == "admin/synced-accounts" || strings.HasPrefix(route, "admin/synced-accounts/")
 	if !configRoute && !adminAccounts && route != "accounts" && !strings.HasPrefix(route, "accounts/") {
 		return false
 	}
@@ -91,6 +92,24 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		if user.Role != "admin" {
 			fail(w, 403, "FORBIDDEN", "Administrator access is required.")
 			return true
+		}
+		if rawAccounts {
+			if !user.IsSuperAdmin {
+				fail(w, 403, "FORBIDDEN", "Super administrator access is required.")
+				return true
+			}
+			if r.Method != http.MethodGet {
+				fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
+				return true
+			}
+			switch route {
+			case "admin/raw-accounts/overview":
+				a.serveAccountsOverview(w, r, user.ID, true, true)
+				return true
+			case "admin/raw-accounts/overview/sources":
+				a.adminOverviewSources(w, r, user.ID)
+				return true
+			}
 		}
 		if configRoute {
 			a.adminAccountSync(w, r, route, user.ID)
@@ -113,6 +132,9 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 	}
 	if adminAccounts {
 		base = "admin/synced-accounts"
+		if rawAccounts {
+			base = "admin/raw-accounts"
+		}
 		lookupAccount = func(id uint64) (core.AccountDTO, error) {
 			return a.store.SyncedAccountForAdmin(r.Context(), id)
 		}
@@ -151,6 +173,10 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		fail(w, 404, "NOT_FOUND", "This endpoint does not exist.")
 		return true
 	}
+	if rawAccounts && len(parts) == 2 && parts[1] != "daily-usage" && parts[1] != "snapshots" {
+		fail(w, 404, "NOT_FOUND", "This endpoint does not exist.")
+		return true
+	}
 	id, err := core.ParseBusinessID(parts[0])
 	if err != nil {
 		vendorFailure(w, err)
@@ -180,7 +206,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "daily-usage" && r.Method == "GET" {
-		a.dailyUsageData(w, r, id, adminAccounts)
+		a.dailyUsageData(w, r, id, adminAccounts, rawAccounts)
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "auth-json" {

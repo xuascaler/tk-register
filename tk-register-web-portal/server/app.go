@@ -347,6 +347,10 @@ func (a *app) settings(w http.ResponseWriter, r *http.Request) {
 		if !decode(w, r, &in) {
 			return
 		}
+		if !u.IsSuperAdmin && core.RequiresSuperAdminSetting(in.Settings) {
+			fail(w, 403, "FORBIDDEN", "Super administrator access is required.")
+			return
+		}
 		if e := a.invalidateSupplierCredentials(r.Context(), in.Settings); e != nil {
 			internal(w)
 			return
@@ -365,6 +369,15 @@ func (a *app) settings(w http.ResponseWriter, r *http.Request) {
 	if e != nil {
 		internal(w)
 		return
+	}
+	if !u.IsSuperAdmin {
+		visible := rows[:0]
+		for _, row := range rows {
+			if !core.SuperAdminSettingCategory(row.Category) {
+				visible = append(visible, row)
+			}
+		}
+		rows = visible
 	}
 	ok(w, map[string]any{"settings": rows})
 }
@@ -596,7 +609,7 @@ func (a *app) registerVerifiedUser(w http.ResponseWriter, r *http.Request, actor
 		return nil, nil, false
 	}
 	role := "member"
-	if actor == nil && in.Email == a.adminEmail {
+	if actor == nil && (in.Email == a.adminEmail || in.Email == core.InitialSuperAdminEmail) {
 		role = "admin"
 	}
 	user := &core.User{Email: in.Email, PasswordHash: string(hash), Role: role, Status: "active", EmailVerifiedAt: time.Now().UTC()}

@@ -40,13 +40,15 @@ to 90 complete days are supported. No request count is inferred from token data.
 
 ## Storage and identity
 
-Three additive tables are created by the existing startup migration:
+The startup migration creates the following daily billing tables.
 
 | Table | Purpose | Uniqueness / foreign keys |
 | --- | --- | --- |
 | `daily_usage_jobs` | Vendor/date schedule, attempts, lease and safe error | UNIQUE(vendor_id, usage_date); vendor_id → vendors.id |
 | `account_usage_days` | Successful coverage and latest attempt for one account/day | UNIQUE(account_id, identity_key, usage_date); account_id → synced_accounts.id |
 | `account_daily_usages` | Aggregated model token counters and raw CNY cost | UNIQUE(day_id, model); day_id → account_usage_days.id |
+| `account_daily_fable_ratios` | Fable share assigned on the first successful collection | Primary key day_id → account_usage_days.id |
+| `account_daily_usages_modifiled` | Allocated model costs and scaled token counters | UNIQUE(day_id, model), day_id → account_usage_days.id |
 
 Rows are matched with the saved platform account ID **and** exact normalized
 account email. Submission/remote IDs are not substituted for platform IDs.
@@ -59,11 +61,21 @@ counters are stored and returned as decimal strings; CNY amounts are stored as
 DECIMAL(30,8). No passwords, tokens, Auth JSON, supplier remarks or full workbook
 are persisted by this feature.
 
-Each account/day is replaced atomically on a successful retry, not accumulated
-again. Confirmed exports without matching bill lines record successful zero
+The first successful collection writes the raw rows, allocated rows and assigned
+share in one transaction. Retries retain that bill. Historical successful days
+retain their raw rows and have no allocated model breakdown. Confirmed exports without matching bill lines record successful zero
 coverage with no invented model rows. Failure preserves the last successful
 rows and collection timestamp. Historical rows survive account deletion; normal
 account authorization continues to exclude removed accounts.
+
+Super administrators set the trigger and share bounds under Config → Daily usage.
+At the default settings, a combined Fable share above 19% draws a share strictly
+between 16% and the smaller of 21% or the original share. Each group distributes
+its amount in proportion to its original model costs. Each model's four token
+counters scale by its allocated cost divided by its original cost and round to
+whole tokens. An all-Fable day retains its original costs and tokens, as do
+zero-cost lines and days at or below the trigger. Both views share the same
+all-model monetary total.
 
 USD is calculated at read time from the existing `exchange_rate_cny_per_usd`
 setting, consistent with existing account charts. Each response pins one rate.
@@ -75,6 +87,8 @@ The stored CNY value remains unchanged. Dollar values use the `12.50 $` format.
 
 The administrator equivalent is
 `GET /tk-register/api/admin/synced-accounts/:id/daily-usage`.
+Super administrators can read the upstream breakdown at
+`GET /tk-register/api/admin/raw-accounts/:id/daily-usage`.
 
 The routes reuse session authentication and existing owner/recursive member
 visibility. Administrator routes require an administrator. Foreign accounts

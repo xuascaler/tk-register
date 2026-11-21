@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"strconv"
 	"strings"
@@ -50,6 +51,10 @@ type settingSpec struct {
 
 var specs = []settingSpec{
 	{"user_overview_model_costs_enabled", "overview", "boolean", "false", "Show model costs and model-level usage on personal account pages and APIs. Management views always retain model details.", 0, 0, nil},
+	{"model_usage_source", "overview", "enum", "modified", "Model costs and tokens shown in Accounts Overview and Daily usage.", 0, 0, []string{"modified", "raw"}},
+	{"fable_trigger_percent", "daily_usage", "decimal", "19", "Allocate the combined Fable cost when its share exceeds this percentage.", 0, 100, nil},
+	{"fable_min_percent", "daily_usage", "decimal", "16", "Lower bound for the allocated Fable share on a new account day.", 0, 100, nil},
+	{"fable_max_percent", "daily_usage", "decimal", "21", "Upper bound for the allocated Fable share, also capped by its original share.", 0, 100, nil},
 	{exchangeRateSettingKey, "exchange_rate", "decimal", defaultExchangeRate, "CNY per 1 USD. Used for current and historical account amounts, charts, and API responses. Default: 7.2. Greater than 0, up to 10000 and 6 decimal places.", 0, 10000, nil},
 	{"smtp_host", "email", "string", "", "SMTP server hostname.", 0, 253, nil},
 	{"smtp_port", "email", "integer", "587", "SMTP server port.", 1, 65535, nil},
@@ -82,6 +87,19 @@ var specs = []settingSpec{
 	{"account_sync_timezone", "account_sync", "enum", "Asia/Shanghai", "Timezone used for collection dates and account usage history.", 0, 0, []string{"Asia/Shanghai", "Asia/Singapore", "UTC"}},
 	{"account_sync_website_username", "account_sync", "string", "", "Administrator login username for the supplier website.", 0, 254, nil},
 	{"account_sync_website_password", "account_sync", "secret", "", "Encrypted at rest and never shown again. Leave blank to keep the saved password.", 0, 4096, nil},
+}
+
+func SuperAdminSettingCategory(category string) bool {
+	return category == "overview" || category == "daily_usage"
+}
+
+func RequiresSuperAdminSetting(changes map[string]string) bool {
+	for _, spec := range specs {
+		if _, changed := changes[spec.Key]; changed && SuperAdminSettingCategory(spec.Category) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) seedDefaults() error {
@@ -123,6 +141,26 @@ func (s *Store) values(db *gorm.DB) (Values, error) {
 }
 func (s *Store) Settings(ctx context.Context) (Values, error) { return s.values(s.DB.WithContext(ctx)) }
 
+// Capture both controls in one query so a request cannot mix settings from
+// before and after a switch to raw data.
+func (s *Store) ModelUsageSettings(ctx context.Context) (source string, personalDetails bool, err error) {
+	var rows []Setting
+	err = s.DB.WithContext(ctx).Select("key", "value").
+		Where(clause.IN{Column: clause.Column{Name: "key"}, Values: []any{"model_usage_source", "user_overview_model_costs_enabled"}}).Find(&rows).Error
+	source = "modified"
+	for _, row := range rows {
+		switch row.Key {
+		case "model_usage_source":
+			if row.Value == "raw" {
+				source = "raw"
+			}
+		case "user_overview_model_costs_enabled":
+			personalDetails = row.Value == "true"
+		}
+	}
+	return source, personalDetails && source != "raw", err
+}
+
 func (s *Store) Descriptors(ctx context.Context) ([]SettingDescriptor, error) {
 	values, err := s.Settings(ctx)
 	if err != nil {
@@ -160,6 +198,13 @@ func validate(spec settingSpec, value string) error {
 			return fmt.Errorf("must be an integer from %d to %d", spec.Min, spec.Max)
 		}
 	case "decimal":
+		if spec.Category == "daily_usage" {
+			number, err := strconv.ParseFloat(value, 64)
+			if err != nil || !plainDecimalPattern.MatchString(value) || number < 0 || number > 100 {
+				return errors.New("enter a percentage from 0 to 100 with up to 6 decimal places")
+			}
+			return nil
+		}
 		_, err := parseExchangeRate(value)
 		return err
 	case "enum":
@@ -218,6 +263,20 @@ func (s *Store) PatchSettings(ctx context.Context, changes map[string]string, ac
 				continue
 			}
 			values[key] = value
+		}
+		if values.String("model_usage_source") == "raw" && values.Bool("user_overview_model_costs_enabled") {
+			if changes["model_usage_source"] != "raw" {
+				return validationErrorf("select Modified data to enable personal model details")
+			}
+			changes = maps.Clone(changes)
+			changes["user_overview_model_costs_enabled"] = "false"
+			values["user_overview_model_costs_enabled"] = "false"
+		}
+		minimum, _ := strconv.ParseFloat(values["fable_min_percent"], 64)
+		trigger, _ := strconv.ParseFloat(values["fable_trigger_percent"], 64)
+		maximum, _ := strconv.ParseFloat(values["fable_max_percent"], 64)
+		if minimum >= trigger || minimum >= maximum {
+			return validationErrorf("the Fable minimum must be below both the trigger and the maximum")
 		}
 		if !values.Bool("password_login_enabled") && !values.Bool("email_code_login_enabled") {
 			return validationErrorf("at least one member sign-in method must remain enabled")

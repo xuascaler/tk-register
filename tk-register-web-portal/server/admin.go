@@ -35,7 +35,7 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 	// Overview only reads saved account and bill data. It must not recover
 	// executions, mutate submissions, or trigger supplier requests.
 	if route == "admin/accounts/overview" {
-		a.serveAccountsOverview(w, r, actor.ID, true)
+		a.serveAccountsOverview(w, r, actor.ID, true, false)
 		return true
 	}
 	if route == "admin/accounts/overview/sources" {

@@ -21,9 +21,16 @@ func seedVisibilityBills(t *testing.T, a *app, account core.SyncedAccount) strin
 		if err := a.store.DB.Create(&day).Error; err != nil {
 			t.Fatal(err)
 		}
+		if err := a.store.DB.Create(&core.AccountDailyFableRatio{DayID: day.ID, FableRatio: "0"}).Error; err != nil {
+			t.Fatal(err)
+		}
 		for _, model := range []string{"private-model-one", "private-model-two"} {
 			bill := core.AccountDailyUsage{DayID: day.ID, Model: model, CostCNY: "0.10000001", InputTokens: "9007199254740993", OutputTokens: "11", CacheReadTokens: "3", CacheWriteTokens: "4"}
 			if err := a.store.DB.Create(&bill).Error; err != nil {
+				t.Fatal(err)
+			}
+			allocated := core.AccountDailyUsageModified(bill)
+			if err := a.store.DB.Create(&allocated).Error; err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -173,6 +180,7 @@ func TestPersonalTotalsDistinguishCollectedZeroAndUnavailable(t *testing.T) {
 			out.Sources[0].CostUSD = &zero
 			out.Sources[0].CollectedDays = 1
 			daily.Days[0].Status, daily.Days[0].CollectedAt = "complete", &now
+			daily.TotalCostUSD = &zero
 		}
 		overview, err := personalOverview(out, false)
 		if err != nil || (overview.TotalCostUSD != nil) != collected || overview.TotalCostUSD != nil && *overview.TotalCostUSD != 0 {

@@ -3,7 +3,18 @@ export const dailyMetrics: Record<DailyMetric, string> = { cost_usd: 'Cost', inp
 export type DailyRow = { date: string; model: string; input_tokens: string; output_tokens: string; cache_read_tokens: string; cache_write_tokens: string; cost_cny: string; cost_usd: number };
 export type DailyTotal = Omit<DailyRow, 'model'>;
 export type DailyDay = { date: string; status: 'complete' | 'stale' | 'missing' | 'failed' | 'pending'; collected_at: string | null; error?: string };
-export type DailyData = { start_date: string; end_date: string; timezone: string; collection_time: string; currency: string; exchange_rate_cny_per_usd: number; model_costs_enabled?: boolean; total_cost_usd?: number | null; daily_totals?: DailyTotal[]; rows?: DailyRow[]; days: DailyDay[] };
+export type ModelUsageLedger = {
+  model_usage_source?: 'raw' | 'modified';
+  total_cost_usd?: number | null;
+  total_cost_days?: number;
+  daily_costs?: { date: string; cost_usd: number | null; collected: number; expected: number }[];
+};
+export function modelUsageLabel(source?: 'raw' | 'modified') {
+  if (source === 'modified') return 'Allocated costs and estimated tokens';
+  if (source === 'raw') return 'Upstream costs and tokens';
+  return 'Daily costs and tokens';
+}
+export type DailyData = ModelUsageLedger & { start_date: string; end_date: string; timezone: string; collection_time: string; currency: string; exchange_rate_cny_per_usd: number; model_costs_enabled?: boolean; daily_totals?: DailyTotal[]; rows?: DailyRow[]; days: DailyDay[] };
 export type ModelSelection = string[] | null;
 export function recentDailyRange(count: number, now = new Date()) {
   const china = new Date(now.getTime() + 8 * 3600_000).toISOString().slice(0, 10);

@@ -8,7 +8,7 @@ export function ModelFilter({ models, value, onChange }: { models: string[]; val
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLDivElement>(null), input = useRef<HTMLInputElement>(null), allBox = useRef<HTMLInputElement>(null);
   const [position, setPosition] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const selected = value === null ? models : models.filter(model => value.includes(model));
-  const all = selected.length === models.length;
+  const all = value === null || (models.length > 0 && selected.length === models.length);
   function close(restore = false) { setOpen(false); if (restore) trigger.current?.focus(); }
   useLayoutEffect(() => { if (allBox.current) allBox.current.indeterminate = selected.length > 0 && !all; }, [selected.length, all, open, position]);
   useLayoutEffect(() => { if (open && position) input.current?.focus({ preventScroll: true }); }, [open, !!position]);
@@ -32,7 +32,7 @@ export function ModelFilter({ models, value, onChange }: { models: string[]; val
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('focusin', outside); document.removeEventListener('keydown', key); };
   }, [open]);
   return <div className='daily-model-filter tk-select'><label id='daily-model-label' htmlFor='daily-model-trigger'>Models</label>
-    <button ref={trigger} id='daily-model-trigger' className='tk-select-trigger' type='button' disabled={!models.length} aria-expanded={open} aria-haspopup='dialog' aria-controls={open ? 'daily-model-menu' : undefined} onClick={() => { setSearch(''); setOpen(v => !v); }} onKeyDown={e => { if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); } }}><span>{value === null || all ? 'All models' : selected.length ? 'Selected models' : 'Select models'}</span><ChevronDown aria-hidden='true' /></button>
+    <button ref={trigger} id='daily-model-trigger' className='tk-select-trigger' type='button' disabled={!models.length && value === null} aria-expanded={open} aria-haspopup='dialog' aria-controls={open ? 'daily-model-menu' : undefined} onClick={() => { setSearch(''); setOpen(v => !v); }} onKeyDown={e => { if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); } }}><span>{value === null || all ? 'All models' : selected.length ? 'Selected models' : 'Select models'}</span><ChevronDown aria-hidden='true' /></button>
     {open && position && createPortal(<div ref={menu} id='daily-model-menu' className='member-source-menu daily-model-menu' role='dialog' aria-labelledby='daily-model-label' style={position}>
       <label className='daily-model-search'><Search aria-hidden='true' /><input ref={input} type='search' aria-label='Search models' placeholder='Search models' value={search} onChange={e => setSearch(e.target.value)} /></label>
       <label className='member-source-choice member-source-all'><input ref={allBox} type='checkbox' checked={all} onChange={() => onChange(all ? [] : null)} /><span>Select all</span></label>

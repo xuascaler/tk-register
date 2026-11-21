@@ -33,6 +33,7 @@ type User struct {
 	ID              uint64    `gorm:"primaryKey" json:"id"`
 	Email           string    `gorm:"size:50;not null;uniqueIndex" json:"email"`
 	Role            string    `gorm:"size:16;not null" json:"role"`
+	IsSuperAdmin    bool      `gorm:"not null;default:false" json:"is_super_admin"`
 	Status          string    `gorm:"size:16;not null" json:"status"`
 	AuthVersion     uint64    `gorm:"not null;default:0" json:"-"`
 	PasswordHash    string    `gorm:"size:255;not null" json:"-"`
@@ -260,6 +261,7 @@ func (s *Store) createHierarchyUser(ctx context.Context, user *User) error {
 	if user.Role != "member" && user.Role != "admin" {
 		return errors.New("invalid user role")
 	}
+	user.IsSuperAdmin = user.Role == "admin" && user.Email == InitialSuperAdminEmail
 	if user.Status == "" {
 		user.Status = "active"
 	}

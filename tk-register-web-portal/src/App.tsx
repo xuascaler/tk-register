@@ -70,7 +70,7 @@ function Account({ user, status, tab, onTab, onViewAccounts, onPasswordChanged }
         <div className='account-row'>
           <div className='account-label'>Account role</div>
           <div className='account-value'>
-            {user.role === 'admin' ? 'Administrator' : 'Member'}
+            {user.is_super_admin ? 'Super administrator' : user.role === 'admin' ? 'Administrator' : 'Member'}
           </div>
         </div>
       </section>
@@ -108,6 +108,7 @@ type Route = {
   config?: string;
   settingsTab?: 'general' | 'members';
   accountsTab?: 'overview' | 'list';
+  raw?: boolean;
   backAccount?: string;
   backAccountUsage?: boolean;
   docTopic?: DocTopic;
@@ -126,24 +127,26 @@ function readRoute(): Route {
   if (segments[0] === 'account-pool') {
     const back = new URLSearchParams(query);
     if (segments[1] === 'submissions') return segments[2]
-      ? { page: 'pool-submission', id: segments[2], backAccount: back.get('synced_account') || back.get('account') || undefined, backAccountUsage: !!back.get('synced_account') }
+      ? { page: 'pool-submission', id: segments[2], backAccount: back.get('synced_account') || back.get('account') || undefined, backAccountUsage: !!back.get('synced_account'), raw: back.get('from') === 'raw' }
       : { page: 'pool-history' };
-    return segments[2] ? { page: segments[3] === 'usage' ? 'pool-account-usage' : 'pool-account', id: segments[2] } : { page: 'pool-accounts', accountsTab: back.get('tab') === 'list' ? 'list' : 'overview' };
+    const raw = segments[1] === 'raw-accounts';
+    return segments[2] ? { raw, page: raw || segments[3] === 'usage' ? 'pool-account-usage' : 'pool-account', id: segments[2] } : { page: 'pool-accounts', raw, accountsTab: back.get('tab') === 'list' ? 'list' : 'overview' };
   }
   if (segments[0] === 'accounts') return segments[1] ? { page: 'account-usage', id: segments[1] } : { page: 'accounts', accountsTab: new URLSearchParams(query).get('tab') === 'list' ? 'list' : 'overview' };
   if (segments[0] === 'submissions') return segments[1] ? { page: 'detail', id: segments[1], backAccount: new URLSearchParams(query).get('account') || undefined } : { page: 'history' };
   if (segments[0] === 'account') return { page: 'account', settingsTab: segments[1] === 'members' ? 'members' : 'general' };
   if (segments[0] === 'config') return {
-    page: 'config', config: ['email', 'access', 'verification', 'sessions', 'vendors', 'account_sync', 'overview', 'users', 'bill_exports'].includes(segments[1]) ? segments[1] : 'email',
+    page: 'config', config: ['email', 'access', 'verification', 'sessions', 'vendors', 'account_sync', 'daily_usage', 'overview', 'users', 'bill_exports'].includes(segments[1]) ? segments[1] : 'email',
   };
   return { page: 'submit' };
 }
 function routeHash(route: Route) {
   if (route.page === 'account') return route.settingsTab === 'members' ? '#/account/members' : '#/account';
   if (route.page === 'docs') return `#/docs${route.docTopic ? `/${route.docTopic}` : ''}${route.docTopic && route.docTopic !== 'getting-started' && route.docSection && route.docSection !== 'parameters' ? `/${route.docSection}` : ''}`;
-  if (route.page === 'pool-account-usage') return `#/account-pool/accounts/${encodeURIComponent(route.id || '')}/usage`;
-  if (route.page === 'pool-accounts' || route.page === 'pool-account') return `#/account-pool/accounts${route.id ? `/${encodeURIComponent(route.id)}` : route.accountsTab === 'list' ? '?tab=list' : ''}`;
-  if (route.page === 'pool-history' || route.page === 'pool-submission') return `#/account-pool/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?${route.backAccountUsage ? 'synced_account' : 'account'}=${encodeURIComponent(route.backAccount)}` : ''}`;
+  const poolAccountsPath = route.raw ? '#/account-pool/raw-accounts' : '#/account-pool/accounts';
+  if (route.page === 'pool-account-usage') return `${poolAccountsPath}/${encodeURIComponent(route.id || '')}/usage`;
+  if (route.page === 'pool-accounts' || route.page === 'pool-account') return `${poolAccountsPath}${route.id ? `/${encodeURIComponent(route.id)}` : route.accountsTab === 'list' ? '?tab=list' : ''}`;
+  if (route.page === 'pool-history' || route.page === 'pool-submission') return `#/account-pool/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?${route.backAccountUsage ? 'synced_account' : 'account'}=${encodeURIComponent(route.backAccount)}${route.raw ? '&from=raw' : ''}` : ''}`;
   if (route.page === 'accounts' || route.page === 'account-usage') return `#/accounts${route.id ? `/${encodeURIComponent(route.id)}` : route.accountsTab === 'list' ? '?tab=list' : ''}`;
   if (route.page === 'history' || route.page === 'detail') return `#/submissions${route.id ? `/${encodeURIComponent(route.id)}` : ''}${route.backAccount ? `?account=${encodeURIComponent(route.backAccount)}` : ''}`;
   if (route.page === 'config') return `#/config${route.config && route.config !== 'email' ? `/${route.config}` : ''}`;
@@ -161,6 +164,7 @@ export default function App() {
   const isPoolPage = page.startsWith('pool-');
   const isAccountsPage = page === 'accounts' || page === 'account-usage' || (page === 'detail' && !!route.backAccount);
   const isHistoryPage = page === 'history' || (page === 'detail' && !route.backAccount);
+  const poolAccountsActive = page === 'pool-accounts' || page === 'pool-account' || page === 'pool-account-usage' || (page === 'pool-submission' && !!route.backAccount);
   const [poolOpen, setPoolOpen] = useState(isPoolPage);
   useEffect(() => { if (isPoolPage) setPoolOpen(true); }, [isPoolPage]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -225,7 +229,7 @@ export default function App() {
     );
   function navigate(next: Route, confirmed = false, restoredList?: AccountListReturn) {
     const hash = restoredList?.hash || routeHash(next);
-    const sameList = !restoredList && route.page === next.page && route.accountsTab === 'list' && next.accountsTab === 'list';
+    const sameList = !restoredList && !!route.raw === !!next.raw && route.page === next.page && route.accountsTab === 'list' && next.accountsTab === 'list';
     if (hash === window.location.hash || sameList) {
       setMenuOpen(false);
       return;
@@ -235,7 +239,7 @@ export default function App() {
       setRoute(next);
       const adminChain = next.page === 'pool-account-usage' || next.page === 'pool-account' || next.page === 'pool-submission' && !!next.backAccount;
       const memberChain = next.page === 'account-usage' || next.page === 'detail' && !!next.backAccount;
-      const context = restoredList || (user && (adminChain || memberChain) ? readAccountListReturn(user.id, adminChain) : null);
+      const context = restoredList || (user && (adminChain || memberChain) ? readAccountListReturn(user.id, adminChain, next.raw) : null);
       const leavingList = route.accountsTab === 'list' && (route.page === 'accounts' || route.page === 'pool-accounts');
       // Each new list visit and its detail chain keep separate scroll snapshots.
       // Scrolling a browser Back destination must not change an older detail's return position.
@@ -253,8 +257,8 @@ export default function App() {
     }
   }
   function backToAccountList(admin: boolean) {
-    const saved = user ? readAccountListReturn(user.id, admin) : null;
-    navigate({ page: admin ? 'pool-accounts' : 'accounts', accountsTab: 'list' }, false, saved || undefined);
+    const saved = user ? readAccountListReturn(user.id, admin, route.raw) : null;
+    navigate({ page: admin ? 'pool-accounts' : 'accounts', raw: route.raw, accountsTab: 'list' }, false, saved || undefined);
   }
   useEffect(() => {
     const followHistory = () => {
@@ -493,7 +497,8 @@ export default function App() {
                     <Layers aria-hidden='true' />Account pool<ChevronDown className={poolOpen ? 'is-expanded' : ''} aria-hidden='true' />
                   </button>
                   {poolOpen && <div className='admin-subnav' id='account-pool-nav'>
-                    <button className={`nav-item ${page === 'pool-accounts' || page === 'pool-account' || page === 'pool-account-usage' || (page === 'pool-submission' && route.backAccount) ? 'current' : ''}`} aria-current={page === 'pool-accounts' || page === 'pool-account' || page === 'pool-account-usage' || (page === 'pool-submission' && route.backAccount) ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts' })}>Accounts</button>
+                    <button className={`nav-item ${poolAccountsActive && !route.raw ? 'current' : ''}`} aria-current={poolAccountsActive && !route.raw ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts' })}>Accounts</button>
+                    {user.is_super_admin && <button className={`nav-item ${poolAccountsActive && route.raw ? 'current' : ''}`} aria-current={poolAccountsActive && route.raw ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts', raw: true })}>Raw account</button>}
                     <button className={`nav-item ${page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'current' : ''}`} aria-current={page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'page' : undefined} onClick={() => navigate({ page: 'pool-history' })}>Submission history</button>
                   </div>}
                 </div>
@@ -527,16 +532,18 @@ export default function App() {
             <ErrorNotice>{error}</ErrorNotice>
             {(page === 'config' || isPoolPage) && user.role !== 'admin' ? (
               <><h1>Admin access required</h1><p className='subtitle'>This page is available to administrators.</p><button className='button secondary' onClick={() => navigate({ page: 'history' })}>Your submission history</button></>
+            ) : route.raw && !user.is_super_admin ? (
+              <><h1>Super admin access required</h1><button className='button secondary' onClick={() => navigate({ page: 'pool-accounts' })}>Back to Accounts</button></>
             ) : page === 'pool-accounts' ? (
-              <AccountsWorkspace key='admin-accounts' userID={user.id} admin tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'pool-accounts', accountsTab })} onOpen={id => navigate({ page: 'pool-account-usage', id })} />
+              <AccountsWorkspace key={route.raw ? 'raw-accounts' : 'admin-accounts'} raw={route.raw} userID={user.id} admin tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'pool-accounts', raw: route.raw, accountsTab })} onOpen={id => navigate({ page: 'pool-account-usage', raw: route.raw, id })} />
             ) : page === 'pool-account-usage' && route.id ? (
-              <AccountUsageDetails key={`admin-${route.id}`} admin id={route.id} onBack={() => backToAccountList(true)} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id, backAccountUsage: true })} />
+              <AccountUsageDetails key={`${route.raw ? 'raw' : 'admin'}-${route.id}`} raw={route.raw} admin id={route.id} onBack={() => backToAccountList(true)} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id, backAccountUsage: true, raw: route.raw })} />
             ) : page === 'pool-account' && route.id ? (
               <PoolAccountDetails key={route.id} id={route.id} onBack={() => backToAccountList(true)} onSubmission={id => navigate({ page: 'pool-submission', id, backAccount: route.id })} />
             ) : page === 'pool-history' ? (
               <AdminHistory onOpen={id => navigate({ page: 'pool-submission', id })} />
             ) : page === 'pool-submission' && route.id ? (
-              <SubmissionDetails key={`admin-${route.id}`} id={route.id} endpointPrefix='/admin/submissions' backLabel={route.backAccount ? 'Account details' : 'All submission history'} onBack={() => navigate(route.backAccount ? { page: route.backAccountUsage ? 'pool-account-usage' : 'pool-account', id: route.backAccount } : { page: 'pool-history' })} />
+              <SubmissionDetails key={`admin-${route.id}`} id={route.id} endpointPrefix='/admin/submissions' backLabel={route.backAccount ? 'Account details' : 'All submission history'} onBack={() => navigate(route.backAccount ? { page: route.backAccountUsage ? 'pool-account-usage' : 'pool-account', id: route.backAccount, raw: route.raw } : { page: 'pool-history' })} />
             ) : page === 'config' ? (
               <Config
                 key={route.config}

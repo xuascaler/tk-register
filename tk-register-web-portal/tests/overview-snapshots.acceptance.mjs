@@ -61,7 +61,7 @@ try {
     });
     const overviewCalls = () => calls.filter(call => call.path === endpoint);
     const cents = value => value.trim() === '—' ? null : Math.round(Number(value.replace(/[,$\s]/g, '')) * 100);
-    async function assertCostDisplays() {
+    async function assertCostDisplays(allModels = true) {
       const total = cents(await page.locator('.overview-summary-spent strong').innerText());
       assert.notEqual(total, null);
       assert.equal(cents(await page.locator('.overview-period-total').innerText()), total);
@@ -71,7 +71,7 @@ try {
       assert.equal(cards.reduce((sum, value) => sum + (cents(value) || 0), 0), total);
       const rows = await page.locator('.overview-source-table tbody .overview-cost').allTextContents();
       assert.equal(rows.reduce((sum, value) => sum + (cents(value) || 0), 0), total);
-      assert.equal(await page.getByText('Total spent · selected period', { exact: true }).count(), 1);
+      assert.equal(await page.locator('.overview-summary-spent .overview-stat-label').innerText(), allModels ? 'Total spent · selected period' : 'Selected model subtotal');
       assert.doesNotMatch(await page.locator('.accounts-overview').innerText(), /cumulative/i);
       await page.getByRole('group', { name: 'Source breakdown' }).getByRole('button', { name: 'Model costs', exact: true }).click();
       for (const row of await page.locator('.overview-source-table tbody tr').all()) {
@@ -157,7 +157,7 @@ try {
     assert.equal(await page.locator('.overview-model-grid > div').count(), 1);
     assert.equal(overviewCalls().length, modelCalls);
     assert.deepEqual(await page.locator('.overview-summary-top > div:first-child .overview-stat-value,.overview-status-grid strong').allTextContents(), countsBefore);
-    await assertCostDisplays();
+    await assertCostDisplays(false);
     assert.notEqual(await page.locator('.overview-chart-total strong').innerText(), totalBefore);
     await page.screenshot({ path: `test-results/overview-snapshot-stale-${admin ? 'admin' : 'member'}.png`, fullPage: true });
 
@@ -170,7 +170,7 @@ try {
     assert.equal(await page.locator('.overview-source-table tbody tr').count(), 1);
     assert.match(await page.locator('.overview-usage .overview-section-heading p').innerText(), new RegExp(`${currentWeek.start} – ${currentWeek.end}`));
     assert.equal(await page.locator('.overview-period-range').count(), 0);
-    await assertCostDisplays();
+    await assertCostDisplays(false);
 
     if (admin) {
     // Applying dates is intentionally custom, even when exactly equal to Past 7 days.
@@ -200,7 +200,7 @@ try {
     await page.locator('.overview-daily-chart.is-curve').waitFor();
     assert.deepEqual(Object.fromEntries(overviewCalls().at(-1).query), { sources: 'all', ...(admin ? { models: 'all' } : {}), period: 'month' });
     assert.match(await page.locator('.overview-updated').innerText(), /^Summary generated/);
-    await assertCostDisplays();
+    await assertCostDisplays(false);
     const costTotal = await page.locator('.overview-summary-spent strong').innerText();
     for (const label of ['Input tokens', 'Output tokens', 'Cost']) {
       await page.getByRole('group', { name: 'Daily chart metric' }).getByRole('button', { name: label, exact: true }).click();
