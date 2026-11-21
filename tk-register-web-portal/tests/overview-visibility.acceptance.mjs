@@ -73,6 +73,8 @@ try {
         ...(details ? { rows, model_costs: [{ source_id: 'myself', model: 'claude-private-example', cost_cny: '0.216', cost_usd: days.length * 3 / 100 }] } : { daily_totals, total_cost_usd: days.length * 3 / 100 }) });
     }
     if (['/accounts/1','/admin/raw-accounts/1','/admin/synced-accounts/1'].includes(path)) return ok({ account, interval_seconds: 300, timezone: 'Asia/Shanghai', snapshots: [], snapshot_count: 0, trend: { cost_total_usd: [], input_tokens_total: [], output_tokens_total: [] } });
+    if (req.method() === 'GET' && path === '/admin/synced-accounts/1/auth-json') return ok({ account: account.account, plan: account.plan, editable: true });
+    if (req.method() === 'GET' && path === '/admin/synced-accounts/1/deactivate') return ok({ account: account.account, plan: account.plan, available: true });
     unknown.push(path);
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'Unexpected mock request' }) });
   });
@@ -252,11 +254,26 @@ try {
     assert.equal(await page.locator('.overview-summary-spent strong').innerText(),'400.00 $');
     assert.equal(await page.locator('.overview-model-grid strong').count(),raw?1:0);
     if (!raw) await page.getByText('No model usage data for this period.',{exact:true}).waitFor();
+    const detailStart = calls.length;
     await goto(`${pool}/1/usage?tab=daily-usage`);
     await page.getByRole('heading',{name:'Daily breakdown',exact:true}).waitFor();
     assert.equal(await page.locator('.daily-summary strong').first().innerText(),'400.00 $');
     assert.equal(await page.locator('.daily-table tbody tr').count(),raw?1:0);
-    if (!raw) {
+    if (raw) {
+      const detailReads = calls.slice(detailStart).filter(call => call.method === 'GET').map(call => call.path);
+      assert.ok(detailReads.includes('/admin/raw-accounts/1'));
+      assert.ok(detailReads.includes('/admin/raw-accounts/1/daily-usage'));
+      assert.ok(!detailReads.includes('/admin/synced-accounts/1'));
+      await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+      for (const [button, action] of [['Update Auth JSON', 'auth-json'], ['Deactivate', 'deactivate']]) {
+        const [response] = await Promise.all([
+          page.waitForResponse(res => new URL(res.url()).pathname === `/tk-register/api/admin/synced-accounts/1/${action}` && res.request().method() === 'GET'),
+          page.getByRole('button', { name: button, exact: true }).click(),
+        ]);
+        assert.equal(response.status(), 200);
+        await page.getByRole('dialog').getByRole('button', { name: 'Close dialog' }).click();
+      }
+    } else {
       assert.equal(await page.locator('.daily-summary strong').nth(1).innerText(),'—');
       await page.getByRole('heading',{name:'No model usage data for this period.'}).waitFor();
     }

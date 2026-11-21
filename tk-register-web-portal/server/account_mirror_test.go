@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +73,23 @@ func TestAccountMirrorAccessAndSettings(t *testing.T) {
 	newCookie := &http.Cookie{Name: cookieName, Value: token}
 	patch(newCookie, newSession.CSRF, map[string]string{"fable_trigger_percent": "20"}, 200)
 	requireStatus(t, request(t, a, "GET", "admin/raw-accounts", nil, newCookie, ""), 200)
+}
+
+func TestRawAccountExcludesCredentialFlows(t *testing.T) {
+	for _, purpose := range []string{"auth-json", "deactivate"} {
+		t.Run(purpose, func(t *testing.T) {
+			a, _, _, _, target, _ := setupAuthUpdate(t)
+			root, cookie, csrf := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
+			var calls atomic.Int32
+			authFlowHelper(t, root.ID, target.Account, &calls)
+			path := fmt.Sprintf("/%d/%s/flows/", target.ID, purpose)
+			input := map[string]any{"proxy_url": testCredentialProxy, "mode": "oauth"}
+			requireStatus(t, request(t, a, "POST", "admin/synced-accounts"+path+"start", input, cookie, csrf), 200)
+			requireStatus(t, request(t, a, "GET", "admin/synced-accounts"+path+testCredentialFlowID, nil, cookie, ""), 200)
+			requireStatus(t, request(t, a, "GET", "admin/raw-accounts"+path+testCredentialFlowID, nil, cookie, ""), 404)
+			requireStatus(t, request(t, a, "POST", "admin/raw-accounts"+path+"start", input, cookie, csrf), 405)
+		})
+	}
 }
 
 func TestCollectedAccountMirrorThroughAccountsAndRawAccount(t *testing.T) {
