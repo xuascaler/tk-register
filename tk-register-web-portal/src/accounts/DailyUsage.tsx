@@ -4,7 +4,7 @@ import { errorMessage, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import { formatTime } from './helpers';
 import { ModelFilter } from './ModelFilter';
-import { modelUsageLabel, dailyDate, dailyMetrics, dailyModels, dailyMoney, dailySeries, dailyTokens, dailyTotals, filterDailyRows, recentDailyRange, validDailyRange, type DailyData, type DailyMetric, type ModelSelection } from './daily-usage';
+import { dailyDate, dailyMetrics, dailyModels, dailyMoney, dailySeries, dailyTokens, dailyTotals, filterDailyRows, recentDailyRange, validDailyRange, type DailyData, type DailyMetric, type ModelSelection } from './daily-usage';
 import { OverviewChart } from './OverviewChart';
 import type { OverviewData } from './overview';
 import './daily-usage.css';
@@ -81,7 +81,7 @@ export function DailyUsage({ endpoint, compact, onOpen }: { endpoint: string; co
   const visiblePage = Math.min(page, pageCount), pageRows = rows.slice((visiblePage - 1) * 20, visiblePage * 20);
   function changeRange(next: typeof range) { setRange(next); setDraft(next); setPage(1); setDateError(''); }
   return <section className={`daily-usage ${compact ? 'daily-compact' : ''}`} aria-labelledby='daily-usage-title'>
-    <div className='daily-heading'><div><h2 id='daily-usage-title'>Daily usage</h2><p className='usage-small'>{modelUsageLabel(data?.model_usage_source)}{modelCostsEnabled ? ' by model.' : ' for all models.'}</p></div>{compact && <button className='usage-text-button' onClick={onOpen}>View daily details<ArrowUpRight aria-hidden='true' /></button>}</div>
+    <div className='daily-heading'><div><h2 id='daily-usage-title'>Daily usage</h2><p className='usage-small'>Daily tokens and cost, {modelCostsEnabled ? 'broken down by model.' : 'for all models.'}</p></div>{compact && <button className='usage-text-button' onClick={onOpen}>View daily details<ArrowUpRight aria-hidden='true' /></button>}</div>
     <div className='daily-filters'>
       <div className='daily-date-control'><span className='daily-filter-label'>Date range</span><div className='daily-presets'>{[7, 30].map(count => { const preset = recentDailyRange(count); return <button type='button' key={count} aria-pressed={range.start === preset.start && range.end === preset.end} onClick={() => changeRange(preset)}>Last {count} days</button>; })}</div></div>
       {!compact && <form className='daily-custom-dates' onSubmit={e => { e.preventDefault(); if (!validDailyRange(draft.start, draft.end)) { setDateError('Choose up to 90 complete days, ending no later than yesterday.'); return; } changeRange(draft); }}>
