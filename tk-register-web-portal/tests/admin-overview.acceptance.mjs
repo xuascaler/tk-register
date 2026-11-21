@@ -122,7 +122,7 @@ try {
   assert.equal(await page.locator('.overview-model-grid > div').count(), 1);
   assert.equal(overviewCalls(true).length, beforeModels);
   await page.getByRole('group', { name: 'Source breakdown' }).getByRole('button', { name: 'Model costs', exact: true }).click();
-  assert.deepEqual(await page.locator('.overview-source-table thead th').allTextContents(), ['User', 'claude-sonnet-4-5', 'Period total']);
+  assert.deepEqual(await page.locator('.overview-source-table thead th').allTextContents(), ['User', 'claude-sonnet-4-5', 'Model subtotal']);
   await page.getByRole('button', { name: /^Usage date range:/ }).click();
   await page.getByRole('dialog', { name: 'Usage dates', exact: true }).getByRole('button', { name: 'All time', exact: true }).click();
   await page.locator('.overview-daily-chart.is-curve').waitFor();

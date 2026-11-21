@@ -20,7 +20,7 @@ export function syncRetryLabel(seconds: number, stage?: RetryStage): string {
 }
 
 // Opening or changing the list reads saved data only. Supplier reads are explicit.
-export function loadAccountPage(endpoint: AccountListEndpoint, params: URLSearchParams, signal: AbortSignal) {
+export function loadAccountPage(endpoint: AccountListEndpoint | '/admin/raw-accounts', params: URLSearchParams, signal: AbortSignal) {
   return request<AccountPage>(`${endpoint}?${params}`, { signal });
 }
 

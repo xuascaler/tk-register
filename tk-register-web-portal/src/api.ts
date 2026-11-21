@@ -1,6 +1,7 @@
 export type User = {
   id: number;
   email: string;
+  is_super_admin?: boolean;
   role: 'admin' | 'member';
   status: string;
   created_at: string;

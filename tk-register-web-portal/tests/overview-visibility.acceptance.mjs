@@ -11,7 +11,8 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
   const errors = [], calls = [], unknown = [];
-  let enabled = false;
+  let enabled = false, modelSource = 'modified', superAdmin = true, historicalOnly = false;
+  const delegate = { id: '2', email: 'delegate@example.com', role: 'admin', is_super_admin: false, status: 'active', created_at: '2026-11-01T08:00:00Z' };
   page.on('pageerror', error => errors.push(error.message));
   const yesterday = new Date(Date.parse(new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)) - 86400_000).toISOString().slice(0, 10);
   const before = (date, days) => new Date(Date.parse(date) - days * 86400_000).toISOString().slice(0, 10);
@@ -22,13 +23,39 @@ try {
     calls.push({ path, method: req.method(), query: url.searchParams });
     const ok = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
     if (path === '/auth/status') return ok({ registration_enabled: false, password_login_enabled: true, email_code_login_enabled: true });
-    if (path === '/auth/me') return ok({ user: { id: 1, email: 'alex@example.com', role: 'admin', status: 'active' }, csrf_token: 'fake-csrf' });
-    if (path === '/members/sources' || path === '/admin/accounts/overview/sources') return ok({ sources: sources.map(({ id, label }) => ({ id, label })) });
-    if (path === '/admin/settings') {
-      if (req.method() === 'PUT') enabled = req.postDataJSON().settings.user_overview_model_costs_enabled === 'true';
-      return ok({ settings: [{ key: 'user_overview_model_costs_enabled', category: 'overview', type: 'boolean', value: String(enabled), description: 'Enable model costs on personal Overview pages.', read_only: false }] });
+    if (path === '/auth/me') return ok({ user: { id: 1, email: 'alex@example.com', role: 'admin', is_super_admin: superAdmin, status: 'active' }, csrf_token: 'fake-csrf' });
+    if (path === '/members/sources' || path === '/admin/accounts/overview/sources' || path === '/admin/raw-accounts/overview/sources') return ok({ sources: sources.map(({ id, label }) => ({ id, label })) });
+    if (path === '/admin/users') return ok({items:[delegate], total:1,page:1,page_size:20});
+    if (path === '/admin/users/role') {
+      assert.deepEqual(req.postDataJSON(), {email: delegate.email, role:'super_admin'});
+      delegate.is_super_admin = true;
+      return ok({user:delegate});
     }
-    if (path === '/accounts/overview' || path === '/admin/accounts/overview' || path === '/accounts/1/daily-usage') {
+    if (path === '/admin/settings') {
+      if (req.method() === 'PUT') {
+        const patch = req.postDataJSON().settings;
+        if ('user_overview_model_costs_enabled' in patch) enabled = patch.user_overview_model_costs_enabled === 'true';
+        modelSource = patch.model_usage_source || modelSource;
+        assert.ok(modelSource !== 'raw' || !enabled);
+      }
+      return ok({ settings: [{ key: 'user_overview_model_costs_enabled', category: 'overview', type: 'boolean', value: String(enabled), description: 'Enable model costs on personal Overview pages.', read_only: false }, { key: 'model_usage_source', category: 'overview', type: 'enum', options: ['modified', 'raw'], value: modelSource, description: 'Model usage source' }] });
+    }
+    if (historicalOnly && (path.endsWith('/daily-usage') || path.endsWith('/overview'))) {
+      const date = yesterday;
+      const daily = path.endsWith('/daily-usage');
+      const raw = path.startsWith('/admin/raw-accounts');
+      const model = 'claude-fable-example';
+      const bill = {date, model, input_tokens:'100',output_tokens:'17',cache_write_tokens:'0',cache_read_tokens:'3',cost_usd:400,cost_cny:'2880'};
+      return ok({
+        model_usage_source:raw?'raw':'modified', model_costs_enabled:true, total_cost_usd:400, total_cost_days:1,
+        start_date:date,end_date:date,earliest_date:date,timezone:'Asia/Shanghai',collection_time:'03:00',exchange_rate_cny_per_usd:7.2,
+        latest_account_data:null,daily_costs:[{date,collected:1,expected:1,cost_usd:400}],
+        sources:[{...sources[0],cost_usd:400,collected_days:raw?1:0}], rows:raw?[bill]:[],
+        model_costs:raw?[{source_id:'myself',model,cost_cny:'2880',cost_usd:400}]:[],
+        days:daily?[{date,status:raw?'complete':'missing',collected_at:raw?new Date().toISOString():null}]:[{date,status:raw?'complete':'missing',expected:1,collected:raw?1:0}]
+      });
+    }
+    if (path === '/accounts/overview' || path === '/admin/accounts/overview' || path === '/admin/raw-accounts/overview' || path === '/accounts/1/daily-usage') {
       const admin = path.startsWith('/admin/'), daily = path.endsWith('/daily-usage'), details = admin || enabled;
       const period = url.searchParams.get('period') || 'week', count = ({ day: 1, week: 7, month: 30, all_time: 60 })[period];
       const start = daily ? url.searchParams.get('start_date') : before(yesterday, count - 1), end = daily ? url.searchParams.get('end_date') : yesterday;
@@ -40,12 +67,12 @@ try {
         daily_totals.push(total);
         rows.push({ ...total, model: 'claude-private-example' });
       }
-      return ok({ start_date: start, end_date: end, earliest_date: start, timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, latest_account_data: null, days,
+      return ok({ model_usage_source: path.startsWith('/admin/raw-accounts') ? 'raw' : modelSource, start_date: start, end_date: end, earliest_date: start, timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, latest_account_data: null, days,
         sources: sources.map(source => ({ ...source, cost_usd: days.length * 3 / 100 })),
         ...(admin ? {} : { model_costs_enabled: enabled }),
         ...(details ? { rows, model_costs: [{ source_id: 'myself', model: 'claude-private-example', cost_cny: '0.216', cost_usd: days.length * 3 / 100 }] } : { daily_totals, total_cost_usd: days.length * 3 / 100 }) });
     }
-    if (path === '/accounts/1') return ok({ account, interval_seconds: 300, timezone: 'Asia/Shanghai', snapshots: [], snapshot_count: 0, trend: { cost_total_usd: [], input_tokens_total: [], output_tokens_total: [] } });
+    if (['/accounts/1','/admin/raw-accounts/1','/admin/synced-accounts/1'].includes(path)) return ok({ account, interval_seconds: 300, timezone: 'Asia/Shanghai', snapshots: [], snapshot_count: 0, trend: { cost_total_usd: [], input_tokens_total: [], output_tokens_total: [] } });
     unknown.push(path);
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'Unexpected mock request' }) });
   });
@@ -163,7 +190,69 @@ try {
   await trigger.click();
   assert.equal(await page.getByRole('dialog', { name: 'Usage dates' }).locator('input[type=date]').count(), 0);
   await page.keyboard.press('Escape');
-  enabled = false;
+  await goto('config/overview');
+  const sourcePicker = page.locator('#value-model_usage_source');
+  const selectSource = async name => {
+    await sourcePicker.click();
+    await page.getByRole('option', {name, exact: true}).click();
+  };
+  await selectSource('Raw data');
+  assert.ok(await toggle.isDisabled() && !(await toggle.isChecked()));
+  await page.getByRole('button', {name:'Discard',exact:true}).click();
+  assert.ok(await toggle.isEnabled() && await toggle.isChecked());
+  await selectSource('Raw data');
+  await page.getByRole('button', {name:'Save changes',exact:true}).click();
+  await page.getByText('Changes saved.', {exact:true}).waitFor();
+  assert.equal(modelSource, 'raw'); assert.equal(enabled, false);
+  await page.reload(); await toggle.waitFor();
+  assert.ok(await toggle.isDisabled() && !(await toggle.isChecked()));
+  await selectSource('Modified data');
+  assert.ok(await toggle.isEnabled() && !(await toggle.isChecked()));
+  await page.getByRole('button', {name:'Save changes',exact:true}).click();
+  await page.getByText('Changes saved.', {exact:true}).waitFor();
+
+  await goto('account-pool/raw-accounts');
+  await page.getByRole('heading', {name:'Raw account',exact:true}).waitFor();
+  await page.locator('.overview-model-summary').waitFor();
+  assert.match(await page.locator('.overview-model-summary').innerText(), /Upstream costs and tokens/);
+  await goto('config/users');
+  await page.getByRole('button', {name:'Add super admin',exact:true}).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Email address').fill(delegate.email);
+  await dialog.getByRole('button',{name:'Add super admin',exact:true}).click();
+  await page.getByText(`${delegate.email} is now a super admin.`,{exact:true}).waitFor();
+  await page.getByRole('cell',{name:'Super admin',exact:true}).waitFor();
+
+  historicalOnly = true;
+  for (const raw of [false,true]) {
+    const pool = `account-pool/${raw ? 'raw-accounts' : 'accounts'}`;
+    await goto(pool);
+    await page.getByRole('heading',{name:'Account summary',exact:true}).waitFor();
+    assert.equal(await page.locator('.overview-summary-spent strong').innerText(),'400.00 $');
+    assert.equal(await page.locator('.overview-model-grid strong').count(),raw?1:0);
+    if (!raw) await page.getByText('No model usage data for this period.',{exact:true}).waitFor();
+    await goto(`${pool}/1/usage?tab=daily-usage`);
+    await page.getByRole('heading',{name:'Daily breakdown',exact:true}).waitFor();
+    assert.equal(await page.locator('.daily-summary strong').first().innerText(),'400.00 $');
+    assert.equal(await page.locator('.daily-table tbody tr').count(),raw?1:0);
+    if (!raw) {
+      assert.equal(await page.locator('.daily-summary strong').nth(1).innerText(),'—');
+      await page.getByRole('heading',{name:'No model usage data for this period.'}).waitFor();
+    }
+  }
+  historicalOnly = false;
+  const rawCalls = calls.filter(call => call.path.startsWith('/admin/raw-accounts')).length;
+  superAdmin = false; await page.reload();
+  await page.getByRole('heading', {name:'Super admin access required'}).waitFor();
+  assert.equal(await page.getByRole('button', {name:'Raw account',exact:true}).count(),0);
+  assert.equal(calls.filter(call => call.path.startsWith('/admin/raw-accounts')).length, rawCalls);
+  await goto('config/overview');
+  await page.getByRole('tab', {name:/Email delivery/}).waitFor();
+  assert.equal(await page.getByRole('tab', {name:/Overview|Daily usage/}).count(),0);
+  await goto('config/users');
+  await page.getByRole('heading',{name:'Users',exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Add super admin',exact:true}).count(),0);
+  await goto('accounts');
   await page.reload();
   await page.getByRole('heading', { name: 'Account summary', exact: true }).waitFor();
   await assertPrivate();

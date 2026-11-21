@@ -70,9 +70,18 @@ require an administrator browser session and do not accept personal API tokens.
 
 ### Model detail visibility
 
-Config → Overview has the boolean `user_overview_model_costs_enabled`, disabled
-by default. It applies to personal pages and endpoints even when the signed-in
-user is an administrator. Management endpoints retain their full data.
+Super administrators set `model_usage_source` under Config → Overview. It applies
+to the model breakdown in Accounts Overview and Daily usage. The default,
+`modified`, shows allocated model costs and tokens for newly collected bills.
+Raw account always uses upstream model rows. The all-model spend for the same
+accounts and dates comes from the same daily bills in both views.
+
+The personal detail switch `user_overview_model_costs_enabled` defaults to off.
+Selecting `raw` saves the switch as off and locks it. Selecting `modified`
+unlocks the switch for explicit re-enablement. This visibility rule also applies
+when an administrator opens a personal page. Management retains its breakdown.
+Super administrators grant access to an existing administrator through Config →
+Users → Add super admin.
 
 When disabled, personal Overview omits the model selector, model cost cards, and
 the Source table's Model costs toggle. Usage period uses a single-select dropdown

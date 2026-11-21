@@ -13,15 +13,13 @@ import (
 	"goapi-tk-register/server/internal/supplier"
 )
 
-func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64, administrative bool) {
-	modelCostsEnabled := true
+func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64, administrative, rawAccount bool) {
+	view, modelCostsEnabled, err := a.modelUsageView(r.Context(), administrative, rawAccount)
+	if err != nil {
+		internal(w)
+		return
+	}
 	if !administrative {
-		var err error
-		modelCostsEnabled, err = a.userModelCostsEnabled(r.Context())
-		if err != nil {
-			internal(w)
-			return
-		}
 		if !modelCostsEnabled && r.URL.Query().Has("models") {
 			fail(w, 400, "MODEL_DETAILS_DISABLED", "Model filtering is disabled for personal account pages.")
 			return
@@ -37,7 +35,7 @@ func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64, 
 		fail(w, 400, "INVALID_DATE_RANGE", err.Error())
 		return
 	}
-	data, err := a.store.AccountDailyUsage(r.Context(), id, start, end)
+	data, err := a.store.AccountDailyUsage(view, id, start, end)
 	if err != nil {
 		internal(w)
 		return

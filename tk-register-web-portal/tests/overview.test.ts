@@ -130,3 +130,15 @@ test('disabled overview uses only backend totals and keeps exact token counters'
   assert.equal(overviewSeries(disabled, [], 'input_tokens')[1].total?.input_tokens, '9007199254740993');
   assert.deepEqual(Object.fromEntries(overviewQuery('all', 'all_time', { start: '', end: '' }, false)), { sources: 'all', period: 'all_time' });
 });
+
+test('historical costs stay visible in the all-model chart while unsaved token counts remain gaps', () => {
+  const historical: OverviewData = {
+    ...data, model_costs_enabled: false, model_usage_source: 'modified',
+    days: [{ date: '2026-11-14', status: 'missing', expected: 1, collected: 0 }],
+    daily_costs: [{ date: '2026-11-14', expected: 1, collected: 1, cost_usd: 400 }],
+    daily_totals: [], rows: undefined, model_costs: undefined,
+  };
+  assert.deepEqual(overviewSeries(historical, [], 'cost_usd').map(point => point.value), [400]);
+  assert.deepEqual(overviewSeries(historical, [], 'input_tokens').map(point => point.value), [null]);
+  assert.deepEqual(overviewSeries({ ...historical, model_costs_enabled: true }, [], 'cost_usd').map(point => point.value), [null]);
+});

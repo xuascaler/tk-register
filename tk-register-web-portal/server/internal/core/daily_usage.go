@@ -2,9 +2,10 @@ package core
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
+	"math/big"
 	"time"
 
 	"goapi-tk-register/server/internal/billing"
@@ -67,7 +68,7 @@ type DailyUsageJob struct {
 }
 
 func (s *Store) migrateDailyUsage() error {
-	return s.DB.AutoMigrate(&AccountUsageDay{}, &AccountDailyUsage{}, &DailyUsageJob{})
+	return s.DB.AutoMigrate(&AccountUsageDay{}, &AccountDailyUsage{}, &AccountDailyFableRatio{}, &AccountDailyUsageModified{}, &DailyUsageJob{})
 }
 
 // At 03:00 Beijing, yesterday becomes due. Before then, the previous day's
@@ -177,8 +178,7 @@ func (s *Store) SaveDailyUsageAccount(ctx context.Context, job DailyUsageJob, re
 		return err
 	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Fenced per-account commits avoid a vendor-sized transaction and nested
-		// reads with an open cursor. Reprocessing replaces, rather than adds, usage.
+		// Fence the entire account-day commit against a worker losing its lease.
 		var currentJob DailyUsageJob
 		if err := dailyClaim(tx, job.ID, job.LeaseToken).Clauses(clause.Locking{Strength: "UPDATE"}).First(&currentJob).Error; err != nil {
 			return err
@@ -195,10 +195,9 @@ func (s *Store) SaveDailyUsageAccount(ctx context.Context, job DailyUsageJob, re
 			return err
 		}
 		updates := map[string]any{"last_attempt_at": now, "last_error": result.Error}
-		if result.Error == "" {
-			if err := tx.Where("day_id = ?", day.ID).Delete(&AccountDailyUsage{}).Error; err != nil {
-				return err
-			}
+		if result.Error == "" && day.LastSuccessAt == nil {
+			// The first successful bill is final. Existing successful days from
+			// before the mirror was introduced keep their original raw rows only.
 			rows := make([]AccountDailyUsage, 0, len(result.Rows))
 			for _, r := range result.Rows {
 				rows = append(rows, AccountDailyUsage{DayID: day.ID, Model: r.Model, InputTokens: r.InputTokens, OutputTokens: r.OutputTokens, CacheReadTokens: r.CacheReadTokens, CacheWriteTokens: r.CacheWriteTokens, CostCNY: r.CostCNY})
@@ -207,6 +206,9 @@ func (s *Store) SaveDailyUsageAccount(ctx context.Context, job DailyUsageJob, re
 				if err := tx.CreateInBatches(&rows, 100).Error; err != nil {
 					return err
 				}
+			}
+			if err := saveDailyUsageMirror(tx, day.ID, rows); err != nil {
+				return err
 			}
 			updates["last_success_at"] = now
 		}
@@ -234,6 +236,7 @@ type DailyUsageDayDTO struct {
 	Error       string     `json:"error,omitempty"`
 }
 type DailyUsageDTO struct {
+	UsageBillTotals
 	StartDate      string             `json:"start_date"`
 	EndDate        string             `json:"end_date"`
 	Timezone       string             `json:"timezone"`
@@ -257,7 +260,20 @@ func ValidateDailyUsageRange(start, end string, now time.Time) error {
 
 // Caller must authorize the stable account ID before calling this method.
 func (s *Store) AccountDailyUsage(ctx context.Context, id uint64, start, end string) (DailyUsageDTO, error) {
+	var out DailyUsageDTO
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		scoped := *s
+		scoped.DB = tx
+		var err error
+		out, err = scoped.readAccountDailyUsage(ctx, id, start, end)
+		return err
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: s.DB.Dialector.Name() != "sqlite"})
+	return out, err
+}
+
+func (s *Store) readAccountDailyUsage(ctx context.Context, id uint64, start, end string) (DailyUsageDTO, error) {
 	out := DailyUsageDTO{StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", CollectionTime: "03:00", Currency: "CNY", Rows: []DailyUsageRowDTO{}, Days: []DailyUsageDayDTO{}}
+	out.ModelUsageSource = reportSource(ctx)
 	var err error
 	out.ExchangeRate, err = s.ExchangeRate(ctx)
 	if err != nil {
@@ -267,8 +283,16 @@ func (s *Store) AccountDailyUsage(ctx context.Context, id uint64, start, end str
 	if err = s.DB.WithContext(ctx).First(&account, id).Error; err != nil {
 		return out, err
 	}
-	var days []AccountUsageDay
-	if err = s.DB.WithContext(ctx).Where("account_id = ? AND identity_key = ? AND usage_date BETWEEN ? AND ?", id, account.IdentityKey, start, end).Find(&days).Error; err != nil {
+	var days []struct {
+		AccountUsageDay
+		HasModelUsage bool
+	}
+	dayQuery := s.DB.WithContext(ctx).Table("account_usage_days d").Where("d.account_id = ? AND d.identity_key = ? AND d.usage_date BETWEEN ? AND ?", id, account.IdentityKey, start, end)
+	detailExists := "1"
+	if out.ModelUsageSource == "modified" {
+		detailExists = "EXISTS (SELECT 1 FROM account_daily_fable_ratios r WHERE r.day_id=d.id)"
+	}
+	if err = dayQuery.Select("d.*, " + detailExists + " AS has_model_usage").Scan(&days).Error; err != nil {
 		return out, err
 	}
 	var jobs []DailyUsageJob
@@ -276,9 +300,12 @@ func (s *Store) AccountDailyUsage(ctx context.Context, id uint64, start, end str
 		return out, err
 	}
 	byDay := map[string]AccountUsageDay{}
+	modelDay := map[string]bool{}
+	rawDays := []OverviewDay{}
 	byJob := map[string]DailyUsageJob{}
 	for _, d := range days {
-		byDay[d.UsageDate] = d
+		byDay[d.UsageDate] = d.AccountUsageDay
+		modelDay[d.UsageDate] = d.HasModelUsage
 	}
 	for _, j := range jobs {
 		byJob[j.UsageDate] = j
@@ -290,14 +317,19 @@ func (s *Store) AccountDailyUsage(ctx context.Context, id uint64, start, end str
 		d := byDay[key]
 		j := byJob[key]
 		item := DailyUsageDayDTO{Date: key, Status: "missing"}
+		rawDay := OverviewDay{Date: key, Expected: 1}
 		if d.LastSuccessAt != nil {
+			rawDay.Collected = 1
+		}
+		rawDays = append(rawDays, rawDay)
+		if d.LastSuccessAt != nil && modelDay[key] {
 			item.Status = "complete"
 			item.CollectedAt = d.LastSuccessAt
 		}
 		if d.LastError != "" {
 			item.Status = "failed"
 			item.Error = d.LastError
-			if d.LastSuccessAt != nil {
+			if d.LastSuccessAt != nil && modelDay[key] {
 				item.Status = "stale"
 			}
 		} else if item.Status == "missing" && j.LastError != "" {
@@ -308,19 +340,35 @@ func (s *Store) AccountDailyUsage(ctx context.Context, id uint64, start, end str
 		}
 		out.Days = append(out.Days, item)
 	}
-	err = s.DB.WithContext(ctx).Table("account_daily_usages AS u").Select("u.*,d.usage_date").Joins("JOIN account_usage_days d ON d.id=u.day_id").Where("d.account_id = ? AND d.identity_key = ? AND d.usage_date BETWEEN ? AND ? AND d.last_success_at IS NOT NULL", id, account.IdentityKey, start, end).Order("d.usage_date DESC,u.model ASC").Limit(10001).Scan(&out.Rows).Error
+	billRows := func(source string) *gorm.DB {
+		return s.DB.WithContext(ctx).Table(usageLineTable(source)+" AS u").Joins("JOIN account_usage_days d ON d.id=u.day_id").Where("d.account_id = ? AND d.identity_key = ? AND d.usage_date BETWEEN ? AND ? AND d.last_success_at IS NOT NULL", id, account.IdentityKey, start, end)
+	}
+	var costs []struct{ UsageDate, CostCNY string }
+	rawQuery := billRows("raw")
+	if s.DB.Dialector.Name() == "sqlite" {
+		rawQuery = rawQuery.Select("d.usage_date,u.cost_cny")
+	} else {
+		rawQuery = rawQuery.Select("d.usage_date,SUM(u.cost_cny) AS cost_cny").Group("d.usage_date")
+	}
+	if err = rawQuery.Scan(&costs).Error; err != nil {
+		return out, err
+	}
+	byDate := map[string]*big.Rat{}
+	for _, r := range costs {
+		if err = addUsageCost(byDate, r.UsageDate, r.CostCNY); err != nil {
+			return out, err
+		}
+	}
+	if err = out.setDailyCosts(byDate, rawDays, out.ExchangeRate); err != nil {
+		return out, err
+	}
+	err = billRows(out.ModelUsageSource).Select("u.*,d.usage_date").Order("d.usage_date DESC,u.model ASC").Limit(10001).Scan(&out.Rows).Error
 	if err != nil {
 		return out, err
 	}
 	if len(out.Rows) > 10000 {
 		return out, fmt.Errorf("daily usage selection exceeds supported size")
 	}
-	for i := range out.Rows {
-		cost, err := strconv.ParseFloat(out.Rows[i].CostCNY, 64)
-		if err != nil {
-			return out, err
-		}
-		out.Rows[i].CostUSD = cost / out.ExchangeRate
-	}
-	return out, nil
+	err = out.allocateModelCents()
+	return out, err
 }

@@ -3,6 +3,7 @@ import type { Submission, SubmissionDetail } from '../submissions/types';
 export type AdminUser = {
   id: string;
   email: string;
+  is_super_admin?: boolean;
   role: 'member' | 'admin';
   status: string;
   created_at: string;

@@ -14,12 +14,14 @@ import (
 // Overview is a read-only projection of stable accounts and collected bills.
 // Account counts never join bill lines: multiple dates/models cannot inflate them.
 type OverviewSource struct {
+	hasUpstreamBill bool
 	AccountSource
 	Total         int64            `json:"total"`
 	Statuses      map[string]int64 `json:"statuses"`
 	CostUSD       *float64         `json:"cost_usd"`
 	CostKnown     int64            `json:"cost_known"`
 	CollectedDays int64            `json:"collected_days"`
+	TotalCostDays int64            `json:"total_cost_days,omitempty"`
 }
 type OverviewModelCost struct {
 	SourceID string  `json:"source_id"`
@@ -34,6 +36,8 @@ type OverviewDay struct {
 	Collected int64  `json:"collected"`
 }
 type AccountsOverview struct {
+	UsageBillTotals
+	allModelSources    map[string]float64
 	SummaryAvailable   *bool               `json:"summary_available,omitempty"`
 	SummaryGeneratedAt *time.Time          `json:"summary_generated_at,omitempty"`
 	SummaryPeriod      string              `json:"summary_period,omitempty"`
@@ -134,6 +138,7 @@ func (s *Store) personalOverviewScope(ctx context.Context, viewerID uint64, rawS
 
 func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewScope, start, end string, allTime bool, now time.Time) (AccountsOverview, error) {
 	out := AccountsOverview{Timezone: "Asia/Shanghai", CollectionTime: "03:00", Sources: []OverviewSource{}, Rows: []DailyUsageRowDTO{}, ModelCosts: []OverviewModelCost{}, Days: []OverviewDay{}}
+	out.ModelUsageSource = reportSource(ctx)
 	var err error
 	out.ExchangeRate, err = s.ExchangeRate(ctx)
 	if err != nil {
@@ -205,50 +210,52 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 		return out, err
 	}
 	out.StartDate, out.EndDate = start, end
-	bills := func() *gorm.DB {
-		return days().Joins("JOIN account_daily_usages u ON u.day_id = d.id").Where("d.last_success_at IS NOT NULL AND d.usage_date BETWEEN ? AND ?", start, end)
+	rangeDays := func() *gorm.DB {
+		return days().Where("d.last_success_at IS NOT NULL AND d.usage_date BETWEEN ? AND ?", start, end)
 	}
-	// Explicit DECIMAL casts preserve integer token counts above JavaScript's safe
-	// range on MySQL. The JSON representation remains strings, as in Daily usage.
-	fields := []string{"d.usage_date", "u.model", "SUM(u.cost_cny) AS cost_cny"}
-	for _, name := range []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"} {
-		fields = append(fields, "SUM(CAST(u."+name+" AS DECIMAL(65,0))) AS "+name)
-	}
-	if err = bills().Select(strings.Join(fields, ", ")).Group("d.usage_date, u.model").Order("d.usage_date ASC, u.model ASC").Scan(&out.Rows).Error; err != nil {
+	if err = out.readOverviewModelLines(ctx, rangeDays, sourceExpr, start, end); err != nil {
 		return out, err
 	}
-	for i := range out.Rows {
-		cost, e := strconv.ParseFloat(out.Rows[i].CostCNY, 64)
-		if e != nil {
-			return out, e
-		}
-		out.Rows[i].CostUSD = cost / out.ExchangeRate
+	// Capture the unmodified period totals separately from model detail coverage.
+	costsLedger := newUpstreamPeriodCosts()
+	var rawCosts []struct {
+		Source             uint64
+		UsageDate, CostCNY string
 	}
-	var costs []struct {
-		Source  uint64
-		Model   string
-		CostCNY string
+	rawQuery := rangeDays().Joins("JOIN account_daily_usages u ON u.day_id=d.id")
+	if s.DB.Dialector.Name() == "sqlite" {
+		rawQuery = rawQuery.Select(sourceExpr + " AS source,d.usage_date,u.cost_cny")
+	} else {
+		rawQuery = rawQuery.Select(sourceExpr + " AS source,d.usage_date,SUM(u.cost_cny) AS cost_cny").Group(sourceExpr + ",d.usage_date")
 	}
-	if err = bills().Select(sourceExpr + " AS source, u.model, SUM(u.cost_cny) AS cost_cny").Group(sourceExpr + ", u.model").Order("u.model ASC").Scan(&costs).Error; err != nil {
+	if err = rawQuery.Scan(&rawCosts).Error; err != nil {
 		return out, err
 	}
-	for _, c := range costs {
-		value, e := strconv.ParseFloat(c.CostCNY, 64)
-		if e != nil {
-			return out, e
+	for _, c := range rawCosts {
+		if err = addUsageCost(costsLedger.dates, c.UsageDate, c.CostCNY); err != nil {
+			return out, err
 		}
-		out.ModelCosts = append(out.ModelCosts, OverviewModelCost{SourceID: overviewSourceID(c.Source), Model: c.Model, CostCNY: c.CostCNY, CostUSD: value / out.ExchangeRate})
+		if err = addUsageCost(costsLedger.sources, overviewSourceID(c.Source), c.CostCNY); err != nil {
+			return out, err
+		}
+	}
+	detailDay := "d.last_success_at IS NOT NULL"
+	if out.ModelUsageSource == "modified" {
+		detailDay += " AND EXISTS (SELECT 1 FROM account_daily_fable_ratios r WHERE r.day_id=d.id)"
 	}
 	var collectedSources []struct {
-		Source uint64
-		Count  int64
+		Source   uint64
+		Count    int64
+		RawDates int64
 	}
-	if err = days().Select(sourceExpr+" AS source, COUNT(*) AS count").Where("d.last_success_at IS NOT NULL AND d.usage_date BETWEEN ? AND ?", start, end).Group(sourceExpr).Scan(&collectedSources).Error; err != nil {
+	if err = days().Select(sourceExpr+" AS source, COUNT(DISTINCT d.usage_date) AS raw_dates, SUM(CASE WHEN "+detailDay+" THEN 1 ELSE 0 END) AS count").Where("d.last_success_at IS NOT NULL AND d.usage_date BETWEEN ? AND ?", start, end).Group(sourceExpr).Scan(&collectedSources).Error; err != nil {
 		return out, err
 	}
 	for _, row := range collectedSources {
 		if i, ok := bySource[overviewSourceID(row.Source)]; ok {
 			out.Sources[i].CollectedDays = row.Count
+			out.Sources[i].TotalCostDays = row.RawDates
+			out.Sources[i].hasUpstreamBill = row.RawDates > 0
 		}
 	}
 	// Collection markers include successful days with no bill lines. Any saved
@@ -269,10 +276,11 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 		return out, err
 	}
 	var coverage []struct {
-		Date      string
-		Collected int64
+		Date         string
+		Collected    int64
+		RawCollected int64
 	}
-	if err = days().Select("d.usage_date AS date, SUM(CASE WHEN d.last_success_at IS NOT NULL THEN 1 ELSE 0 END) AS collected").Where("d.usage_date BETWEEN ? AND ?", start, end).Group("d.usage_date").Scan(&coverage).Error; err != nil {
+	if err = days().Select("d.usage_date AS date, SUM(CASE WHEN "+detailDay+" THEN 1 ELSE 0 END) AS collected, SUM(CASE WHEN d.last_success_at IS NOT NULL THEN 1 ELSE 0 END) AS raw_collected").Where("d.usage_date BETWEEN ? AND ?", start, end).Group("d.usage_date").Scan(&coverage).Error; err != nil {
 		return out, err
 	}
 	coverageByDate := map[string]int{}
@@ -281,6 +289,7 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 	}
 	first, _ := time.ParseInLocation("2006-01-02", start, dailyZone)
 	last, _ := time.ParseInLocation("2006-01-02", end, dailyZone)
+	var rawDays []OverviewDay
 	var expected int64
 	cohortIndex := 0
 	for date := first; !date.After(last); date = date.AddDate(0, 0, 1) {
@@ -298,9 +307,66 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 			}
 		}
 		out.Days = append(out.Days, day)
+		day.Collected = 0
+		if i, ok := coverageByDate[key]; ok {
+			day.Collected = coverage[i].RawCollected
+		}
+		rawDays = append(rawDays, day)
 	}
 	if len(out.Days) == 0 {
 		return out, fmt.Errorf("empty overview range")
 	}
-	return out, nil
+	err = out.setUpstreamCosts(costsLedger, rawDays)
+	return out, err
+}
+
+func (out *AccountsOverview) readOverviewModelLines(ctx context.Context, days func() *gorm.DB, sourceExpr, start, end string) error {
+	if days().Dialector.Name() == "sqlite" {
+		// SQLite stores DECIMAL as floating point and SUM coerces large token
+		// counts. Accumulate the original strings at the precision of the bill.
+		usage, err := loadSummaryLines(ctx, days(), sourceExpr, out.ModelUsageSource)
+		if err != nil {
+			return err
+		}
+		daily, costs, err := periodModelUsage(usage, start, end)
+		if err != nil {
+			return err
+		}
+		return out.assignOverviewModels(daily, costs)
+	}
+	bills := func() *gorm.DB {
+		return days().Joins("JOIN " + usageLineTable(out.ModelUsageSource) + " u ON u.day_id = d.id")
+	}
+	// Explicit DECIMAL casts preserve integer token counts above JavaScript's safe
+	// range on MySQL. The JSON representation remains strings, as in Daily usage.
+	fields := []string{"d.usage_date", "u.model", "SUM(u.cost_cny) AS cost_cny"}
+	for _, name := range []string{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"} {
+		fields = append(fields, "SUM(CAST(u."+name+" AS DECIMAL(65,0))) AS "+name)
+	}
+	if err := bills().Select(strings.Join(fields, ", ")).Group("d.usage_date, u.model").Order("d.usage_date ASC, u.model ASC").Scan(&out.Rows).Error; err != nil {
+		return err
+	}
+	for i := range out.Rows {
+		cost, e := strconv.ParseFloat(out.Rows[i].CostCNY, 64)
+		if e != nil {
+			return e
+		}
+		out.Rows[i].CostUSD = cost / out.ExchangeRate
+	}
+	var costs []struct {
+		Source  uint64
+		Model   string
+		CostCNY string
+	}
+	if err := bills().Select(sourceExpr + " AS source, u.model, SUM(u.cost_cny) AS cost_cny").Group(sourceExpr + ", u.model").Order("u.model ASC").Scan(&costs).Error; err != nil {
+		return err
+	}
+	for _, c := range costs {
+		value, e := strconv.ParseFloat(c.CostCNY, 64)
+		if e != nil {
+			return e
+		}
+		out.ModelCosts = append(out.ModelCosts, OverviewModelCost{SourceID: overviewSourceID(c.Source), Model: c.Model, CostCNY: c.CostCNY, CostUSD: value / out.ExchangeRate})
+	}
+	return nil
 }

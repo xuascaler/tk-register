@@ -10,6 +10,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const InitialSuperAdminEmail = "xu.guoqiang.ascaler@gmail.com"
+
 // This singleton serializes role and member-hierarchy changes across processes,
 // including concurrent demotions and subtree attachments. Updating it obtains a transaction lock on all supported databases.
 type AdminRoleGuard struct {
@@ -27,11 +29,12 @@ type AdminRoleAudit struct {
 	CreatedAt time.Time
 }
 type AdminUser struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	Email        string    `json:"email"`
+	Role         string    `json:"role"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	IsSuperAdmin bool      `json:"is_super_admin,omitempty"`
 }
 type AdminUserPage struct {
 	Items    []AdminUser `json:"items"`
@@ -41,7 +44,7 @@ type AdminUserPage struct {
 }
 
 func adminUser(u User) AdminUser {
-	return AdminUser{idString(u.ID), u.Email, u.Role, u.Status, u.CreatedAt.UTC()}
+	return AdminUser{ID: idString(u.ID), Email: u.Email, Role: u.Role, Status: u.Status, CreatedAt: u.CreatedAt.UTC(), IsSuperAdmin: u.IsSuperAdmin}
 }
 func escapedSearch(v string) string {
 	return "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(strings.TrimSpace(v))) + "%"
@@ -100,7 +103,7 @@ func (s *Store) CreateMemberByAdmin(ctx context.Context, actorID, actorVersion u
 func (s *Store) ChangeUserRole(ctx context.Context, actorID, actorVersion uint64, email, role, protectedEmail string) (AdminUser, error) {
 	var out AdminUser
 	email = NormalizeEmail(email)
-	if !ValidEmail(email) || (role != "admin" && role != "member") {
+	if !ValidEmail(email) || (role != "admin" && role != "member" && role != "super_admin") {
 		return out, vendorError(400, "INVALID_ROLE_REQUEST", "Enter a valid email address and role.")
 	}
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -118,14 +121,23 @@ func (s *Store) ChangeUserRole(ctx context.Context, actorID, actorVersion uint64
 		if actor.Role != "admin" || actor.Status != "active" || actor.AuthVersion != actorVersion {
 			return vendorError(403, "FORBIDDEN", "Administrator access is required.")
 		}
+		if role == "super_admin" && !actor.IsSuperAdmin {
+			return vendorError(403, "FORBIDDEN", "Super administrator access is required.")
+		}
 		if e := tx.Where("email = ?", email).First(&target).Error; e != nil {
 			return e
+		}
+		if role == "super_admin" && (target.Role != "admin" || target.Status != "active") {
+			return vendorError(409, "ADMIN_REQUIRED", "Choose an active administrator.")
+		}
+		if role == "super_admin" && target.IsSuperAdmin {
+			return vendorError(409, "ROLE_UNCHANGED", "This user is already a super administrator.")
 		}
 		if role == "member" && target.ID == actorID {
 			return vendorError(409, "SELF_DEMOTION", "You cannot remove your own administrator role.")
 		}
-		if role == "member" && target.Email == NormalizeEmail(protectedEmail) {
-			return vendorError(409, "PROTECTED_ADMIN", "The bootstrap administrator cannot be removed.")
+		if role == "member" && (target.Email == NormalizeEmail(protectedEmail) || target.IsSuperAdmin) {
+			return vendorError(409, "PROTECTED_ADMIN", "This administrator is protected.")
 		}
 		if role == "admin" && target.Status != "active" {
 			return vendorError(409, "USER_INACTIVE", "Only an active user can become an administrator.")
@@ -143,13 +155,17 @@ func (s *Store) ChangeUserRole(ctx context.Context, actorID, actorVersion uint64
 			}
 		}
 		previous := target.Role
-		if e := tx.Model(&target).Updates(map[string]any{"role": role, "auth_version": gorm.Expr("auth_version + ?", 1)}).Error; e != nil {
+		target.Role = role
+		if role == "super_admin" {
+			target.Role = "admin"
+		}
+		target.IsSuperAdmin = role == "super_admin" || (target.Role == "admin" && target.Email == InitialSuperAdminEmail)
+		if e := tx.Model(&target).Updates(map[string]any{"role": target.Role, "is_super_admin": target.IsSuperAdmin, "auth_version": gorm.Expr("auth_version + ?", 1)}).Error; e != nil {
 			return e
 		}
 		if e := tx.Create(&AdminRoleAudit{ActorID: actorID, TargetID: target.ID, FromRole: previous, ToRole: role}).Error; e != nil {
 			return e
 		}
-		target.Role = role
 		out = adminUser(target)
 		return nil
 	})
@@ -157,6 +173,11 @@ func (s *Store) ChangeUserRole(ctx context.Context, actorID, actorVersion uint64
 }
 func (s *Store) migrateAdmin() error {
 	if e := s.DB.AutoMigrate(&AdminRoleGuard{}, &AdminRoleAudit{}); e != nil {
+		return e
+	}
+	// Existing verified administrators keep their normal two-factor sign-in.
+	if e := s.DB.Model(&User{}).Where("email = ? AND role = ? AND is_super_admin = ?", InitialSuperAdminEmail, "admin", false).
+		Updates(map[string]any{"is_super_admin": true, "auth_version": gorm.Expr("auth_version + 1")}).Error; e != nil {
 		return e
 	}
 	return s.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&AdminRoleGuard{ID: 1}).Error

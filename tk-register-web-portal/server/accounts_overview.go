@@ -10,24 +10,22 @@ import (
 )
 
 func (a *app) accountsOverview(w http.ResponseWriter, r *http.Request, userID uint64) {
-	a.serveAccountsOverview(w, r, userID, false)
+	a.serveAccountsOverview(w, r, userID, false, false)
 }
 
-func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, userID uint64, administrative bool) {
+func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, userID uint64, administrative, rawAccount bool) {
 	if r.Method != http.MethodGet {
 		fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
 		return
 	}
 	q := r.URL.Query()
 	period, start, end := q.Get("period"), q.Get("start_date"), q.Get("end_date")
-	modelCostsEnabled := true
+	view, modelCostsEnabled, err := a.modelUsageView(r.Context(), administrative, rawAccount)
+	if err != nil {
+		internal(w)
+		return
+	}
 	if !administrative {
-		var err error
-		modelCostsEnabled, err = a.userModelCostsEnabled(r.Context())
-		if err != nil {
-			internal(w)
-			return
-		}
 		if q.Has("start_date") || q.Has("end_date") {
 			fail(w, 400, "INVALID_RANGE", "Choose day, week, month, or all_time.")
 			return
@@ -62,10 +60,9 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	now := time.Now()
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(view, 15*time.Second)
 	defer cancel()
 	var result core.AccountsOverview
-	var err error
 	allSources := q.Get("sources") == "" || q.Get("sources") == "all"
 	if allSources && period != "" {
 		// A missing or stale summary is returned as such. Reading never schedules

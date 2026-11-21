@@ -8,7 +8,8 @@ export function OverviewChart({ data, models, metric, selectionEmpty = false }: 
   const [active, setActive] = useState<number | null>(null);
   const wrap = useRef<HTMLDivElement>(null), [width, setWidth] = useState(1000);
   const palette = overviewModels(data), aggregateOnly = data.model_costs_enabled === false || !palette.length && !models.length && !selectionEmpty;
-  const hasCollectedData = data.days.some(day => day.collected > 0);
+  const series = useMemo(() => overviewSeries(data, models, metric), [data, models, metric]);
+  const hasCollectedData = series.some(point => point.value !== null);
   const chartSeries = aggregateOnly ? [''] : models;
   useLayoutEffect(() => {
     const element = wrap.current; if (!element) return;
@@ -16,7 +17,6 @@ export function OverviewChart({ data, models, metric, selectionEmpty = false }: 
     measure(); const observer = new ResizeObserver(measure); observer.observe(element);
     return () => observer.disconnect();
   }, [models.length, aggregateOnly, hasCollectedData]);
-  const series = useMemo(() => overviewSeries(data, models, metric), [data, models, metric]);
   const color = (model: string) => overviewColors[Math.max(0, palette.indexOf(model)) % overviewColors.length];
   const lines = series.length > 14, height = 310, right = width - 14, top = 24, bottom = 266;
   const maximum = Math.max(1, ...series.map(day => lines ? Math.max(0, ...day.values.map(v => v || 0)) : day.value || 0)) * 1.1;

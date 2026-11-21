@@ -21,13 +21,14 @@ import {
   validateSetting,
 } from './validation';
 
-const groups = [
+const allGroups = [
   ['email', 'Email delivery'],
   ['access', 'Access'],
   ['verification', 'Verification'],
   ['sessions', 'Sessions'],
   ['vendors', 'Vendors'],
   ['account_sync', 'Account sync'],
+  ['daily_usage', 'Daily usage'],
   ['overview', 'Overview'],
   ['users', 'Users'],
   ['bill_exports', 'Bill exports'],
@@ -53,7 +54,9 @@ export default function Config({
 }) {
   const [settings, setSettings] = useState<Setting[] | null>(null);
   const [draft, setDraft] = useState<Record<string, SettingValue>>({});
-  const [category, setCategory] = useState(initialCategory);
+  const groups = allGroups.filter(([key]) => currentUser.is_super_admin || (key !== 'overview' && key !== 'daily_usage'));
+  const [category, setCategory] = useState(groups.some(([key]) => key === initialCategory) ? initialCategory : 'email');
+  const rawSource = draft.model_usage_source === 'raw';
   const [vendorDirty, setVendorDirty] = useState(false);
   const [syncDirty, setSyncDirty] = useState(false);
   const [error, setError] = useState('');
@@ -104,7 +107,9 @@ export default function Config({
   }, [changes]);
 
   function update(setting: Setting, value: SettingValue) {
-    setDraft((current) => ({ ...current, [setting.key]: value }));
+    setDraft((current) => setting.key === 'model_usage_source' && value === 'raw'
+      ? { ...current, model_usage_source: value, user_overview_model_costs_enabled: 'false' }
+      : { ...current, [setting.key]: value });
     setNotice('');
     setValidation((current) => ({
       ...current,
@@ -120,6 +125,11 @@ export default function Config({
         .map((s) => [s.key, validateSetting(s, draft[s.key])])
         .filter(([, value]) => value),
     );
+    if (category === 'daily_usage' || settings.some(s => s.category === 'daily_usage' && settingChanged(s, draft[s.key]))) {
+      const min = Number(draft.fable_min_percent);
+      if (min >= Number(draft.fable_trigger_percent) || min >= Number(draft.fable_max_percent))
+        errors.fable_min_percent = 'The minimum must be below the trigger and the maximum.';
+    }
     setValidation(errors);
     setError('');
     setNotice('');
@@ -166,7 +176,7 @@ export default function Config({
       id: `value-${setting.key}`,
       'aria-labelledby': `key-${setting.key}`,
       'aria-describedby': `description-${setting.key}${validation[setting.key] ? ` error-${setting.key}` : ''}`,
-      disabled: busy || setting.read_only,
+      disabled: busy || setting.read_only || (rawSource && setting.key === 'user_overview_model_costs_enabled'),
       'aria-invalid': !!validation[setting.key],
     };
     const value = draft[setting.key];
@@ -196,18 +206,19 @@ export default function Config({
           onChange={(value) => update(setting, value)}
           options={setting.options.map((option) => ({
             value: option,
-            label: option,
+            label: setting.key === 'model_usage_source' ? option === 'raw' ? 'Raw data' : 'Modified data' : option,
           }))}
         />
       );
     const secret = setting.secret || setting.type === 'secret';
+    const percent = setting.category === 'daily_usage' && setting.key.endsWith('_percent');
     const decimal = setting.type === 'decimal';
     const numeric = setting.type === 'integer' || decimal;
     return (
       <>
         <div
           className={
-            setting.key.endsWith('_seconds') ? 'input-unit' : undefined
+            setting.key.endsWith('_seconds') || percent ? 'input-unit' : undefined
           }
         >
           <input
@@ -222,7 +233,7 @@ export default function Config({
                     : 'text'
             }
             autoComplete={secret ? 'new-password' : 'off'}
-            min={numeric ? (setting.min ?? 1) : undefined}
+            min={numeric ? (setting.min ?? (percent ? 0 : 1)) : undefined}
             max={numeric ? setting.max : undefined}
             step={decimal ? 'any' : numeric ? 1 : undefined}
             inputMode={decimal ? 'decimal' : undefined}
@@ -230,6 +241,7 @@ export default function Config({
             placeholder={secret ? 'Enter new password' : undefined}
             onChange={(event) => update(setting, event.target.value)}
           />
+          {percent && <span className='unit'>%</span>}
           {setting.key.endsWith('_seconds') && (
             <span className='unit'>seconds</span>
           )}
@@ -256,7 +268,7 @@ export default function Config({
         </div>
         <span className='badge'>
           <LockKeyhole aria-hidden='true' />
-          Admin only
+          {category === 'overview' || category === 'daily_usage' ? 'Super admin only' : 'Admin only'}
         </span>
       </div>
       {!settings ? (
@@ -390,12 +402,13 @@ export default function Config({
                             className='cell-description'
                             id={`description-${setting.key}`}
                           >
-                            {setting.description}
+                            {rawSource && setting.key === 'user_overview_model_costs_enabled' ? 'Personal model details are disabled when Raw data is selected. Select Modified data to enable this switch.' : setting.description}
                           </td>
                         </tr>
                       ))}
                   </tbody>
                 </table>
+                {category === 'daily_usage' && <p className='fixed-rules'><LockKeyhole aria-hidden='true' />New daily bills use the saved rules. Each account day keeps its assigned Fable share on later syncs.</p>}
                 {category === 'access' && (
                   <p className='fixed-rules'>
                     <LockKeyhole aria-hidden='true' />

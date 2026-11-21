@@ -1,4 +1,4 @@
-import { recentDailyRange, type DailyRow, type ModelSelection, type DailyMetric, type DailyTotal } from './daily-usage';
+import { recentDailyRange, type DailyRow, type ModelSelection, type DailyMetric, type DailyTotal, type ModelUsageLedger } from './daily-usage';
 
 export const overviewStatuses = ['active', 'pending', 'offline', 'banned', 'sync_failed', 'login_failed', 're_login_failed', 'bound_failed', 'cooking_failed', 'limited', 'unknown'];
 export type OverviewPeriod = 'day' | 'week' | 'month' | 'all_time';
@@ -9,11 +9,11 @@ export function overviewQuery(sources: string, period: OverviewRangeSelection, r
   return new URLSearchParams({ sources, ...(administrative ? { models: 'all' } : {}), ...(period === 'custom' ? { start_date: range.start, end_date: range.end } : { period }) });
 }
 export type OverviewSource = { id: string; label: string; total: number; statuses: Record<string, number>; cost_usd: number | null; cost_known: number; collected_days: number };
-export type OverviewData = {
+export type OverviewData = ModelUsageLedger & {
   summary_available?: boolean; summary_generated_at?: string | null; summary_period?: string;
   start_date: string; end_date: string; earliest_date: string | null; timezone: string; collection_time: string;
   exchange_rate_cny_per_usd: number; latest_account_data: string | null;
-  model_costs_enabled?: boolean; total_cost_usd?: number | null; daily_totals?: DailyTotal[];
+  model_costs_enabled?: boolean; daily_totals?: DailyTotal[];
   sources: OverviewSource[]; rows?: DailyRow[];
   model_costs?: { source_id: string; model: string; cost_cny: string; cost_usd: number }[];
   days: { date: string; status: 'complete' | 'partial' | 'missing'; expected: number; collected: number }[];
@@ -76,9 +76,15 @@ export function validOverviewRange(start: string, end: string, now = new Date())
 export function overviewSeries(data: OverviewData, models: string[], metric: DailyMetric) {
   if (data.summary_available === false) return [];
   if (data.model_costs_enabled === false) {
+    const costDays = metric === 'cost_usd' && data.daily_costs ? new Map(data.daily_costs.map(bill => [bill.date, bill])) : null;
     const totals = new Map((data.daily_totals || []).map(row => [row.date, row]));
     return data.days.map(day => {
       const total = totals.get(day.date);
+      if (costDays) {
+        const costDay = costDays.get(day.date);
+        const value = costDay?.cost_usd ?? null;
+        return { ...day, collected: costDay?.collected ?? 0, rows: [] as DailyRow[], total, values: [value], value };
+      }
       const value = day.collected > 0 ? Number(total?.[metric] || 0) : null;
       return { ...day, rows: [] as DailyRow[], total, values: [value], value };
     });
