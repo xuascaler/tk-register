@@ -9,11 +9,6 @@ export type ModelUsageLedger = {
   total_cost_days?: number;
   daily_costs?: { date: string; cost_usd: number | null; collected: number; expected: number }[];
 };
-export function modelUsageLabel(source?: 'raw' | 'modified') {
-  if (source === 'modified') return 'Allocated costs and estimated tokens';
-  if (source === 'raw') return 'Upstream costs and tokens';
-  return 'Daily costs and tokens';
-}
 export type DailyData = ModelUsageLedger & { start_date: string; end_date: string; timezone: string; collection_time: string; currency: string; exchange_rate_cny_per_usd: number; model_costs_enabled?: boolean; daily_totals?: DailyTotal[]; rows?: DailyRow[]; days: DailyDay[] };
 export type ModelSelection = string[] | null;
 export function recentDailyRange(count: number, now = new Date()) {

@@ -77,6 +77,20 @@ try {
     return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'Unexpected mock request' }) });
   });
   const goto = async hash => { await page.goto(`http://127.0.0.1:${port}/tk-register/#/${hash}`); };
+  const assertUsageLabels = async section => {
+    const metrics = section.getByRole('group', { name: 'Daily chart metric' });
+    for (const name of ['Cost', 'Input tokens', 'Output tokens']) {
+      await metrics.getByRole('button', { name, exact: true }).waitFor();
+    }
+    assert.doesNotMatch(await section.innerText(), /Allocated costs and estimated tokens|Upstream costs and tokens/i);
+  };
+  const assertAccountUsageLabels = async () => {
+    await goto('accounts/1/usage');
+    await assertUsageLabels(page.locator('.daily-compact.daily-usage'));
+    await page.getByRole('button', { name: 'View daily details' }).click();
+    await page.getByRole('heading', { name: 'Daily breakdown', exact: true }).waitFor();
+    await assertUsageLabels(page.locator('.daily-usage'));
+  };
   const assertPrivate = async () => {
     await page.locator('.overview-source-table.is-status').waitFor();
     assert.equal(await page.locator('#daily-model-trigger,.overview-model-summary,.overview-chart-legend').count(), 0);
@@ -186,10 +200,12 @@ try {
   assert.equal(enabled, true);
   await goto('accounts');
   await page.locator('.overview-model-summary').waitFor();
+  await assertUsageLabels(page.locator('.accounts-overview'));
   assert.equal(await page.locator('#daily-model-trigger').count(), 1);
   await trigger.click();
   assert.equal(await page.getByRole('dialog', { name: 'Usage dates' }).locator('input[type=date]').count(), 0);
   await page.keyboard.press('Escape');
+  await assertAccountUsageLabels();
   await goto('config/overview');
   const sourcePicker = page.locator('#value-model_usage_source');
   const selectSource = async name => {
@@ -206,6 +222,11 @@ try {
   assert.equal(modelSource, 'raw'); assert.equal(enabled, false);
   await page.reload(); await toggle.waitFor();
   assert.ok(await toggle.isDisabled() && !(await toggle.isChecked()));
+  await goto('accounts');
+  await assertPrivate();
+  await assertUsageLabels(page.locator('.accounts-overview'));
+  await assertAccountUsageLabels();
+  await goto('config/overview');
   await selectSource('Modified data');
   assert.ok(await toggle.isEnabled() && !(await toggle.isChecked()));
   await page.getByRole('button', {name:'Save changes',exact:true}).click();
@@ -214,7 +235,7 @@ try {
   await goto('account-pool/raw-accounts');
   await page.getByRole('heading', {name:'Raw account',exact:true}).waitFor();
   await page.locator('.overview-model-summary').waitFor();
-  assert.match(await page.locator('.overview-model-summary').innerText(), /Upstream costs and tokens/);
+  await assertUsageLabels(page.locator('.accounts-overview'));
   await goto('config/users');
   await page.getByRole('button', {name:'Add super admin',exact:true}).click();
   const dialog = page.getByRole('dialog');
