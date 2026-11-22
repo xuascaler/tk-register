@@ -116,9 +116,17 @@ func ValidateBillExportDates(start, end string, now time.Time) error {
 	return nil
 }
 
-func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, start, end string, now time.Time, includeSubUsers ...bool) (BillExportJob, error) {
+type BillExportOptions struct {
+	IncludeSubUsers bool
+	UsageSource     string
+}
+
+func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, start, end string, now time.Time, options ...BillExportOptions) (BillExportJob, error) {
 	var job BillExportJob
-	includeDescendants := len(includeSubUsers) > 0 && includeSubUsers[0]
+	var selected BillExportOptions
+	if len(options) > 0 {
+		selected = options[0]
+	}
 	if err := ValidateBillExportDates(start, end, now); err != nil {
 		return job, err
 	}
@@ -135,6 +143,19 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		var actor, user User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND role = ? AND status = ?", actorID, "admin", "active").First(&actor).Error; err != nil {
 			return err
+		}
+		// Source selection is independent of page configuration and is authorized
+		// against the current persisted role. Ordinary admins always use Modified.
+		source := "modified"
+		if actor.IsSuperAdmin {
+			switch selected.UsageSource {
+			case "", "raw":
+				source = "raw"
+			case "modified":
+				source = "modified"
+			default:
+				return validationErrorf("Choose Raw or Modified bill data.")
+			}
 		}
 		if err := tx.First(&user, userID).Error; err != nil {
 			return err
@@ -159,7 +180,7 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 			Select(`a.id AS local_account_id, a.identity_key, owner.email AS username, a.account AS account_email, a.plan, a.remote_id, a.supplier_record_id, a.latest_submitted_at,
    COALESCE(NULLIF(a.platform_account_id, ''), (SELECT snap.platform_account_id FROM account_snapshots snap WHERE snap.account_id = a.id AND snap.identity_key = a.identity_key ORDER BY snap.collected_at DESC, snap.id DESC LIMIT 1)) AS platform_account_id`).
 			Where("a.vendor_id = ? AND a.deleted_at IS NULL AND a.plan LIKE ?", vendor.ID, "claude/%")
-		if includeDescendants {
+		if selected.IncludeSubUsers {
 			// The closure table includes every depth. EXISTS selects each actual
 			// account once even though several ancestors can see the same account.
 			selection = selection.Where(`a.user_id = ? OR EXISTS (
@@ -178,11 +199,7 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		if len(accounts) > 20000 {
 			return validationErrorf("This user has too many accounts for one export.")
 		}
-		source := "modified"
-		if actor.IsSuperAdmin {
-			source = "raw"
-		}
-		job = BillExportJob{RequestedBy: actor.ID, UsageSource: source, TargetUserID: user.ID, UserEmail: user.Email, IncludeSubUsers: includeDescendants, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
+		job = BillExportJob{RequestedBy: actor.ID, UsageSource: source, TargetUserID: user.ID, UserEmail: user.Email, IncludeSubUsers: selected.IncludeSubUsers, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
 		if err := tx.Create(&job).Error; err != nil {
 			return err
 		}

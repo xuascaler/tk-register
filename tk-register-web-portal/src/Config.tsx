@@ -327,7 +327,7 @@ export default function Config({
             />
           </div>
           {category === 'bill_exports' ? (
-            <div id='config-panel' role='tabpanel' aria-labelledby='tab-bill_exports'><BillExports /></div>
+            <div id='config-panel' role='tabpanel' aria-labelledby='tab-bill_exports'><BillExports isSuperAdmin={currentUser.is_super_admin === true} /></div>
           ) : category === 'users' ? (
             <div id='config-panel' role='tabpanel' aria-labelledby='tab-users'><Users currentUser={currentUser} registrationEnabled={String(settings.find(setting => setting.key === 'registration_enabled')?.value) === 'true'} /></div>
           ) : category === 'account_sync' ? (

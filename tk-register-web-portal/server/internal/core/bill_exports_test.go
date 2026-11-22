@@ -141,7 +141,7 @@ func TestBillExportOptionalDescendantsFreezeActualOwnersAndFullTree(t *testing.T
 	if err != nil || self.IncludeSubUsers || self.AccountCount != 1 {
 		t.Fatalf("default export must include only direct ownership: %+v %v", self, err)
 	}
-	all, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, true)
+	all, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{IncludeSubUsers: true})
 	if err != nil || !all.IncludeSubUsers || all.AccountCount != 5 || all.UsageSource != "modified" {
 		t.Fatalf("full descendant export: %+v %v", all, err)
 	}
@@ -173,7 +173,7 @@ func TestBillExportOptionalDescendantsFreezeActualOwnersAndFullTree(t *testing.T
 	if err != nil || len(usage) != 20 {
 		t.Fatalf("date/model lines were dropped or duplicated: %+v %v", usage, err)
 	}
-	subtree, err := s.CreateBillExport(ctx, admin.ID, child.ID, "2026-11-10", "2026-11-11", now, true)
+	subtree, err := s.CreateBillExport(ctx, admin.ID, child.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{IncludeSubUsers: true})
 	if err != nil || subtree.AccountCount != 3 {
 		t.Fatalf("subtree includes ancestors or siblings: %+v %v", subtree, err)
 	}
@@ -205,10 +205,10 @@ func TestBillExportDescendantsWorkWithoutDirectAccounts(t *testing.T) {
 	ctx := context.Background()
 	child := hierarchyChild(t, s, owner, "only-child@example.com")
 	syncSubmission(t, s, child.ID, vendor.ID, version.ID, "only-child-account@example.com", "claude/cc-pro", "accepted", "900", now)
-	if _, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-11", "2026-11-11", now, false); !IsValidationError(err) {
+	if _, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-11", "2026-11-11", now, BillExportOptions{IncludeSubUsers: false}); !IsValidationError(err) {
 		t.Fatal("direct-only empty export accepted", err)
 	}
-	job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-11", "2026-11-11", now, true)
+	job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-11", "2026-11-11", now, BillExportOptions{IncludeSubUsers: true})
 	if err != nil || job.AccountCount != 1 {
 		t.Fatalf("root without direct accounts could not export its child: %+v %v", job, err)
 	}
@@ -449,6 +449,96 @@ func TestBillExportSourceUpgradeAndViewerIsolation(t *testing.T) {
 	}
 	if _, err := s.BillExportData(ctx, admin.ID, superJob.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatal("demoted admin kept raw access", err)
+	}
+}
+
+func TestBillExportSourceChoiceRequiresCurrentSuperAdmin(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	child := hierarchyChild(t, s, owner, "source-child@example.com")
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "source-owner@example.com", "claude/cc-pro", "accepted", "1100", now)
+	syncSubmission(t, s, child.ID, vendor.ID, version.ID, "source-child-account@example.com", "claude/cc-pro", "accepted", "1101", now)
+	if err := s.DB.Model(&admin).Update("is_super_admin", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		requested string
+		include   bool
+		want      string
+		count     int
+	}{{"", false, "raw", 1}, {"raw", true, "raw", 2}, {"modified", true, "modified", 2}} {
+		job, err := s.CreateBillExport(WithModelUsageSource(ctx, "modified"), admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{IncludeSubUsers: tc.include, UsageSource: tc.requested})
+		if err != nil || job.UsageSource != tc.want || job.IncludeSubUsers != tc.include || job.AccountCount != tc.count {
+			t.Fatalf("source/scope %q: %+v %v", tc.requested, job, err)
+		}
+	}
+	var before, after int64
+	if err := s.DB.Model(&BillExportJob{}).Count(&before).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"invalid", "Raw", " raw "} {
+		job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{UsageSource: invalid})
+		if !IsValidationError(err) || job.ID != 0 {
+			t.Fatalf("invalid source %q created a job: %+v %v", invalid, job, err)
+		}
+	}
+	if err := s.DB.Model(&BillExportJob{}).Count(&after).Error; err != nil || after != before {
+		t.Fatalf("invalid source persisted export jobs: %d => %d, %v", before, after, err)
+	}
+	// The request must not rely on an actor role cached before demotion.
+	if err := s.DB.Model(&admin).Update("is_super_admin", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.CreateBillExport(WithModelUsageSource(ctx, "raw"), admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{IncludeSubUsers: true, UsageSource: "raw"})
+	if err != nil || job.UsageSource != "modified" || !job.IncludeSubUsers || job.AccountCount != 2 {
+		t.Fatalf("demoted admin obtained Raw or lost subtree scope: %+v %v", job, err)
+	}
+}
+
+func TestBillExportOrdinaryAdminAlwaysUsesModified(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := WithModelUsageSource(context.Background(), "raw")
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "ordinary-source@example.com", "claude/cc-pro", "accepted", "1200", now)
+	for _, source := range []string{"", "raw", "modified", "invalid"} {
+		job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{UsageSource: source})
+		if err != nil || job.UsageSource != "modified" {
+			t.Fatalf("ordinary source %q selected data outside Modified: %+v %v", source, job, err)
+		}
+	}
+}
+
+func TestBillExportSourceSnapshotIgnoresLaterGlobalConfiguration(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "frozen-source@example.com", "claude/cc-pro", "accepted", "1300", now)
+	if err := s.DB.Model(&admin).Update("is_super_admin", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	jobs := map[uint64]string{}
+	for _, selected := range []string{"raw", "modified"} {
+		other := "raw"
+		if selected == "raw" {
+			other = "modified"
+		}
+		if err := s.PatchSettings(ctx, map[string]string{"model_usage_source": other}, admin.ID); err != nil {
+			t.Fatal(err)
+		}
+		job, err := s.CreateBillExport(WithModelUsageSource(ctx, other), admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{UsageSource: selected})
+		if err != nil || job.UsageSource != selected {
+			t.Fatalf("global source overrode explicit job source: %+v %v", job, err)
+		}
+		jobs[job.ID] = selected
+	}
+	for _, global := range []string{"raw", "modified"} {
+		if err := s.PatchSettings(ctx, map[string]string{"model_usage_source": global}, admin.ID); err != nil {
+			t.Fatal(err)
+		}
+		for id, selected := range jobs {
+			job, err := s.BillExport(WithModelUsageSource(ctx, global), admin.ID, id)
+			if err != nil || job.UsageSource != selected {
+				t.Fatalf("global setting changed a frozen export: %+v %v", job, err)
+			}
+		}
 	}
 }
 
