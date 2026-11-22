@@ -131,14 +131,14 @@ test('disabled overview uses only backend totals and keeps exact token counters'
   assert.deepEqual(Object.fromEntries(overviewQuery('all', 'all_time', { start: '', end: '' }, false)), { sources: 'all', period: 'all_time' });
 });
 
-test('historical costs stay visible in the all-model chart while unsaved token counts remain gaps', () => {
+test('an unavailable bill leaves a gap in both cost and token charts', () => {
   const historical: OverviewData = {
-    ...data, model_costs_enabled: false, model_usage_source: 'modified',
+    ...data, model_costs_enabled: false,
     days: [{ date: '2026-11-14', status: 'missing', expected: 1, collected: 0 }],
-    daily_costs: [{ date: '2026-11-14', expected: 1, collected: 1, cost_usd: 400 }],
+    daily_costs: [{ date: '2026-11-14', expected: 1, collected: 0, cost_usd: null }],
     daily_totals: [], rows: undefined, model_costs: undefined,
   };
-  assert.deepEqual(overviewSeries(historical, [], 'cost_usd').map(point => point.value), [400]);
+  assert.deepEqual(overviewSeries(historical, [], 'cost_usd').map(point => point.value), [null]);
   assert.deepEqual(overviewSeries(historical, [], 'input_tokens').map(point => point.value), [null]);
   assert.deepEqual(overviewSeries({ ...historical, model_costs_enabled: true }, [], 'cost_usd').map(point => point.value), [null]);
 });

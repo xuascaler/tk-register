@@ -267,15 +267,20 @@ try {
   await page.getByRole("heading", { name: "Request history", exact: true }).waitFor();
   await screenshot("overview", 1440);
   await screenshot("overview", 390);
-  // The removed UI does not remove the underlying APIs or stored execution history.
+  // Status can query the test vendor. The member's bill range uses local daily rows.
   detail = await data(await api(page.request, `/submissions/${id}/status`, "POST", { force: true }, member.csrf_token));
   assert.equal(detail.submission.platform_account_id, "10725");
   assert.equal(detail.metrics.account.prompt_tokens, 1120273);
   const endDate = new Date().toISOString().slice(0, 10);
   const billDates = { start_ds: endDate, end_ds: endDate };
+  const vendorBillRequests = (await audit()).bills;
   detail = await data(await api(page.request, `/submissions/${id}/bills`, "POST", billDates, member.csrf_token));
   assert.equal(detail.bills.currency, "CNY");
-  assert.equal(detail.bills.account.cost, 4482.04);
+  assert.equal(detail.bills.account, null);
+  assert.equal(detail.bills.start_ds, billDates.start_ds);
+  assert.equal(detail.bills.end_ds, billDates.end_ds);
+  assert.ok(detail.executions.every(execution => execution.result == null));
+  assert.equal((await audit()).bills, vendorBillRequests);
   await page.reload();
   await page.getByRole("heading", { name: "account@example.com", exact: true }).waitFor();
   assert.equal(await page.getByRole("tab", { name: "Bills", exact: true }).count(), 0);
@@ -290,12 +295,12 @@ try {
     false,
   );
   await screenshot("parameters", 1440);
-  // A fresh empty vendor result clears the cached result, rather than keeping
-  // stale usage or pretending missing values are zero.
-  await mode("empty");
-  detail = await data(await api(page.request, `/submissions/${id}/bills`, "POST", billDates, member.csrf_token));
+  // Reopening the saved range also keeps missing bills empty.
+  detail = await data(await api(page.request, `/submissions/${id}`));
+  assert.equal(detail.bills.start_ds, billDates.start_ds);
+  assert.equal(detail.bills.end_ds, billDates.end_ds);
   assert.equal(detail.bills.account, null);
-  await mode("success");
+  assert.equal((await audit()).bills, vendorBillRequests);
   await go("submissions");
   await page
     .getByRole("button", { name: "account@example.com", exact: true })

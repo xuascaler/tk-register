@@ -14,7 +14,7 @@ import (
 
 func TestPersonalSubmissionDoesNotExposeSavedModelResponses(t *testing.T) {
 	a, _, _ := fixture(t)
-	admin, adminCookie, _ := vendorSession(t, a, "visibility-admin@example.com", "admin")
+	admin, adminCookie, _ := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
 	_, cookie, csrf := vendorSession(t, a, "visibility-member@example.com", "member")
 	vendor := configuredVendor(t, a, admin.ID)
 	a.vendorTransport = vendorRoundTrip(func(*http.Request) (*http.Response, error) {
@@ -42,8 +42,8 @@ func TestPersonalSubmissionDoesNotExposeSavedModelResponses(t *testing.T) {
 	}
 	w = request(t, a, "GET", "submissions/"+id, nil, cookie, "")
 	requireStatus(t, w, 200)
-	if !strings.Contains(w.Body.String(), "private-model-marker") {
-		t.Fatal("enabled personal details were not restored")
+	if strings.Contains(w.Body.String(), "private-model-marker") {
+		t.Fatal("model visibility exposed an opaque supplier result")
 	}
 	if err := a.store.PatchSettings(context.Background(), map[string]string{"user_overview_model_costs_enabled": "false"}, admin.ID); err != nil {
 		t.Fatal(err)
@@ -89,7 +89,7 @@ func TestPersonalSubmissionVisibilityFailsClosed(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", basePath+"/api/submissions/1", nil)
-	a.writePersonalSubmission(w, r, core.SubmissionDetail{Executions: []core.ExecutionDTO{{Result: map[string]any{"model": "private-model-marker"}}}})
+	a.writePersonalSubmission(w, r, &core.User{}, core.SubmissionDetail{Executions: []core.ExecutionDTO{{Result: map[string]any{"model": "private-model-marker"}}}}, nil)
 	requireStatus(t, w, 503)
 	if strings.Contains(w.Body.String(), "private-model-marker") {
 		t.Fatal("settings failure leaked an opaque response")
@@ -179,7 +179,7 @@ func TestPersonalSavedFailureKeepsSafeErrorWithoutRequeryingVendor(t *testing.T)
 	for _, role := range []string{"member", "admin"} {
 		t.Run(role, func(t *testing.T) {
 			a, _, _ := fixture(t)
-			manager, managerCookie, _ := vendorSession(t, a, "diagnostic-manager@example.com", "admin")
+			manager, managerCookie, _ := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
 			_, cookie, csrf := vendorSession(t, a, "diagnostic-owner@example.com", role)
 			vendor := configuredVendor(t, a, manager.ID)
 			calls := 0
@@ -216,10 +216,10 @@ func TestPersonalSavedFailureKeepsSafeErrorWithoutRequeryingVendor(t *testing.T)
 				if !strings.Contains(execution.ErrorBody, "账号重复录入,id:571510") || execution.RequestID == "" || execution.HTTPStatus == nil || *execution.HTTPStatus != 400 || execution.ErrorCode == nil || *execution.ErrorCode != "UPSTREAM_REJECTED" {
 					t.Fatal("read lost failure diagnostics or correlation")
 				}
-				if enabled != strings.Contains(read.Body.String(), "private-model-marker") {
-					t.Fatal("model visibility setting was not enforced")
+				if strings.Contains(read.Body.String(), "private-model-marker") {
+					t.Fatal("model visibility allowed an opaque supplier response")
 				}
-				if !enabled && execution.Result != nil {
+				if execution.Result != nil {
 					t.Fatal("opaque result leaked with model details disabled")
 				}
 				if strings.Contains(read.Body.String(), "echoed-secret") {

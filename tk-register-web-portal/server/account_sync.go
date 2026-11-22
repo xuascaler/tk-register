@@ -104,7 +104,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 			}
 			switch route {
 			case "admin/raw-accounts/overview":
-				a.serveAccountsOverview(w, r, user.ID, true, true)
+				a.serveAccountsOverview(w, r, user, true, true)
 				return true
 			case "admin/raw-accounts/overview/sources":
 				a.adminOverviewSources(w, r, user.ID)
@@ -123,7 +123,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 	}
 	r = r.WithContext(ctx)
 	if route == "accounts/overview" {
-		a.accountsOverview(w, r, user.ID)
+		a.serveAccountsOverview(w, r, user, false, false)
 		return true
 	}
 	base := "accounts"
@@ -209,7 +209,7 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "daily-usage" && r.Method == "GET" {
-		a.dailyUsageData(w, r, id, adminAccounts, rawAccounts)
+		a.dailyUsageData(w, r, user, id, adminAccounts, rawAccounts)
 		return true
 	}
 	if len(parts) == 2 && parts[1] == "auth-json" {

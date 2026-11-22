@@ -39,7 +39,10 @@ func overviewBillingFixture() AccountsOverview {
 			overviewBillingRow("2026-11-14", "beta", "0.0504"), overviewBillingRow("2026-11-15", "beta", "0.054"),
 			overviewBillingRow("2026-11-14", "gamma", "0.0504"), overviewBillingRow("2026-11-15", "gamma", "0.054"),
 		},
-		Days: []OverviewDay{{Date: "2026-11-14", Status: "complete", Expected: 7, Collected: 5}},
+		Days: []OverviewDay{
+			{Date: "2026-11-14", Status: "complete", Expected: 7, Collected: 5},
+			{Date: "2026-11-15", Status: "complete", Expected: 7, Collected: 5},
+		},
 	}
 }
 
@@ -77,6 +80,11 @@ func TestProjectOverviewBillingRoundingAndFilters(t *testing.T) {
 	// Three models at 1.45 cents each: the rounded grand total is 4 cents.
 	// Stable largest-remainder allocation gives alpha 2, beta/gamma 1 each.
 	assertOverviewBillingSums(t, out, 4)
+	if out.TotalCostUSD == nil || *out.TotalCostUSD != 0.04 || len(out.DailyCosts) != 2 ||
+		out.DailyCosts[0].CostUSD == nil || *out.DailyCosts[0].CostUSD != 0.01 ||
+		out.DailyCosts[1].CostUSD == nil || *out.DailyCosts[1].CostUSD != 0.03 {
+		t.Fatalf("headline and daily totals must reflect the displayed model cents: %+v", out.DailyCosts)
+	}
 	if out.Sources[0].Total != 3 || out.Sources[0].Statuses["banned"] != 1 || out.Sources[0].CostKnown != 3 || out.Sources[0].CollectedDays != 2 || out.Rows[0].InputTokens != "9007199254740993" || out.Rows[0].CostCNY != "0.0504" || out.Days[0].Expected != 7 {
 		t.Fatal("projection changed counts, raw money, tokens, or coverage")
 	}

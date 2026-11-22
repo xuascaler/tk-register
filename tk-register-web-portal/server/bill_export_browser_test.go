@@ -8,6 +8,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"goapi-tk-register/server/internal/core"
 )
 
 // All bill rows, users and databases are synthetic. Never contacts the vendor.
@@ -21,7 +23,7 @@ func TestBillExportBrowserFixture(t *testing.T) {
 		t.Fatal("loopback only")
 	}
 	a, _, _, _, rows, _ := setupPageSync(t)
-	admin := addUser(t, a, "bills-admin@example.com", "admin")
+	admin := addUser(t, a, core.InitialSuperAdminEmail, "admin")
 	raw, err := os.ReadFile("internal/billing/testdata/claude-bills.xlsx")
 	if err != nil {
 		t.Fatal(err)

@@ -18,7 +18,7 @@ func overviewSummaryFixture(t *testing.T) (*Store, []User, []SyncedAccount, time
 	t.Helper()
 	s, a, v, p := syncFixture(t)
 	ctx := context.Background()
-	if err := s.DB.Model(&a).Update("role", "admin").Error; err != nil {
+	if err := s.DB.Model(&a).Updates(map[string]any{"role": "admin", "is_super_admin": true}).Error; err != nil {
 		t.Fatal(err)
 	}
 	b := hierarchyChild(t, s, a, "snapshot-b@example.com")
@@ -383,5 +383,81 @@ func TestOverviewSummariesJobDateCutoffAndExactStoredAmounts(t *testing.T) {
 		if row.UsageDate == "2026-11-14" && (row.CostCNY != "0.30000003" || row.InputTokens != "27021597764222979" || math.Abs(row.CostUSD-0.30000003/7.2) > 1e-14) {
 			t.Fatalf("precision lost: %+v", row)
 		}
+	}
+}
+
+func TestOverviewSummarySplitMigratesBothRolesAndPreservesOriginalBills(t *testing.T) {
+	s, users, accounts, now, _ := overviewSummaryFixture(t)
+	ctx := context.Background()
+	var day AccountUsageDay
+	if err := s.DB.Where("account_id = ? AND usage_date = ?", accounts[0].ID, "2026-11-14").First(&day).Error; err != nil {
+		t.Fatal(err)
+	}
+	modified := AccountDailyUsageModified{DayID: day.ID, Model: "mirror-only", CostCNY: "36", InputTokens: "11", OutputTokens: "2", CacheReadTokens: "3", CacheWriteTokens: "4"}
+	if err := s.DB.Create(&modified).Error; err != nil {
+		t.Fatal(err)
+	}
+	// The old cache counted this day in modified.collections even when the bill had no lines.
+	var emptyDay AccountUsageDay
+	if err := s.DB.Where("account_id = ? AND usage_date = ?", accounts[0].ID, "2026-11-15").First(&emptyDay).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Create(&AccountDailyFableRatio{DayID: emptyDay.ID, FableRatio: "0"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	type oldCache struct {
+		User User
+		Data string
+	}
+	for _, cache := range []oldCache{
+		{users[0], `{"version":1,"rows":[],"modified":{"rows":[],"collections":[{"Date":"2026-11-15","Count":1}]}}`},
+		{users[1], `{"version":1,"rows":[],"model_costs":[]}`},
+	} {
+		row := OverviewSummary{UserID: cache.User.ID, ViewType: "personal", Period: "all_time", OverviewSummaryData: OverviewSummaryData{
+			StartDate: "2026-10-01", EndDate: "2026-11-15", Timezone: "Asia/Shanghai", BatchID: "legacy-mixed", PayloadJSON: cache.Data, AccountsAsOf: now, GeneratedAt: now,
+		}}
+		if err := s.DB.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.migrateOverviewSummaries(); err != nil {
+		t.Fatal(err)
+	}
+	var raw []OverviewSummary
+	if err := s.DB.Find(&raw).Error; err != nil || len(raw) != 1 || raw[0].UserID != users[0].ID || strings.Contains(raw[0].PayloadJSON, `"modified"`) || raw[0].BatchID != "legacy-mixed" {
+		t.Fatal("raw cache migration", raw, err)
+	}
+	var first []OverviewSummaryModified
+	if err := s.DB.Order("id").Find(&first).Error; err != nil || len(first) != 8 {
+		t.Fatal("did not initialize all modified periods", len(first), err)
+	}
+	view := WithModelUsageSource(ctx, "modified")
+	out, err := s.ReadOverviewSummary(view, users[0].ID, false, "all_time", now)
+	if err != nil || out.TotalCostUSD == nil || *out.TotalCostUSD != 5 || out.StartDate != "2026-11-14" || out.TotalCostDays != 1 || len(out.Rows) != 1 || out.Rows[0].Model != "mirror-only" || out.Days[1].Collected != 0 {
+		t.Fatal("migration used a raw amount, raw date, or empty ratio marker", out, err)
+	}
+	for _, source := range out.Sources {
+		if source.CostUSD != nil || source.CostKnown != 0 {
+			t.Fatal("raw account snapshot entered the modified payload", source)
+		}
+	}
+	if err = s.migrateOverviewSummaries(); err != nil {
+		t.Fatal(err)
+	}
+	var second []OverviewSummaryModified
+	if err = s.DB.Order("id").Find(&second).Error; err != nil || !reflect.DeepEqual(first, second) {
+		t.Fatal("second start rewrote frozen summaries", err)
+	}
+	var materialized int64
+	if err = s.DB.Model(&AccountDailyUsageModified{}).Count(&materialized).Error; err != nil || materialized != 1 {
+		t.Fatal("migration backfilled past bills", materialized, err)
+	}
+
+	if err = s.DB.Model(&User{}).Where("id = ?", users[0].ID).Update("is_super_admin", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	out, err = s.ReadOverviewSummary(WithModelUsageSource(ctx, "raw"), users[0].ID, false, "all_time", now)
+	if err != nil || out.SummaryAvailable == nil || *out.SummaryAvailable {
+		t.Fatal("demoted viewer read its stale raw cache", out, err)
 	}
 }

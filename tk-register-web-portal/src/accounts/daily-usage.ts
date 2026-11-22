@@ -4,7 +4,6 @@ export type DailyRow = { date: string; model: string; input_tokens: string; outp
 export type DailyTotal = Omit<DailyRow, 'model'>;
 export type DailyDay = { date: string; status: 'complete' | 'stale' | 'missing' | 'failed' | 'pending'; collected_at: string | null; error?: string };
 export type ModelUsageLedger = {
-  model_usage_source?: 'raw' | 'modified';
   total_cost_usd?: number | null;
   total_cost_days?: number;
   daily_costs?: { date: string; cost_usd: number | null; collected: number; expected: number }[];

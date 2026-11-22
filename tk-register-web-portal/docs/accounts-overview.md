@@ -70,11 +70,13 @@ require an administrator browser session and do not accept personal API tokens.
 
 ### Model detail visibility
 
-Super administrators set `model_usage_source` under Config → Overview. It applies
-to the model breakdown in Accounts Overview and Daily usage. The default,
-`modified`, shows allocated model costs and tokens for newly collected bills.
-Raw account always uses upstream model rows. The all-model spend for the same
-accounts and dates comes from the same daily bills in both views.
+Members and regular administrators read Modified bills in Accounts Overview and
+Daily usage. Their totals, model breakdown, token counts and date coverage all
+come from `account_daily_usages_modifiled`. Their API responses omit
+`model_usage_source`. Days without Modified model rows have no reported usage.
+Super administrators can choose the source for their own Accounts pages in
+Config → Overview. Their Raw account pages always use upstream bills. For an
+account-day covered by both sources, the two sources have the same total cost.
 
 The personal detail switch `user_overview_model_costs_enabled` defaults to off.
 Selecting `raw` saves the switch as off and locks it. Selecting `modified`
@@ -147,7 +149,9 @@ Counts and totals do not navigate to other pages.
 
 ## Persisted preset summaries
 
-The `overview_summaries` table stores one summary per viewer, view
+The `overview_summaries_modified` table stores Modified summaries for all
+viewers. The `overview_summaries` table holds the upstream summaries available
+to super administrators. Each table has one record per viewer, view
 (personal or administrative), and period (`day`, `week`, `month`, `all_time`).
 Each summary covers all sources and models and stores the actual date range,
 generation time, batch ID, and a versioned JSON payload. Raw CNY decimal amounts
@@ -191,9 +195,9 @@ administrator privileges are still checked on every request. Personal and
 administrative summaries have separate keys. Account list and manual Sync retain
 their current behavior and can therefore be newer than an Overview summary.
 
-The migration adds only the summary table and `overview_*` follow-up fields on
-`daily_usage_jobs`; existing billing rows are retained. No initial summary
-backfill is performed.
+On upgrade, existing preset views are migrated to the separate tables.
+The migration preserves original daily bills and uses only existing Modified
+data for the Modified summaries. It does not generate Modified historical bills.
 
 ## Verification
 

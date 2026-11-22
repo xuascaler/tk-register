@@ -32,6 +32,15 @@ func usageLineTable(source string) string {
 	return "account_daily_usages"
 }
 
+// Raw collections may confirm zero without any model lines. A modified day is
+// available only after at least one modified row (including a free model) exists.
+func usageDayPresent(source string) string {
+	if source == "modified" {
+		return "d.last_success_at IS NOT NULL AND EXISTS (SELECT 1 FROM account_daily_usages_modifiled m WHERE m.day_id=d.id)"
+	}
+	return "d.last_success_at IS NOT NULL"
+}
+
 type DailyBillCost struct {
 	cents     int64
 	Date      string   `json:"date"`
@@ -41,16 +50,10 @@ type DailyBillCost struct {
 }
 
 type UsageBillTotals struct {
-	ModelUsageSource string          `json:"model_usage_source"`
+	ModelUsageSource string          `json:"model_usage_source,omitempty"`
 	TotalCostUSD     *float64        `json:"total_cost_usd"`
 	TotalCostDays    int             `json:"total_cost_days"`
 	DailyCosts       []DailyBillCost `json:"daily_costs"`
-}
-
-type upstreamPeriodCosts struct{ dates, sources map[string]*big.Rat }
-
-func newUpstreamPeriodCosts() upstreamPeriodCosts {
-	return upstreamPeriodCosts{dates: map[string]*big.Rat{}, sources: map[string]*big.Rat{}}
 }
 
 func addUsageCost(totals map[string]*big.Rat, key, raw string) error {
@@ -65,8 +68,7 @@ func addUsageCost(totals map[string]*big.Rat, key, raw string) error {
 	return nil
 }
 
-// Allocate daily and per-owner totals from the same unmodified bill. Model line
-// coverage can be shorter than cost coverage during and after the cutover.
+// Allocate the rounded period total across exact billing amounts.
 func usageCents(totals map[string]*big.Rat, rate float64) (map[string]int64, int64, error) {
 	exchange, ok := new(big.Rat).SetString(strconv.FormatFloat(rate, 'f', -1, 64))
 	if !ok || exchange.Sign() <= 0 {
@@ -117,21 +119,14 @@ func (out *UsageBillTotals) setDailyCosts(costs map[string]*big.Rat, days []Over
 	return nil
 }
 
-func (out *AccountsOverview) setUpstreamCosts(costs upstreamPeriodCosts, days []OverviewDay) error {
-	if err := out.setDailyCosts(costs.dates, days, out.ExchangeRate); err != nil {
-		return err
-	}
-	amounts, _, err := usageCents(costs.sources, out.ExchangeRate)
-	if err != nil {
-		return err
-	}
-	out.allModelSources = make(map[string]float64, len(out.Sources))
-	for _, s := range out.Sources {
-		if s.TotalCostDays > 0 || s.hasUpstreamBill {
-			out.allModelSources[s.ID] = float64(amounts[s.ID]) / 100
+func (out *AccountsOverview) setModelBillTotals() error {
+	byDate := make(map[string]*big.Rat)
+	for _, row := range out.Rows {
+		if err := addUsageCost(byDate, row.UsageDate, row.CostCNY); err != nil {
+			return err
 		}
 	}
-	return nil
+	return out.setDailyCosts(byDate, out.Days, out.ExchangeRate)
 }
 
 // Assign the displayed daily dollars across the model rows, keeping the

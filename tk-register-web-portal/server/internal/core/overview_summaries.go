@@ -21,11 +21,28 @@ import (
 // and view. These rows intentionally freeze ownership and account observations
 // until the next scheduled build; request handlers must never rebuild them.
 type OverviewSummary struct {
-	ID           uint64    `gorm:"primaryKey"`
-	UserID       uint64    `gorm:"not null;uniqueIndex:idx_overview_user_view_period,priority:1"`
-	User         User      `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT"`
-	ViewType     string    `gorm:"size:16;not null;uniqueIndex:idx_overview_user_view_period,priority:2"`
-	Period       string    `gorm:"size:16;not null;uniqueIndex:idx_overview_user_view_period,priority:3"`
+	ID       uint64 `gorm:"primaryKey"`
+	UserID   uint64 `gorm:"not null;uniqueIndex:idx_overview_user_view_period,priority:1"`
+	User     User   `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT"`
+	ViewType string `gorm:"size:16;not null;uniqueIndex:idx_overview_user_view_period,priority:2"`
+	Period   string `gorm:"size:16;not null;uniqueIndex:idx_overview_user_view_period,priority:3"`
+	OverviewSummaryData
+}
+
+type OverviewSummaryModified struct {
+	ID       uint64 `gorm:"primaryKey"`
+	UserID   uint64 `gorm:"not null;uniqueIndex:idx_modified_overview_user_view_period,priority:1"`
+	User     User   `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT"`
+	ViewType string `gorm:"size:16;not null;uniqueIndex:idx_modified_overview_user_view_period,priority:2"`
+	Period   string `gorm:"size:16;not null;uniqueIndex:idx_modified_overview_user_view_period,priority:3"`
+	OverviewSummaryData
+}
+
+const modifiedOverviewTable = "overview_summaries_modified"
+
+func (OverviewSummaryModified) TableName() string { return modifiedOverviewTable }
+
+type OverviewSummaryData struct {
 	StartDate    string    `gorm:"size:10;not null"`
 	EndDate      string    `gorm:"size:10;not null"`
 	Timezone     string    `gorm:"size:64;not null"`
@@ -34,8 +51,6 @@ type OverviewSummary struct {
 	GeneratedAt  time.Time `gorm:"not null"`
 	AccountsAsOf time.Time `gorm:"not null"`
 }
-
-func (s *Store) migrateOverviewSummaries() error { return s.DB.AutoMigrate(&OverviewSummary{}) }
 
 var overviewSummaryPeriods = []string{"day", "week", "month", "all_time"}
 
@@ -93,13 +108,7 @@ type overviewSummaryModelCost struct {
 	Model    string `json:"model"`
 	CostCNY  string `json:"cost_cny"`
 }
-type summaryModelBreakdown struct {
-	Rows        []overviewSummaryUsage      `json:"rows"`
-	ModelCosts  []overviewSummaryModelCost  `json:"model_costs"`
-	Collections []overviewSummaryCollection `json:"collections"`
-}
 type overviewSummaryPayload struct {
-	Modified          *summaryModelBreakdown     `json:"modified,omitempty"`
 	Version           int                        `json:"version"`
 	EarliestDate      *string                    `json:"earliest_date"`
 	LatestAccountData *time.Time                 `json:"latest_account_data"`
@@ -125,14 +134,12 @@ type overviewSummaryCollection struct {
 }
 type overviewSummaryUsageKey struct{ Source, Date, Model string }
 type overviewSummaryInput struct {
-	sources             []overviewSummarySource
-	accounts            []overviewSummaryAccount
-	collections         []overviewSummaryCollection
-	modifiedUsage       map[overviewSummaryUsageKey]*overviewExactUsage
-	modifiedCollections []overviewSummaryCollection
-	usage               map[overviewSummaryUsageKey]*overviewExactUsage
-	earliest            *string
-	latest              *time.Time
+	sources     []overviewSummarySource
+	accounts    []overviewSummaryAccount
+	collections []overviewSummaryCollection
+	usage       map[overviewSummaryUsageKey]*overviewExactUsage
+	earliest    *string
+	latest      *time.Time
 }
 
 // Exact accumulation also avoids SQLite's integer overflow/float coercion in
@@ -195,7 +202,7 @@ func (u *overviewExactUsage) row(date, model string) (overviewSummaryUsage, erro
 	return overviewSummaryUsage{UsageDate: date, Model: model, CostCNY: cost, InputTokens: u.input.String(), OutputTokens: u.output.String(), CacheReadTokens: u.cacheRead.String(), CacheWriteTokens: u.cacheWrite.String()}, err
 }
 
-func (s *Store) loadOverviewSummaryInput(ctx context.Context, scope overviewScope, end string) (overviewSummaryInput, error) {
+func (s *Store) loadOverviewSummaryInput(ctx context.Context, scope overviewScope, end, source string) (overviewSummaryInput, error) {
 	out := overviewSummaryInput{sources: []overviewSummarySource{}, usage: map[overviewSummaryUsageKey]*overviewExactUsage{}}
 	bySource := map[string]int{}
 	costs := map[string]*big.Rat{}
@@ -203,8 +210,14 @@ func (s *Store) loadOverviewSummaryInput(ctx context.Context, scope overviewScop
 		bySource[source.ID] = len(out.sources)
 		out.sources = append(out.sources, overviewSummarySource{AccountSource: source, Statuses: map[string]int64{}})
 	}
-	// The original cumulative observation is read directly, never from CostUSD.
-	err := scope.base().Joins("LEFT JOIN account_snapshots p ON p.id = (SELECT x.id FROM account_snapshots x WHERE x.account_id = a.id AND x.identity_key = a.identity_key ORDER BY x.collected_at DESC, x.id DESC LIMIT 1)").Select(scope.sourceExpr + " AS source, COALESCE(NULLIF(a.snapshot_status,''),'unknown') AS status, a.plan, a.current_submission_id, a.created_at, a.last_success_at, CASE WHEN p.cost_total IS NOT NULL AND UPPER(TRIM(p.currency))='CNY' THEN p.cost_total ELSE NULL END AS cost").Scan(&out.accounts).Error
+	stats := scope.base()
+	columns := scope.sourceExpr + " AS source, COALESCE(NULLIF(a.snapshot_status,''),'unknown') AS status, a.plan, a.current_submission_id, a.created_at, a.last_success_at"
+	if source == "raw" {
+		// Raw summaries retain the cumulative account observation for existing readers.
+		stats = stats.Joins("LEFT JOIN account_snapshots p ON p.id = (SELECT x.id FROM account_snapshots x WHERE x.account_id = a.id AND x.identity_key = a.identity_key ORDER BY x.collected_at DESC, x.id DESC LIMIT 1)")
+		columns += ", CASE WHEN p.cost_total IS NOT NULL AND UPPER(TRIM(p.currency))='CNY' THEN p.cost_total ELSE NULL END AS cost"
+	}
+	err := stats.Select(columns).Scan(&out.accounts).Error
 	if err != nil {
 		return out, err
 	}
@@ -241,7 +254,7 @@ func (s *Store) loadOverviewSummaryInput(ctx context.Context, scope overviewScop
 		out.sources[bySource[id]].CostCNY = &raw
 	}
 	days := func() *gorm.DB {
-		return scope.base().Joins("JOIN account_usage_days d ON d.account_id=a.id AND d.identity_key=a.identity_key").Where("d.last_success_at IS NOT NULL AND d.usage_date <= ?", end)
+		return scope.base().Joins("JOIN account_usage_days d ON d.account_id=a.id AND d.identity_key=a.identity_key").Where(usageDayPresent(source)).Where("d.usage_date <= ?", end)
 	}
 	if err = days().Select(scope.sourceExpr + " AS source, d.usage_date AS date, COUNT(*) AS count").Group(scope.sourceExpr + ", d.usage_date").Order("d.usage_date ASC").Scan(&out.collections).Error; err != nil {
 		return out, err
@@ -250,14 +263,7 @@ func (s *Store) loadOverviewSummaryInput(ctx context.Context, scope overviewScop
 		first := out.collections[0].Date
 		out.earliest = &first
 	}
-	if err = days().Joins("JOIN account_daily_fable_ratios r ON r.day_id=d.id").Select(scope.sourceExpr + " AS source, d.usage_date AS date, COUNT(*) AS count").Group(scope.sourceExpr + ",d.usage_date").Scan(&out.modifiedCollections).Error; err != nil {
-		return out, err
-	}
-	out.usage, err = loadSummaryLines(ctx, days(), scope.sourceExpr, "raw")
-	if err != nil {
-		return out, err
-	}
-	out.modifiedUsage, err = loadSummaryLines(ctx, days(), scope.sourceExpr, "modified")
+	out.usage, err = loadSummaryLines(ctx, days(), scope.sourceExpr, source)
 	return out, err
 }
 
@@ -308,17 +314,6 @@ func (input overviewSummaryInput) period(start, end string) (overviewSummaryPayl
 	if err != nil {
 		return out, err
 	}
-	modified := &summaryModelBreakdown{}
-	modified.Rows, modified.ModelCosts, err = periodModelUsage(input.modifiedUsage, start, end)
-	if err != nil {
-		return out, err
-	}
-	for _, c := range input.modifiedCollections {
-		if c.Date >= start && c.Date <= end {
-			modified.Collections = append(modified.Collections, c)
-		}
-	}
-	out.Modified = modified
 	cohorts := []string{}
 	for _, account := range input.accounts {
 		if account.CurrentSubmissionID != nil && strings.HasPrefix(account.Plan, "claude/") {
@@ -419,49 +414,31 @@ func (s *Store) BuildOverviewSummaries(ctx context.Context, viewerID uint64, adm
 	if err := ValidateOverviewRange(usageDate, usageDate, now); err != nil {
 		return err
 	}
-	var input overviewSummaryInput
-	// A consistent read captures ownership, state and successful bill lines from
-	// one database snapshot, without holding write locks while aggregating.
+	var rawRecords, modifiedRecords []OverviewSummary
+	view := overviewViewType(administrative)
+	// Freeze ownership, status, and all published bill ranges in one read snapshot.
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		scoped := *s
 		scoped.DB = tx
-		var scope overviewScope
-		var err error
-		if administrative {
-			scope, err = scoped.adminOverviewScope(ctx, viewerID, "all")
-		} else {
-			scope, err = scoped.personalOverviewScope(ctx, viewerID, "all")
-		}
+		scope, err := scoped.summaryScope(ctx, viewerID, administrative)
 		if err != nil {
 			return err
 		}
-		input, err = scoped.loadOverviewSummaryInput(ctx, scope, usageDate)
+		modifiedRecords, err = scoped.prepareSummaryRecords(ctx, scope, viewerID, view, "modified", usageDate, batchID, now)
+		if err != nil {
+			return err
+		}
+		var viewer User
+		if err := tx.Select("role", "is_super_admin").First(&viewer, viewerID).Error; err != nil {
+			return err
+		}
+		if viewer.Role == "admin" && viewer.IsSuperAdmin {
+			rawRecords, err = scoped.prepareSummaryRecords(ctx, scope, viewerID, view, "raw", usageDate, batchID, now)
+		}
 		return err
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return err
-	}
-	records := make([]OverviewSummary, 0, 4)
-	for _, period := range overviewSummaryPeriods {
-		if err = ctx.Err(); err != nil {
-			return err
-		}
-		start, err := overviewPeriodStart(period, usageDate, input.earliest)
-		if err != nil {
-			return err
-		}
-		if err = ValidateOverviewRange(start, usageDate, now); err != nil {
-			return err
-		}
-		payload, err := input.period(start, usageDate)
-		if err != nil {
-			return err
-		}
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		records = append(records, OverviewSummary{UserID: viewerID, ViewType: overviewViewType(administrative), Period: period, StartDate: start, EndDate: usageDate, Timezone: "Asia/Shanghai", PayloadJSON: string(raw), BatchID: batchID, GeneratedAt: now.UTC(), AccountsAsOf: now.UTC()})
 	}
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := ctx.Err(); err != nil {
@@ -480,24 +457,77 @@ func (s *Store) BuildOverviewSummaries(ctx context.Context, viewerID uint64, adm
 		// Serialize publication for this user, including the first four inserts.
 		// A late recovery job can never replace a newer successful daily batch.
 		var user User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&user, viewerID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "role", "is_super_admin").First(&user, viewerID).Error; err != nil {
 			return err
 		}
-		var newer int64
-		if err := tx.Model(&OverviewSummary{}).Where("user_id = ? AND view_type = ? AND end_date > ?", viewerID, overviewViewType(administrative), usageDate).Count(&newer).Error; err != nil {
+		tables := []string{modifiedOverviewTable}
+		mayPublishRaw := user.Role == "admin" && user.IsSuperAdmin && len(rawRecords) > 0
+		if mayPublishRaw {
+			tables = append(tables, "overview_summaries")
+		}
+		for _, table := range tables {
+			var newer int64
+			if err := tx.Table(table).Where("user_id = ? AND view_type = ? AND end_date > ?", viewerID, view, usageDate).Count(&newer).Error; err != nil {
+				return err
+			}
+			if newer > 0 {
+				return errors.New("a newer overview summary is already published")
+			}
+		}
+		if err := publishOverviewRecords(tx, modifiedOverviewTable, modifiedRecords, publishedAt); err != nil {
 			return err
 		}
-		if newer > 0 {
-			return errors.New("a newer overview summary is already published")
+		if mayPublishRaw {
+			return publishOverviewRecords(tx, "overview_summaries", rawRecords, publishedAt)
 		}
-		for i := range records {
-			records[i].GeneratedAt = publishedAt
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "view_type"}, {Name: "period"}}, DoUpdates: clause.AssignmentColumns([]string{"start_date", "end_date", "timezone", "payload_json", "batch_id", "generated_at", "accounts_as_of"})}).Omit("User").Create(&records).Error
+		return nil
 	})
+}
+
+func (s *Store) summaryScope(ctx context.Context, viewerID uint64, administrative bool) (overviewScope, error) {
+	if administrative {
+		return s.adminOverviewScope(ctx, viewerID, "all")
+	}
+	return s.personalOverviewScope(ctx, viewerID, "all")
+}
+
+func (s *Store) prepareSummaryRecords(ctx context.Context, scope overviewScope, viewerID uint64, view, source, usageDate, batch string, at time.Time) ([]OverviewSummary, error) {
+	input, err := s.loadOverviewSummaryInput(ctx, scope, usageDate, source)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]OverviewSummary, 0, len(overviewSummaryPeriods))
+	for _, period := range overviewSummaryPeriods {
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		start, err := overviewPeriodStart(period, usageDate, input.earliest)
+		if err != nil {
+			return nil, err
+		}
+		if err = ValidateOverviewRange(start, usageDate, at); err != nil {
+			return nil, err
+		}
+		payload, err := input.period(start, usageDate)
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, OverviewSummary{UserID: viewerID, ViewType: view, Period: period, OverviewSummaryData: OverviewSummaryData{
+			StartDate: start, EndDate: usageDate, Timezone: "Asia/Shanghai", PayloadJSON: string(encoded), BatchID: batch, AccountsAsOf: at.UTC(),
+		}})
+	}
+	return records, nil
+}
+
+func publishOverviewRecords(tx *gorm.DB, table string, records []OverviewSummary, publishedAt time.Time) error {
+	for i := range records {
+		records[i].GeneratedAt = publishedAt.UTC()
+	}
+	return tx.Table(table).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "view_type"}, {Name: "period"}}, DoUpdates: clause.AssignmentColumns([]string{"start_date", "end_date", "timezone", "payload_json", "batch_id", "generated_at", "accounts_as_of"})}).Omit("User").Create(&records).Error
 }
 
 func overviewUSD(value string, rate float64) (float64, error) {
@@ -524,7 +554,13 @@ func (s *Store) ReadOverviewSummary(ctx context.Context, viewerID uint64, admini
 		return out, err
 	}
 	var saved OverviewSummary
-	err = s.DB.WithContext(ctx).Where("user_id = ? AND view_type = ? AND period = ?", viewerID, overviewViewType(administrative), period).First(&saved).Error
+	query := s.DB.WithContext(ctx).Where("user_id = ? AND view_type = ? AND period = ?", viewerID, overviewViewType(administrative), period)
+	if out.ModelUsageSource == "modified" {
+		query = query.Table(modifiedOverviewTable)
+	} else {
+		query = query.Where("EXISTS (SELECT 1 FROM users WHERE users.id = ? AND users.role = ? AND users.is_super_admin = ?)", viewerID, "admin", true)
+	}
+	err = query.First(&saved).Error
 	if errors.Is(err, ErrNotFound) {
 		return out, nil
 	}
@@ -543,46 +579,8 @@ func (s *Store) ReadOverviewSummary(ctx context.Context, viewerID uint64, admini
 	out.SummaryGeneratedAt = &generated
 	out.StartDate, out.EndDate, out.Timezone = saved.StartDate, saved.EndDate, saved.Timezone
 	out.EarliestDate, out.LatestAccountData = payload.EarliestDate, payload.LatestAccountData
-	rawCosts := newUpstreamPeriodCosts()
-	for _, r := range payload.Rows {
-		if err = addUsageCost(rawCosts.dates, r.UsageDate, r.CostCNY); err != nil {
-			return out, err
-		}
-	}
-	for _, r := range payload.ModelCosts {
-		if err = addUsageCost(rawCosts.sources, r.SourceID, r.CostCNY); err != nil {
-			return out, err
-		}
-	}
-	rawDays := append([]OverviewDay(nil), payload.Days...)
-	modelCollected := map[string]int64{}
-	if out.ModelUsageSource == "modified" {
-		detail := payload.Modified
-		if detail == nil {
-			detail = &summaryModelBreakdown{}
-		}
-		payload.Rows, payload.ModelCosts = detail.Rows, detail.ModelCosts
-		perDate := map[string]int64{}
-		for _, c := range detail.Collections {
-			perDate[c.Date] += c.Count
-			modelCollected[overviewSourceID(c.Source)] += c.Count
-		}
-		for i := range payload.Days {
-			d := &payload.Days[i]
-			d.Collected = perDate[d.Date]
-			if d.Collected == 0 {
-				d.Status = "missing"
-			}
-		}
-	}
 	for _, source := range payload.Sources {
 		row := OverviewSource{AccountSource: source.AccountSource, Total: source.Total, Statuses: source.Statuses, CostKnown: source.CostKnown, CollectedDays: source.CollectedDays, TotalCostDays: source.TotalCostDays}
-		// V1 did not save distinct dates per source. Keep its known cost even
-		// when the selected source has no corresponding model breakdown.
-		row.hasUpstreamBill = source.CollectedDays > 0
-		if out.ModelUsageSource == "modified" {
-			row.CollectedDays = modelCollected[source.ID]
-		}
 		if row.Statuses == nil {
 			row.Statuses = map[string]int64{}
 		}
@@ -599,7 +597,7 @@ func (s *Store) ReadOverviewSummary(ctx context.Context, viewerID uint64, admini
 		return out, err
 	}
 	out.Days = append(out.Days, payload.Days...)
-	err = out.setUpstreamCosts(rawCosts, rawDays)
+	err = out.setModelBillTotals()
 	return out, err
 }
 

@@ -13,8 +13,8 @@ import (
 	"goapi-tk-register/server/internal/supplier"
 )
 
-func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64, administrative, rawAccount bool) {
-	view, modelCostsEnabled, err := a.modelUsageView(r.Context(), administrative, rawAccount)
+func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, viewer *core.User, id uint64, administrative, rawAccount bool) {
+	view, modelCostsEnabled, err := a.modelUsageView(r.Context(), viewer, administrative, rawAccount)
 	if err != nil {
 		internal(w)
 		return
@@ -39,6 +39,9 @@ func (a *app) dailyUsageData(w http.ResponseWriter, r *http.Request, id uint64, 
 	if err != nil {
 		internal(w)
 		return
+	}
+	if !viewer.IsSuperAdmin {
+		data.ModelUsageSource = ""
 	}
 	if administrative {
 		ok(w, data)

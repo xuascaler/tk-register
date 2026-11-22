@@ -47,10 +47,10 @@ try {
       const model = 'claude-fable-example';
       const bill = {date, model, input_tokens:'100',output_tokens:'17',cache_write_tokens:'0',cache_read_tokens:'3',cost_usd:400,cost_cny:'2880'};
       return ok({
-        model_usage_source:raw?'raw':'modified', model_costs_enabled:true, total_cost_usd:400, total_cost_days:1,
+        model_costs_enabled:true, total_cost_usd:raw?400:null, total_cost_days:raw?1:0,
         start_date:date,end_date:date,earliest_date:date,timezone:'Asia/Shanghai',collection_time:'03:00',exchange_rate_cny_per_usd:7.2,
-        latest_account_data:null,daily_costs:[{date,collected:1,expected:1,cost_usd:400}],
-        sources:[{...sources[0],cost_usd:400,collected_days:raw?1:0}], rows:raw?[bill]:[],
+        latest_account_data:null,daily_costs:[{date,collected:raw?1:0,expected:1,cost_usd:raw?400:null}],
+        sources:[{...sources[0],cost_usd:raw?400:null,collected_days:raw?1:0}], rows:raw?[bill]:[],
         model_costs:raw?[{source_id:'myself',model,cost_cny:'2880',cost_usd:400}]:[],
         days:daily?[{date,status:raw?'complete':'missing',collected_at:raw?new Date().toISOString():null}]:[{date,status:raw?'complete':'missing',expected:1,collected:raw?1:0}]
       });
@@ -67,7 +67,7 @@ try {
         daily_totals.push(total);
         rows.push({ ...total, model: 'claude-private-example' });
       }
-      return ok({ model_usage_source: path.startsWith('/admin/raw-accounts') ? 'raw' : modelSource, start_date: start, end_date: end, earliest_date: start, timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, latest_account_data: null, days,
+      return ok({ start_date: start, end_date: end, earliest_date: start, timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2, latest_account_data: null, days,
         sources: sources.map(source => ({ ...source, cost_usd: days.length * 3 / 100 })),
         ...(admin ? {} : { model_costs_enabled: enabled }),
         ...(details ? { rows, model_costs: [{ source_id: 'myself', model: 'claude-private-example', cost_cny: '0.216', cost_usd: days.length * 3 / 100 }] } : { daily_totals, total_cost_usd: days.length * 3 / 100 }) });
@@ -251,13 +251,13 @@ try {
     const pool = `account-pool/${raw ? 'raw-accounts' : 'accounts'}`;
     await goto(pool);
     await page.getByRole('heading',{name:'Account summary',exact:true}).waitFor();
-    assert.equal(await page.locator('.overview-summary-spent strong').innerText(),'400.00 $');
+    assert.equal(await page.locator('.overview-summary-spent strong').innerText(),raw?'400.00 $':'—');
     assert.equal(await page.locator('.overview-model-grid strong').count(),raw?1:0);
     if (!raw) await page.getByText('No model usage data for this period.',{exact:true}).waitFor();
     const detailStart = calls.length;
     await goto(`${pool}/1/usage?tab=daily-usage`);
     await page.getByRole('heading',{name:'Daily breakdown',exact:true}).waitFor();
-    assert.equal(await page.locator('.daily-summary strong').first().innerText(),'400.00 $');
+    assert.equal(await page.locator('.daily-summary strong').first().innerText(),raw?'400.00 $':'—');
     assert.equal(await page.locator('.daily-table tbody tr').count(),raw?1:0);
     if (raw) {
       const detailReads = calls.slice(detailStart).filter(call => call.method === 'GET').map(call => call.path);

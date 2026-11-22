@@ -51,7 +51,7 @@ type settingSpec struct {
 
 var specs = []settingSpec{
 	{"user_overview_model_costs_enabled", "overview", "boolean", "false", "Show model costs and model-level usage on personal account pages and APIs. Management views always retain model details.", 0, 0, nil},
-	{"model_usage_source", "overview", "enum", "modified", "Model costs and tokens shown in Accounts Overview and Daily usage.", 0, 0, []string{"modified", "raw"}},
+	{"model_usage_source", "overview", "enum", "modified", "Data source for super administrators in Accounts Overview and Daily usage.", 0, 0, []string{"modified", "raw"}},
 	{"fable_trigger_percent", "daily_usage", "decimal", "19", "Allocate the combined Fable cost when its share exceeds this percentage.", 0, 100, nil},
 	{"fable_min_percent", "daily_usage", "decimal", "16", "Lower bound for the allocated Fable share on a new account day.", 0, 100, nil},
 	{"fable_max_percent", "daily_usage", "decimal", "21", "Upper bound for the allocated Fable share, also capped by its original share.", 0, 100, nil},
