@@ -211,7 +211,7 @@ function Parameters({ topic, onNavigate }: Navigation & { topic: EndpointTopic }
       <FieldTable fields={dailyUsageFields} label='Required daily usage request fields' />
     </section>
     <section className='api-docs-content-block'><h3>Ownership and account order</h3>
-      <p><code>username</code> must match your personal token’s owner. Administrator and super-administrator tokens also read only their own accounts. This endpoint does not include sub-users or search other users’ accounts.</p>
+      <p><code>username</code> must match your personal token’s owner. This endpoint does not include sub-users or search other users’ accounts.</p>
       <p>Surrounding whitespace is trimmed and identifiers are matched case-insensitively. Duplicate account identifiers count once in the response, preserving the first occurrence order. The 100-entry input limit is checked before deduplication.</p>
       <p>A missing account and an account outside your scope both return <code>not_found</code> within the batch. An owned account with no saved bill for the date returns <code>no_data</code>. Neither case starts a new collection.</p>
     </section>
@@ -385,7 +385,6 @@ function Errors({ topic, onFeedback }: { topic: EndpointTopic; onFeedback: CopyF
     </section>
     <section className='api-docs-content-block'><h3>Rate limits and retries</h3>
       <p>The limit is 60 requests per minute per user, separate from account lookup and submission limits. A <code>429 RATE_LIMITED</code> response includes <code>Retry-After</code> and JSON <code>retry_after</code>, both in seconds. Wait that long before another request.</p>
-      <p>This endpoint only reads saved daily bills. Transient failures and 503/504 responses can be retried with a delay. Repeatedly requesting a <code>no_data</code> result does not collect a missing bill. Keep <code>X-Request-ID</code> when requesting support.</p>
     </section>
   </>;
   const lookup = topic === 'account-lookup';
