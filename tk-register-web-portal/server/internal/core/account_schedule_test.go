@@ -93,7 +93,7 @@ func TestScheduledSlotsSkipOverlapAndMissedRuns(t *testing.T) {
 	if !scheduleState(t, s).LastStartedAt.Equal(claim.StartedAt) {
 		t.Fatal("overlap changed completion guard")
 	}
-	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(7*time.Minute), "", time.Time{}, false); err != nil {
+	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(7*time.Minute), "", time.Time{}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	state := scheduleState(t, s)
@@ -129,7 +129,7 @@ func TestScheduleSaveDuringRunSurvivesCompletionAndRestart(t *testing.T) {
 	if saved.NextRunAt == nil || saved.ScheduleRevision <= claim.ScheduleRevision {
 		t.Fatal("save did not reset schedule")
 	}
-	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(time.Minute), "", time.Time{}, false); err != nil {
+	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(time.Minute), "", time.Time{}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	finished := scheduleState(t, s)
@@ -145,7 +145,7 @@ func TestScheduleSaveDuringRunSurvivesCompletionAndRestart(t *testing.T) {
 	if err = s.PatchSettings(ctx, map[string]string{"account_sync_enabled": "false"}, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(2*time.Minute), "", time.Time{}, false); err != nil {
+	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(2*time.Minute), "", time.Time{}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if scheduleState(t, s).NextRunAt != nil {
@@ -160,7 +160,7 @@ func TestScheduleCooldownAndBusyRemainOnFutureGrid(t *testing.T) {
 	if err != nil || claim == nil {
 		t.Fatal(claim, err)
 	}
-	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(time.Second), "query limited", base.Add(12*time.Minute), false); err != nil {
+	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(time.Second), "query limited", base.Add(12*time.Minute), false, false); err != nil {
 		t.Fatal(err)
 	}
 	state := scheduleState(t, s)
@@ -171,7 +171,7 @@ func TestScheduleCooldownAndBusyRemainOnFutureGrid(t *testing.T) {
 	if err != nil || next == nil {
 		t.Fatal(next, err)
 	}
-	if err = s.FinishScheduledAccountSync(ctx, *next, base.Add(15*time.Minute+time.Second), "busy", time.Time{}, true); err != nil {
+	if err = s.FinishScheduledAccountSync(ctx, *next, base.Add(15*time.Minute+time.Second), "busy", time.Time{}, true, false); err != nil {
 		t.Fatal(err)
 	}
 	state = scheduleState(t, s)
@@ -179,11 +179,52 @@ func TestScheduleCooldownAndBusyRemainOnFutureGrid(t *testing.T) {
 		t.Fatal("busy slot was queued", state)
 	}
 	// Finishing the earlier request cannot alter the newer claim.
-	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(16*time.Minute), "stale", time.Time{}, false); err != nil {
+	if err = s.FinishScheduledAccountSync(ctx, *claim, base.Add(16*time.Minute), "stale", time.Time{}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if scheduleState(t, s).LastError != "busy" {
 		t.Fatal("stale completion overwrote new result")
+	}
+}
+
+func TestPartialScheduledCollectionPreservesLastFullSuccess(t *testing.T) {
+	s, base := scheduleFixture(t)
+	ctx := context.Background()
+	claim, err := s.ClaimScheduledAccountSync(ctx, base)
+	if err != nil || claim == nil {
+		t.Fatal(claim, err)
+	}
+	firstSuccess := base.Add(time.Second)
+	if err = s.FinishScheduledAccountSync(ctx, *claim, firstSuccess, "", time.Time{}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	claim, err = s.ClaimScheduledAccountSync(ctx, base.Add(5*time.Minute))
+	if err != nil || claim == nil {
+		t.Fatal(claim, err)
+	}
+	message := "Partial collection: 2 accounts updated; 1 could not be updated. Supplier queries are rate limited."
+	partialFinished := base.Add(5*time.Minute + time.Second)
+	if err = s.FinishScheduledAccountSync(ctx, *claim, partialFinished, message, base.Add(12*time.Minute), false, true); err != nil {
+		t.Fatal(err)
+	}
+	state := scheduleState(t, s)
+	if state.Status != "partial" || state.LastError != message || state.LastSuccessAt == nil || !state.LastSuccessAt.Equal(firstSuccess) {
+		t.Fatalf("partial collection replaced last full success: %+v", state)
+	}
+	if state.LastFinishedAt == nil || !state.LastFinishedAt.Equal(partialFinished) || state.NextRunAt == nil || !state.NextRunAt.Equal(base.Add(15*time.Minute)) {
+		t.Fatalf("partial collection lost completion or cooldown schedule: %+v", state)
+	}
+	claim, err = s.ClaimScheduledAccountSync(ctx, *state.NextRunAt)
+	if err != nil || claim == nil {
+		t.Fatal(claim, err)
+	}
+	lastSuccess := base.Add(15*time.Minute + time.Second)
+	if err = s.FinishScheduledAccountSync(ctx, *claim, lastSuccess, "", time.Time{}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	state = scheduleState(t, s)
+	if state.Status != "succeeded" || state.LastError != "" || state.LastSuccessAt == nil || !state.LastSuccessAt.Equal(lastSuccess) {
+		t.Fatalf("completed collection did not clear partial result: %+v", state)
 	}
 }
 
@@ -221,10 +262,10 @@ func TestScheduledConcurrentClaimsAreSingleAndTerminalFinishIsIgnored(t *testing
 	if count != 1 {
 		t.Fatalf("%d concurrent claims", count)
 	}
-	if err := s.FinishScheduledAccountSync(ctx, *only, base.Add(time.Second), "", time.Time{}, false); err != nil {
+	if err := s.FinishScheduledAccountSync(ctx, *only, base.Add(time.Second), "", time.Time{}, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FinishScheduledAccountSync(ctx, *only, base.Add(2*time.Second), "stale failure", time.Time{}, false); err != nil {
+	if err := s.FinishScheduledAccountSync(ctx, *only, base.Add(2*time.Second), "stale failure", time.Time{}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if state := scheduleState(t, s); state.Status != "succeeded" || state.LastError != "" {

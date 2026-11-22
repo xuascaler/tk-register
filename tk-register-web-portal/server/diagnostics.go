@@ -36,7 +36,7 @@ func beginSyncDiagnostic(ctx context.Context) (*diagnostics.SyncEvent, func()) {
 			return
 		}
 		event.DurationMS = time.Since(started).Milliseconds()
-		if event.Outcome == "failed" && event.FailureStage == "" {
+		if (event.Outcome == "failed" || event.Outcome == "partial") && event.FailureStage == "" {
 			switch event.ErrorKind {
 			case "persistence", "configuration":
 				event.FailureStage = event.ErrorKind

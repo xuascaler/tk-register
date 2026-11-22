@@ -69,6 +69,10 @@ func TestSupplierSessionsPageWaitMetadataPreservesPartialSuccess(t *testing.T) {
 	if strings.Contains(w.Body.String(), "private-access-token") || !strings.Contains(result.Results[1].Message, "account queries") {
 		t.Fatal("unsafe or unclear wait message")
 	}
+	var saved core.SyncedAccount
+	if err := a.store.DB.First(&saved, rows[1].ID).Error; err != nil || strings.Contains(saved.LastError, "seconds") || !strings.Contains(saved.LastError, "rate limited") {
+		t.Fatalf("stored failure must not retain a countdown: %q %v", saved.LastError, err)
+	}
 }
 
 func TestSupplierSessionsDetailAndTestLoginReturnWait(t *testing.T) {

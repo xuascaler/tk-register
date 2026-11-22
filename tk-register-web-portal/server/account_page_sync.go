@@ -305,7 +305,11 @@ func (a *app) syncAccountPage(w http.ResponseWriter, r *http.Request, user *core
 			if errors.Is(rowErr, core.ErrAccountIdentityChanged) {
 				message = "This account changed during synchronization. Reload the page before trying again."
 			} else {
-				if saveErr := a.store.RecordAccountFailure(saveCtx, target.ID, target.IdentityKey, message, at); errors.Is(saveErr, core.ErrAccountIdentityChanged) {
+				savedMessage := message
+				if out.Results[i].RetryAfter > 0 {
+					savedMessage = savedCollectionError(rowErr)
+				}
+				if saveErr := a.store.RecordAccountFailure(saveCtx, target.ID, target.IdentityKey, savedMessage, at); errors.Is(saveErr, core.ErrAccountIdentityChanged) {
 					message = "This account changed during synchronization. Reload the page before trying again."
 				}
 			}

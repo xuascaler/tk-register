@@ -136,7 +136,7 @@ func (f *supplierFixture) client() *Client {
 				f.t.Fatal("wrong read method or auth")
 			}
 			q := r.URL.Query()
-			if q.Get("provider") != "claude" || q.Get("account_type") != "2" || q.Get("status") != "all" || q.Get("page_size") != "100" {
+			if q.Get("provider") != "claude" || q.Get("account_type") != "2" || q.Get("status") != "all" || q.Get("page_size") != expectedFixturePageSize(q.Get("keyword")) {
 				f.t.Fatal("bad account filters")
 			}
 			return f.read(r, f.reads), nil
@@ -145,6 +145,13 @@ func (f *supplierFixture) client() *Client {
 			return nil, errors.New("unexpected request")
 		}
 	})}
+}
+
+func expectedFixturePageSize(keyword string) string {
+	if keyword != "" {
+		return "100"
+	}
+	return "500"
 }
 
 func fixtureAccount(id int) map[string]any {
@@ -236,8 +243,8 @@ func TestSecondExpiryAnywhereInRunStops(t *testing.T) {
 	}}
 	rows, err := f.client().Collect(context.Background(), "supplier-user", "private-password-中文")
 	assertCode(t, err, CodeSessionExpired)
-	if rows != nil || f.logins != 2 || f.reads != 3 {
-		t.Fatalf("unbounded retry or partial output: rows=%v logins=%d reads=%d", rows, f.logins, f.reads)
+	if len(rows) != 1 || f.logins != 2 || f.reads != 3 {
+		t.Fatalf("unbounded retry or lost validated output: rows=%v logins=%d reads=%d", rows, f.logins, f.reads)
 	}
 }
 
