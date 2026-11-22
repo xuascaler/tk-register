@@ -76,7 +76,8 @@ func TestAccountMirrorAccessAndSettings(t *testing.T) {
 
 func TestCollectedAccountMirrorThroughAccountsAndRawAccount(t *testing.T) {
 	a, owner, ownerCookie, _, accounts, _ := setupPageSync(t)
-	_, rootCookie, rootCSRF := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
+	admin, adminCookie, _ := vendorSession(t, a, "mirror-admin@example.com", "admin")
+	root, rootCookie, rootCSRF := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
 	ctx := context.Background()
 	now := time.Now()
 	date := now.In(time.FixedZone("Asia/Shanghai", 8*60*60)).AddDate(0, 0, -1).Format("2006-01-02")
@@ -92,15 +93,26 @@ func TestCollectedAccountMirrorThroughAccountsAndRawAccount(t *testing.T) {
 	if err := a.store.SaveDailyUsageAccount(ctx, job, result, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.store.BuildOverviewSummaries(ctx, owner.ID, false, date, "mirror-collection", now); err != nil {
+	// Before the cutover, this account had an additional upstream bill without a mirror.
+	start := now.In(time.FixedZone("Asia/Shanghai", 8*60*60)).AddDate(0, 0, -2).Format("2006-01-02")
+	historical := core.AccountUsageDay{AccountID: account.ID, IdentityKey: account.IdentityKey, UsageDate: start, LastSuccessAt: &now, LastAttemptAt: now}
+	if err := a.store.DB.Create(&historical).Error; err != nil {
 		t.Fatal(err)
+	}
+	if err := a.store.DB.Create(&core.AccountDailyUsage{DayID: historical.ID, Model: "only-in-upstream", CostCNY: "7.2", InputTokens: "37", OutputTokens: "0", CacheReadTokens: "0", CacheWriteTokens: "0"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, viewer := range []*core.User{owner, admin, root} {
+		if err := a.store.BuildOverviewSummaries(ctx, viewer.ID, viewer.Role == "admin", date, "mirror-collection", now); err != nil {
+			t.Fatal(err)
+		}
 	}
 	patch := func(settings map[string]string) {
 		t.Helper()
 		requireStatus(t, request(t, a, "PUT", "admin/settings", map[string]any{"settings": settings}, rootCookie, rootCSRF), 200)
 	}
 	patch(map[string]string{"user_overview_model_costs_enabled": "true"})
-	daily := fmt.Sprintf("/%d/daily-usage?start_date=%s&end_date=%s", account.ID, date, date)
+	daily := fmt.Sprintf("/%d/daily-usage?start_date=%s&end_date=%s&model_usage_source=raw", account.ID, start, date)
 	for _, source := range []string{"modified", "raw"} {
 		patch(map[string]string{"model_usage_source": source})
 		for _, tc := range []struct {
@@ -109,17 +121,30 @@ func TestCollectedAccountMirrorThroughAccountsAndRawAccount(t *testing.T) {
 			source   string
 			showRows bool
 		}{
-			{"accounts/overview?period=day", ownerCookie, source, source == "modified"},
-			{"accounts" + daily, ownerCookie, source, source == "modified"},
-			{"admin/accounts/overview?start_date=" + date + "&end_date=" + date, rootCookie, source, true},
+			{"accounts/overview?period=week&model_usage_source=raw", ownerCookie, "modified", source == "modified"},
+			{"accounts/overview?sources=myself&model_usage_source=raw", ownerCookie, "modified", source == "modified"},
+			{"accounts" + daily, ownerCookie, "modified", source == "modified"},
+			{"admin/accounts/overview?period=week&model_usage_source=raw", adminCookie, "modified", true},
+			{"admin/accounts/overview?start_date=" + start + "&end_date=" + date, adminCookie, "modified", true},
+			{"admin/synced-accounts" + daily, adminCookie, "modified", true},
+			{"admin/accounts/overview?period=week", rootCookie, source, true},
+			{"admin/accounts/overview?start_date=" + start + "&end_date=" + date, rootCookie, source, true},
 			{"admin/synced-accounts" + daily, rootCookie, source, true},
-			{"admin/raw-accounts/overview?start_date=" + date + "&end_date=" + date, rootCookie, "raw", true},
+			{"admin/raw-accounts/overview?start_date=" + start + "&end_date=" + date, rootCookie, "raw", true},
 			{"admin/raw-accounts" + daily, rootCookie, "raw", true},
 		} {
 			w := request(t, a, "GET", tc.route, nil, tc.cookie, "")
 			requireStatus(t, w, 200)
 			out := data(t, w)
-			if out["model_usage_source"] != tc.source || out["total_cost_usd"] != 1000.0 {
+			marker, present := out["model_usage_source"]
+			if tc.cookie == rootCookie && marker != tc.source || tc.cookie != rootCookie && present {
+				t.Fatalf("%s %s: unexpected source marker %v", source, tc.route, marker)
+			}
+			total, rowCount := 1000.0, 2
+			if tc.source == "raw" {
+				total, rowCount = 1001.0, 3
+			}
+			if out["total_cost_usd"] != total || (tc.source == "modified" && strings.Contains(w.Body.String(), "only-in-upstream")) {
 				t.Fatalf("%s %s: source %v, total %v", source, tc.route, out["model_usage_source"], out["total_cost_usd"])
 			}
 			rows, shown := out["rows"].([]any)
@@ -129,8 +154,8 @@ func TestCollectedAccountMirrorThroughAccountsAndRawAccount(t *testing.T) {
 			if !shown {
 				continue
 			}
-			if len(rows) != 2 {
-				t.Fatalf("%s: expected both models", tc.route)
+			if len(rows) != rowCount {
+				t.Fatalf("%s: expected %d rows, got %d", tc.route, rowCount, len(rows))
 			}
 			for _, item := range rows {
 				row := item.(map[string]any)

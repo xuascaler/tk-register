@@ -14,7 +14,6 @@ import (
 // Overview is a read-only projection of stable accounts and collected bills.
 // Account counts never join bill lines: multiple dates/models cannot inflate them.
 type OverviewSource struct {
-	hasUpstreamBill bool
 	AccountSource
 	Total         int64            `json:"total"`
 	Statuses      map[string]int64 `json:"statuses"`
@@ -37,7 +36,6 @@ type OverviewDay struct {
 }
 type AccountsOverview struct {
 	UsageBillTotals
-	allModelSources    map[string]float64
 	SummaryAvailable   *bool               `json:"summary_available,omitempty"`
 	SummaryGeneratedAt *time.Time          `json:"summary_generated_at,omitempty"`
 	SummaryPeriod      string              `json:"summary_period,omitempty"`
@@ -157,9 +155,14 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 		Cost   sql.NullFloat64
 		Known  int64
 	}
-	const knownCost = "p.cost_total IS NOT NULL AND UPPER(TRIM(p.currency)) = 'CNY'"
-	err = base().Joins("LEFT JOIN account_snapshots p ON p.id = (SELECT x.id FROM account_snapshots x WHERE x.account_id = a.id AND x.identity_key = a.identity_key ORDER BY x.collected_at DESC, x.id DESC LIMIT 1)").
-		Select(sourceExpr + " AS source, COALESCE(NULLIF(a.snapshot_status, ''), 'unknown') AS status, COUNT(*) AS total, SUM(CASE WHEN " + knownCost + " THEN p.cost_total ELSE NULL END) AS cost, SUM(CASE WHEN " + knownCost + " THEN 1 ELSE 0 END) AS known").
+	statsQuery := base()
+	costFields := "NULL AS cost, 0 AS known"
+	if out.ModelUsageSource == "raw" {
+		const knownCost = "p.cost_total IS NOT NULL AND UPPER(TRIM(p.currency)) = 'CNY'"
+		statsQuery = statsQuery.Joins("LEFT JOIN account_snapshots p ON p.id = (SELECT x.id FROM account_snapshots x WHERE x.account_id = a.id AND x.identity_key = a.identity_key ORDER BY x.collected_at DESC, x.id DESC LIMIT 1)")
+		costFields = "SUM(CASE WHEN " + knownCost + " THEN p.cost_total ELSE NULL END) AS cost, SUM(CASE WHEN " + knownCost + " THEN 1 ELSE 0 END) AS known"
+	}
+	err = statsQuery.Select(sourceExpr + " AS source, COALESCE(NULLIF(a.snapshot_status, ''), 'unknown') AS status, COUNT(*) AS total, " + costFields).
 		Group(sourceExpr + ", a.snapshot_status").Scan(&stats).Error
 	if err != nil {
 		return out, err
@@ -188,10 +191,10 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 		out.LatestAccountData = latest[0].LastSuccessAt
 	}
 	days := func() *gorm.DB {
-		return base().Joins("JOIN account_usage_days d ON d.account_id = a.id AND d.identity_key = a.identity_key")
+		return base().Joins("JOIN account_usage_days d ON d.account_id = a.id AND d.identity_key = a.identity_key").Where(usageDayPresent(out.ModelUsageSource))
 	}
 	var earliest struct{ Value *string }
-	if err = days().Select("MIN(d.usage_date) AS value").Where("d.last_success_at IS NOT NULL").Scan(&earliest).Error; err != nil {
+	if err = days().Select("MIN(d.usage_date) AS value").Scan(&earliest).Error; err != nil {
 		return out, err
 	}
 	out.EarliestDate = earliest.Value
@@ -211,56 +214,26 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 	}
 	out.StartDate, out.EndDate = start, end
 	rangeDays := func() *gorm.DB {
-		return days().Where("d.last_success_at IS NOT NULL AND d.usage_date BETWEEN ? AND ?", start, end)
+		return days().Where("d.usage_date BETWEEN ? AND ?", start, end)
 	}
 	if err = out.readOverviewModelLines(ctx, rangeDays, sourceExpr, start, end); err != nil {
 		return out, err
 	}
-	// Capture the unmodified period totals separately from model detail coverage.
-	costsLedger := newUpstreamPeriodCosts()
-	var rawCosts []struct {
-		Source             uint64
-		UsageDate, CostCNY string
-	}
-	rawQuery := rangeDays().Joins("JOIN account_daily_usages u ON u.day_id=d.id")
-	if s.DB.Dialector.Name() == "sqlite" {
-		rawQuery = rawQuery.Select(sourceExpr + " AS source,d.usage_date,u.cost_cny")
-	} else {
-		rawQuery = rawQuery.Select(sourceExpr + " AS source,d.usage_date,SUM(u.cost_cny) AS cost_cny").Group(sourceExpr + ",d.usage_date")
-	}
-	if err = rawQuery.Scan(&rawCosts).Error; err != nil {
-		return out, err
-	}
-	for _, c := range rawCosts {
-		if err = addUsageCost(costsLedger.dates, c.UsageDate, c.CostCNY); err != nil {
-			return out, err
-		}
-		if err = addUsageCost(costsLedger.sources, overviewSourceID(c.Source), c.CostCNY); err != nil {
-			return out, err
-		}
-	}
-	detailDay := "d.last_success_at IS NOT NULL"
-	if out.ModelUsageSource == "modified" {
-		detailDay += " AND EXISTS (SELECT 1 FROM account_daily_fable_ratios r WHERE r.day_id=d.id)"
-	}
 	var collectedSources []struct {
-		Source   uint64
-		Count    int64
-		RawDates int64
+		Source uint64
+		Count  int64
+		Dates  int64
 	}
-	if err = days().Select(sourceExpr+" AS source, COUNT(DISTINCT d.usage_date) AS raw_dates, SUM(CASE WHEN "+detailDay+" THEN 1 ELSE 0 END) AS count").Where("d.last_success_at IS NOT NULL AND d.usage_date BETWEEN ? AND ?", start, end).Group(sourceExpr).Scan(&collectedSources).Error; err != nil {
+	if err = rangeDays().Select(sourceExpr + " AS source, COUNT(DISTINCT d.usage_date) AS dates, COUNT(*) AS count").Group(sourceExpr).Scan(&collectedSources).Error; err != nil {
 		return out, err
 	}
 	for _, row := range collectedSources {
 		if i, ok := bySource[overviewSourceID(row.Source)]; ok {
 			out.Sources[i].CollectedDays = row.Count
-			out.Sources[i].TotalCostDays = row.RawDates
-			out.Sources[i].hasUpstreamBill = row.RawDates > 0
+			out.Sources[i].TotalCostDays = row.Dates
 		}
 	}
-	// Collection markers include successful days with no bill lines. Any saved
-	// successful collection makes a day available; another account's failure must
-	// not hide that day's collected totals. Expected counts are informational only.
+	// Account creation cohorts determine expected counts, independently of bill coverage.
 	dateExpr := "DATE_FORMAT(DATE_ADD(a.created_at, INTERVAL 8 HOUR), '%Y-%m-%d')"
 	if s.DB.Dialector.Name() == "sqlite" {
 		dateExpr = "DATE(a.created_at, '+8 hours')"
@@ -276,20 +249,18 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 		return out, err
 	}
 	var coverage []struct {
-		Date         string
-		Collected    int64
-		RawCollected int64
+		Date      string
+		Collected int64
 	}
-	if err = days().Select("d.usage_date AS date, SUM(CASE WHEN "+detailDay+" THEN 1 ELSE 0 END) AS collected, SUM(CASE WHEN d.last_success_at IS NOT NULL THEN 1 ELSE 0 END) AS raw_collected").Where("d.usage_date BETWEEN ? AND ?", start, end).Group("d.usage_date").Scan(&coverage).Error; err != nil {
+	if err = rangeDays().Select("d.usage_date AS date, COUNT(*) AS collected").Group("d.usage_date").Scan(&coverage).Error; err != nil {
 		return out, err
 	}
-	coverageByDate := map[string]int{}
-	for i, c := range coverage {
-		coverageByDate[c.Date] = i
+	coverageByDate := map[string]int64{}
+	for _, day := range coverage {
+		coverageByDate[day.Date] = day.Collected
 	}
 	first, _ := time.ParseInLocation("2006-01-02", start, dailyZone)
 	last, _ := time.ParseInLocation("2006-01-02", end, dailyZone)
-	var rawDays []OverviewDay
 	var expected int64
 	cohortIndex := 0
 	for date := first; !date.After(last); date = date.AddDate(0, 0, 1) {
@@ -298,25 +269,16 @@ func (s *Store) aggregateAccountsOverview(ctx context.Context, scope overviewSco
 			expected += cohorts[cohortIndex].Count
 			cohortIndex++
 		}
-		day := OverviewDay{Date: key, Status: "missing", Expected: expected}
-		if i, ok := coverageByDate[key]; ok {
-			c := coverage[i]
-			day.Collected = c.Collected
-			if c.Collected > 0 {
-				day.Status = "complete"
-			}
+		day := OverviewDay{Date: key, Status: "missing", Expected: expected, Collected: coverageByDate[key]}
+		if day.Collected > 0 {
+			day.Status = "complete"
 		}
 		out.Days = append(out.Days, day)
-		day.Collected = 0
-		if i, ok := coverageByDate[key]; ok {
-			day.Collected = coverage[i].RawCollected
-		}
-		rawDays = append(rawDays, day)
 	}
 	if len(out.Days) == 0 {
 		return out, fmt.Errorf("empty overview range")
 	}
-	err = out.setUpstreamCosts(costsLedger, rawDays)
+	err = out.setModelBillTotals()
 	return out, err
 }
 

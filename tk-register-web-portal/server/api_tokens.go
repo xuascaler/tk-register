@@ -168,7 +168,7 @@ func (a *app) claudeAccountsAPI(w http.ResponseWriter, r *http.Request) {
 			internal(w)
 			return
 		}
-		if !enabled {
+		if !user.IsSuperAdmin || !enabled {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(result.HTTPStatus)
 			_, _ = w.Write(totalsOnlySubmissionBody(result.Body, result.HTTPStatus))

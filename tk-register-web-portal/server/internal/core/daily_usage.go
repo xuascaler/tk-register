@@ -283,29 +283,35 @@ func (s *Store) readAccountDailyUsage(ctx context.Context, id uint64, start, end
 	if err = s.DB.WithContext(ctx).First(&account, id).Error; err != nil {
 		return out, err
 	}
-	var days []struct {
-		AccountUsageDay
-		HasModelUsage bool
-	}
-	dayQuery := s.DB.WithContext(ctx).Table("account_usage_days d").Where("d.account_id = ? AND d.identity_key = ? AND d.usage_date BETWEEN ? AND ?", id, account.IdentityKey, start, end)
-	detailExists := "1"
-	if out.ModelUsageSource == "modified" {
-		detailExists = "EXISTS (SELECT 1 FROM account_daily_fable_ratios r WHERE r.day_id=d.id)"
-	}
-	if err = dayQuery.Select("d.*, " + detailExists + " AS has_model_usage").Scan(&days).Error; err != nil {
+	var days []AccountUsageDay
+	if err = s.DB.WithContext(ctx).Where("account_id = ? AND identity_key = ? AND usage_date BETWEEN ? AND ?", id, account.IdentityKey, start, end).Find(&days).Error; err != nil {
 		return out, err
+	}
+	err = s.DB.WithContext(ctx).Table(usageLineTable(out.ModelUsageSource)+" AS u").
+		Joins("JOIN account_usage_days d ON d.id=u.day_id").
+		Where("d.account_id = ? AND d.identity_key = ? AND d.usage_date BETWEEN ? AND ? AND d.last_success_at IS NOT NULL", id, account.IdentityKey, start, end).
+		Select("u.*,d.usage_date").Order("d.usage_date DESC,u.model ASC").Limit(10001).Scan(&out.Rows).Error
+	if err != nil {
+		return out, err
+	}
+	if len(out.Rows) > 10000 {
+		return out, fmt.Errorf("daily usage selection exceeds supported size")
+	}
+	costByDate := map[string]*big.Rat{}
+	for _, row := range out.Rows {
+		if err = addUsageCost(costByDate, row.UsageDate, row.CostCNY); err != nil {
+			return out, err
+		}
 	}
 	var jobs []DailyUsageJob
 	if err = s.DB.WithContext(ctx).Select("usage_date,status,last_error").Where("vendor_id = ? AND usage_date BETWEEN ? AND ?", account.VendorID, start, end).Find(&jobs).Error; err != nil {
 		return out, err
 	}
 	byDay := map[string]AccountUsageDay{}
-	modelDay := map[string]bool{}
-	rawDays := []OverviewDay{}
+	coverage := []OverviewDay{}
 	byJob := map[string]DailyUsageJob{}
 	for _, d := range days {
-		byDay[d.UsageDate] = d.AccountUsageDay
-		modelDay[d.UsageDate] = d.HasModelUsage
+		byDay[d.UsageDate] = d
 	}
 	for _, j := range jobs {
 		byJob[j.UsageDate] = j
@@ -317,19 +323,18 @@ func (s *Store) readAccountDailyUsage(ctx context.Context, id uint64, start, end
 		d := byDay[key]
 		j := byJob[key]
 		item := DailyUsageDayDTO{Date: key, Status: "missing"}
-		rawDay := OverviewDay{Date: key, Expected: 1}
-		if d.LastSuccessAt != nil {
-			rawDay.Collected = 1
-		}
-		rawDays = append(rawDays, rawDay)
-		if d.LastSuccessAt != nil && modelDay[key] {
+		day := OverviewDay{Date: key, Expected: 1}
+		available := d.LastSuccessAt != nil && (out.ModelUsageSource == "raw" || costByDate[key] != nil)
+		if available {
+			day.Collected = 1
 			item.Status = "complete"
 			item.CollectedAt = d.LastSuccessAt
 		}
+		coverage = append(coverage, day)
 		if d.LastError != "" {
 			item.Status = "failed"
 			item.Error = d.LastError
-			if d.LastSuccessAt != nil && modelDay[key] {
+			if available {
 				item.Status = "stale"
 			}
 		} else if item.Status == "missing" && j.LastError != "" {
@@ -340,34 +345,8 @@ func (s *Store) readAccountDailyUsage(ctx context.Context, id uint64, start, end
 		}
 		out.Days = append(out.Days, item)
 	}
-	billRows := func(source string) *gorm.DB {
-		return s.DB.WithContext(ctx).Table(usageLineTable(source)+" AS u").Joins("JOIN account_usage_days d ON d.id=u.day_id").Where("d.account_id = ? AND d.identity_key = ? AND d.usage_date BETWEEN ? AND ? AND d.last_success_at IS NOT NULL", id, account.IdentityKey, start, end)
-	}
-	var costs []struct{ UsageDate, CostCNY string }
-	rawQuery := billRows("raw")
-	if s.DB.Dialector.Name() == "sqlite" {
-		rawQuery = rawQuery.Select("d.usage_date,u.cost_cny")
-	} else {
-		rawQuery = rawQuery.Select("d.usage_date,SUM(u.cost_cny) AS cost_cny").Group("d.usage_date")
-	}
-	if err = rawQuery.Scan(&costs).Error; err != nil {
+	if err = out.setDailyCosts(costByDate, coverage, out.ExchangeRate); err != nil {
 		return out, err
-	}
-	byDate := map[string]*big.Rat{}
-	for _, r := range costs {
-		if err = addUsageCost(byDate, r.UsageDate, r.CostCNY); err != nil {
-			return out, err
-		}
-	}
-	if err = out.setDailyCosts(byDate, rawDays, out.ExchangeRate); err != nil {
-		return out, err
-	}
-	err = billRows(out.ModelUsageSource).Select("u.*,d.usage_date").Order("d.usage_date DESC,u.model ASC").Limit(10001).Scan(&out.Rows).Error
-	if err != nil {
-		return out, err
-	}
-	if len(out.Rows) > 10000 {
-		return out, fmt.Errorf("daily usage selection exceeds supported size")
 	}
 	err = out.allocateModelCents()
 	return out, err

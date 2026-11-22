@@ -23,7 +23,7 @@ try {
   for (const admin of [false, true]) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
     const calls = [], errors = [], unexpected = [];
-    let missingWeek = true;
+    let missingWeek = true, missingDayDetails = false;
     const endpoint = admin ? '/admin/accounts/overview' : '/accounts/overview';
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/tk-register/api/**', async route => {
@@ -38,14 +38,15 @@ try {
         const empty = cached && (period === 'all_time' || period === 'week' && missingWeek);
         const range = period === 'week' && cached ? staleWeek : period ? { start: dateBefore(yesterday, ({ day: 1, week: 7, month: 30, all_time: 60 }[period]) - 1), end: yesterday } : { start: url.searchParams.get('start_date'), end: url.searchParams.get('end_date') };
         const chosen = allSources ? sourceList : sourceList.filter(source => url.searchParams.get('sources').split(',').includes(source.id));
-        const sources = empty ? [] : chosen.map(source => ({ ...source, total: source.id === 'myself' ? 2 : 3, statuses: { active: 1, offline: source.id === 'myself' ? 1 : 2 }, cost_usd: 100, cost_known: source.id === 'myself' ? 2 : 3, collected_days: 1 }));
-        const days = [], rows = [], models = ['claude-sonnet', 'claude-opus'], zeroBills = period === 'day';
+        const zeroBills = period === 'day', noDetails = zeroBills && missingDayDetails;
+        const sources = empty ? [] : chosen.map(source => ({ ...source, total: source.id === 'myself' ? 2 : 3, statuses: { active: 1, offline: source.id === 'myself' ? 1 : 2 }, cost_known: 0, collected_days: noDetails ? 0 : 1 }));
+        const days = [], rows = [], models = noDetails ? [] : zeroBills ? ['claude-sonnet'] : ['claude-sonnet', 'claude-opus'];
         if (!empty) for (let at = Date.parse(range.start); at <= Date.parse(range.end); at += 86400_000) {
           const date = new Date(at).toISOString().slice(0, 10);
-          days.push({ date, status: 'complete', expected: 5, collected: 5 });
-          if (!zeroBills) for (const [i, model] of models.entries()) rows.push({ date, model, input_tokens: String(100 * (i + 1)), output_tokens: '20', cache_read_tokens: '0', cache_write_tokens: '0', cost_cny: '72', cost_usd: 10 * (i + 1) });
+          days.push({ date, status: noDetails ? 'missing' : 'complete', expected: 5, collected: noDetails ? 0 : 5 });
+          for (const [i, model] of models.entries()) rows.push({ date, model, input_tokens: String(100 * (i + 1)), output_tokens: '20', cache_read_tokens: '0', cache_write_tokens: '0', cost_cny: zeroBills ? '0' : String(72 * (i + 1)), cost_usd: zeroBills ? 0 : 10 * (i + 1) });
         }
-        for (const source of sources) source.cost_usd = zeroBills ? 0 : days.length * 30 / sources.length;
+        for (const source of sources) source.cost_usd = noDetails ? null : zeroBills ? 0 : days.length * 30 / sources.length;
         return ok({
           model_costs_enabled: true,
           ...(cached ? { summary_available: !empty, summary_generated_at: empty ? null : '2026-11-14T19:20:00+08:00', summary_period: period } : {}),
@@ -53,7 +54,7 @@ try {
           start_date: empty && period === 'all_time' ? yesterday : range.start, end_date: empty && period === 'all_time' ? yesterday : range.end,
           earliest_date: empty ? null : range.start, timezone: 'Asia/Shanghai', collection_time: '03:00', exchange_rate_cny_per_usd: 7.2,
           latest_account_data: '2026-11-16T00:00:00+08:00', sources, days, rows,
-          model_costs: zeroBills ? [] : sources.flatMap(source => models.map((model, i) => ({ source_id: source.id, model, cost_cny: '72', cost_usd: days.length * 10 * (i + 1) / sources.length })))
+          model_costs: sources.flatMap(source => models.map((model, i) => ({ source_id: source.id, model, cost_cny: zeroBills ? '0' : String(days.length * 72 * (i + 1) / sources.length), cost_usd: zeroBills ? 0 : days.length * 10 * (i + 1) / sources.length })))
         });
       }
       unexpected.push(path);
@@ -212,6 +213,7 @@ try {
     await page.getByRole('checkbox', { name: 'Select all', exact: true }).check();
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await choosePreset('Past day');
+    assert.deepEqual(await page.locator('.overview-model-grid strong').allTextContents(), ['0.00 $']);
     assert.equal(await page.locator('.overview-summary-spent strong').innerText(), '0.00 $');
     assert.equal(await page.locator('.overview-chart-total strong').innerText(), '0.00 $');
     assert.equal(await page.locator('.overview-period-total').innerText(), '0.00 $');
@@ -229,6 +231,14 @@ try {
     assert.equal(await page.locator('.overview-summary-spent strong').innerText(), '—', 'Explicit empty selection remains empty on a zero-bill day');
     assert.equal(await page.locator('.overview-chart-total strong').innerText(), '—');
     await page.getByRole('heading', { name: 'Select models to view daily usage', exact: true }).waitFor();
+    await choosePreset('Past month');
+    missingDayDetails = true;
+    await choosePreset('Past day');
+    await page.getByRole('heading', { name: 'No daily usage available', exact: true }).waitFor();
+    await page.getByText('No model usage data for this period.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.overview-model-grid > div').count(), 0);
+    assert.equal(await page.locator('.overview-summary-spent strong').innerText(), '—');
+    assert.equal(await page.locator('.overview-chart-total strong').innerText(), '—');
     assert.equal(calls.some(call => call.method !== 'GET' || call.path.endsWith('/sync')), false);
     assert.deepEqual(unexpected, []); assert.deepEqual(errors, []);
     await page.close();

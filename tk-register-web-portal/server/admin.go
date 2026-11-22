@@ -35,7 +35,7 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 	// Overview only reads saved account and bill data. It must not recover
 	// executions, mutate submissions, or trigger supplier requests.
 	if route == "admin/accounts/overview" {
-		a.serveAccountsOverview(w, r, actor.ID, true, false)
+		a.serveAccountsOverview(w, r, actor, true, false)
 		return true
 	}
 	if route == "admin/accounts/overview/sources" {
@@ -154,12 +154,7 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 			return true
 		}
 		if len(parts) == 1 && r.Method == "GET" {
-			result, e := a.store.AdminDetail(r.Context(), id)
-			if e != nil {
-				vendorFailure(w, e)
-			} else {
-				ok(w, result)
-			}
+			a.writeAdminSubmission(w, r, actor, id, nil)
 			return true
 		}
 		if len(parts) == 2 && r.Method == "POST" && (parts[1] == "status" || parts[1] == "bills") {
@@ -192,18 +187,17 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 				if !decode(w, r, &input.Bills) {
 					return true
 				}
+				if !actor.IsSuperAdmin {
+					a.writeAdminSubmission(w, r, actor, id, &input.Bills)
+					return true
+				}
 				_, e = service.Query(r.Context(), record.UserID, id, "bills", input)
 			}
 			if e != nil {
 				vendorFailure(w, e)
 				return true
 			}
-			result, e := a.store.AdminDetail(r.Context(), id)
-			if e != nil {
-				vendorFailure(w, e)
-			} else {
-				ok(w, result)
-			}
+			a.writeAdminSubmission(w, r, actor, id, nil)
 			return true
 		}
 	}

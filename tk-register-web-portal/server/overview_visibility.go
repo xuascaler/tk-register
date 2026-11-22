@@ -17,11 +17,14 @@ func (a *app) userModelCostsEnabled(ctx context.Context) (bool, error) {
 	return enabled, err
 }
 
-func (a *app) modelUsageView(ctx context.Context, administrative, rawAccount bool) (context.Context, bool, error) {
-	if rawAccount {
+func (a *app) modelUsageView(ctx context.Context, viewer *core.User, administrative, rawAccount bool) (context.Context, bool, error) {
+	if rawAccount && viewer.IsSuperAdmin {
 		return core.WithModelUsageSource(ctx, "raw"), true, nil
 	}
 	source, personal, err := a.store.ModelUsageSettings(ctx)
+	if !viewer.IsSuperAdmin {
+		source = "modified"
+	}
 	return core.WithModelUsageSource(ctx, source), administrative || personal, err
 }
 
@@ -43,23 +46,10 @@ type personalOverviewResponse struct {
 	Rows              *[]core.DailyUsageRowDTO  `json:"rows,omitempty"`
 	ModelCosts        *[]core.OverviewModelCost `json:"model_costs,omitempty"`
 	DailyTotals       *[]dailyUsageTotal        `json:"daily_totals,omitempty"`
-	TotalCostUSD      *float64                  `json:"total_cost_usd"`
 }
 
 func personalOverview(out core.AccountsOverview, enabled bool) (personalOverviewResponse, error) {
 	response := personalOverviewResponse{AccountsOverview: out, ModelCostsEnabled: enabled}
-	var cents int64
-	known := false
-	for _, source := range out.Sources {
-		if source.CostUSD != nil {
-			known = true
-			cents += int64(math.Round(*source.CostUSD * 100))
-		}
-	}
-	if known {
-		amount := float64(cents) / 100
-		response.TotalCostUSD = &amount
-	}
 	if enabled {
 		response.Rows, response.ModelCosts = &out.Rows, &out.ModelCosts
 		return response, nil

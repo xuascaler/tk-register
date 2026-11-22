@@ -136,7 +136,7 @@ func TestExternalSubmissionPassthroughAndOwnerAttribution(t *testing.T) {
 				t.Fatal(err)
 			}
 			admin, _, _ := vendorSession(t, a, "api-vendor-admin@example.com", "admin")
-			user, _, _ := vendorSession(t, a, "api-submit@example.com", "member")
+			user, _, _ := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
 			configuredVendor(t, a, admin.ID)
 			token, err := a.store.GenerateAPIToken(context.Background(), user.ID)
 			if err != nil {
@@ -188,7 +188,7 @@ func TestExternalSubmissionMasksAliasAndPreservesResponseMetadata(t *testing.T) 
 		t.Fatal(err)
 	}
 	admin, _, _ := vendorSession(t, a, "api-alias-admin@example.com", "admin")
-	user, _, _ := vendorSession(t, a, "api-alias-submit@example.com", "member")
+	user, _, _ := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
 	configuredVendor(t, a, admin.ID)
 	token, err := a.store.GenerateAPIToken(context.Background(), user.ID)
 	if err != nil {

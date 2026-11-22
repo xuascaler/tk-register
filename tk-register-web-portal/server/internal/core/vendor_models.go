@@ -98,6 +98,9 @@ type Submission struct {
 	PlatformAccountID          *string `gorm:"size:32"`
 	MetricsJSON                string  `gorm:"type:text"`
 	BillsJSON                  string  `gorm:"type:text"`
+	ModifiedBillsStartDS       string  `gorm:"size:10"`
+	ModifiedBillsEndDS         string  `gorm:"size:10"`
+	ModifiedBillsQueriedAt     *time.Time
 	LastCheckedAt              *time.Time
 	CreatedAt                  time.Time `gorm:"index"`
 	UpdatedAt                  time.Time
@@ -153,6 +156,9 @@ type VendorDTO struct {
 	CredentialUpdatedAt *time.Time    `json:"credential_updated_at"`
 }
 type SubmissionDTO struct {
+	modifiedBillsRange     BillsInput
+	modifiedBillsQueriedAt *time.Time
+
 	AccountSource     *AccountSource `json:"account_source,omitempty"`
 	CanManage         *bool          `json:"can_manage,omitempty"`
 	ID                string         `json:"id"`
@@ -435,7 +441,7 @@ func (s *Store) submissionDTO(ctx context.Context, record Submission) (Submissio
 			statusCheckedAt = &checked
 		}
 	}
-	return SubmissionDTO{ID: idString(record.ID), Source: record.Source, SubmitMode: record.SubmitMode, VendorID: idString(v.ID), VendorCode: v.Code, VendorName: v.Name, ProtocolVersionID: idString(record.ProtocolVersionID), Account: record.Account, Plan: record.Plan, Status: record.Status, RemoteID: record.RemoteID, RemoteAlias: record.RemoteAlias, RemoteStatus: record.RemoteStatus, PlatformAccountID: record.PlatformAccountID, Parameters: params, CreatedAt: record.CreatedAt.UTC(), UpdatedAt: record.UpdatedAt.UTC(), LastCheckedAt: record.LastCheckedAt, StatusCheckedAt: statusCheckedAt}, nil
+	return SubmissionDTO{modifiedBillsQueriedAt: record.ModifiedBillsQueriedAt, modifiedBillsRange: BillsInput{StartDS: record.ModifiedBillsStartDS, EndDS: record.ModifiedBillsEndDS}, ID: idString(record.ID), Source: record.Source, SubmitMode: record.SubmitMode, VendorID: idString(v.ID), VendorCode: v.Code, VendorName: v.Name, ProtocolVersionID: idString(record.ProtocolVersionID), Account: record.Account, Plan: record.Plan, Status: record.Status, RemoteID: record.RemoteID, RemoteAlias: record.RemoteAlias, RemoteStatus: record.RemoteStatus, PlatformAccountID: record.PlatformAccountID, Parameters: params, CreatedAt: record.CreatedAt.UTC(), UpdatedAt: record.UpdatedAt.UTC(), LastCheckedAt: record.LastCheckedAt, StatusCheckedAt: statusCheckedAt}, nil
 }
 func (s *Store) OwnedSubmission(ctx context.Context, userID, id uint64) (Submission, error) {
 	var record Submission

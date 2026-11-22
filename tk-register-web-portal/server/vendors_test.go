@@ -246,7 +246,7 @@ func TestVendorOwnerIsolationAndQueries(t *testing.T) {
 	bills := request(t, a, "POST", "submissions/"+id+"/bills", dates, cookie, csrf)
 	requireStatus(t, bills, 200)
 	detail = submissionDetail(t, bills.Body.Bytes())
-	if detail.Bills == nil || detail.Bills.Currency != "CNY" || detail.Bills.Account == nil || *detail.Bills.Account.Cost != 12.34 || detail.Bills.StartDS != "2026-10-01" || detail.Bills.EndDS != "2026-10-02" {
+	if detail.Bills == nil || detail.Bills.Currency != "CNY" || detail.Bills.Account != nil || detail.Bills.StartDS != dates["start_ds"] || detail.Bills.EndDS != dates["end_ds"] {
 		t.Fatal("billing range/currency wrong")
 	}
 	nullMetrics.Store(true)
@@ -261,8 +261,8 @@ func TestVendorOwnerIsolationAndQueries(t *testing.T) {
 	if data(t, list)["total"] != float64(0) {
 		t.Fatal("foreign submission listed")
 	}
-	if calls.Load() != 4 {
-		t.Fatal("unauthorized request reached upstream", calls.Load())
+	if calls.Load() != 3 {
+		t.Fatal("unauthorized request or local bill reached upstream", calls.Load())
 	}
 }
 func TestVendorUncertainFailureAllowsExplicitRetry(t *testing.T) {

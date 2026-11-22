@@ -165,13 +165,52 @@ func diagnosticValue(value any, depth int) any {
 	return nil
 }
 
-func (a *app) writePersonalSubmission(w http.ResponseWriter, r *http.Request, detail core.SubmissionDetail) {
+func (a *app) writePersonalSubmission(w http.ResponseWriter, r *http.Request, viewer *core.User, detail core.SubmissionDetail, dates *core.BillsInput) {
 	enabled, err := a.userModelCostsEnabled(r.Context())
 	if err != nil {
 		internal(w)
 		return
 	}
-	ok(w, personalSubmissionDetail(detail, enabled))
+	if viewer.IsSuperAdmin {
+		ok(w, personalSubmissionDetail(detail, enabled))
+		return
+	}
+	projected, err := a.submissionWithLocalBills(r, detail, dates)
+	if err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	ok(w, projected)
+}
+
+func (a *app) writeAdminSubmission(w http.ResponseWriter, r *http.Request, actor *core.User, id uint64, dates *core.BillsInput) {
+	out, err := a.store.AdminDetail(r.Context(), id)
+	if err == nil && !actor.IsSuperAdmin {
+		out.SubmissionDetail, err = a.submissionWithLocalBills(r, out.SubmissionDetail, dates)
+	}
+	if err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	ok(w, out)
+}
+
+func (a *app) submissionWithLocalBills(r *http.Request, detail core.SubmissionDetail, dates *core.BillsInput) (core.SubmissionDetail, error) {
+	bill, err := a.store.ModifiedSubmissionBills(r.Context(), detail, dates)
+	if err != nil {
+		return core.SubmissionDetail{}, err
+	}
+	detail = personalSubmissionDetail(detail, false)
+	detail.Bills = bill
+	if detail.Metrics != nil && detail.Metrics.Account != nil {
+		// This independently queried interval contains supplier counters. Keep
+		// status and availability without attaching those counts to local bills.
+		metrics, account := *detail.Metrics, *detail.Metrics.Account
+		account.PromptTokens, account.CompletionTokens = nil, nil
+		metrics.Account = &account
+		detail.Metrics = &metrics
+	}
+	return detail, nil
 }
 
 // Submission API responses normally contain identity fields only. A vendor may
@@ -192,6 +231,10 @@ func totalsOnlySubmissionBody(body []byte, status int) []byte {
 				continue
 			}
 			out[key] = value
+		}
+		switch string(input["submission_mode"]) {
+		case `"restore_update"`, `"create"`:
+			out["submission_mode"] = input["submission_mode"]
 		}
 		for _, key := range []string{"data", "error"} {
 			var nested map[string]json.RawMessage

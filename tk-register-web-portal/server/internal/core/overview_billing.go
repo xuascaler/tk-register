@@ -111,7 +111,7 @@ func ProjectOverviewBilling(out *AccountsOverview) error {
 		}
 	}
 	updateOverviewSourceBilling(out)
-	restoreAllModelCosts(out)
+	reconcileOverviewDailyCosts(out, true)
 	return nil
 }
 
@@ -119,73 +119,56 @@ func ProjectOverviewBilling(out *AccountsOverview) error {
 // frontend and server selections therefore return the same monetary values.
 // nil selects all; an empty map selects none. Account counts/statuses are unchanged.
 func FilterOverviewBillingModels(out *AccountsOverview, models map[string]bool) {
-	if models == nil && out.allModelSources != nil {
-		restoreAllModelCosts(out)
+	if models == nil {
 		return
 	}
-	if models != nil {
-		rows := make([]DailyUsageRowDTO, 0, len(out.Rows))
-		costs := make([]OverviewModelCost, 0, len(out.ModelCosts))
-		for _, row := range out.Rows {
-			if models[row.Model] {
-				rows = append(rows, row)
-			}
+	rows := make([]DailyUsageRowDTO, 0, len(out.Rows))
+	costs := make([]OverviewModelCost, 0, len(out.ModelCosts))
+	for _, row := range out.Rows {
+		if models[row.Model] {
+			rows = append(rows, row)
 		}
-		for _, cost := range out.ModelCosts {
-			if models[cost.Model] {
-				costs = append(costs, cost)
-			}
-		}
-		out.Rows, out.ModelCosts = rows, costs
 	}
+	for _, cost := range out.ModelCosts {
+		if models[cost.Model] {
+			costs = append(costs, cost)
+		}
+	}
+	out.Rows, out.ModelCosts = rows, costs
 	updateOverviewSourceBilling(out)
-	if models != nil && out.allModelSources != nil {
-		var totalCents int64
-		known := false
-		for _, s := range out.Sources {
-			if s.CostUSD != nil {
-				known = true
-				totalCents += int64(math.Round(*s.CostUSD * 100))
-			}
-		}
-		out.TotalCostUSD = nil
-		if known && len(models) > 0 {
-			x := float64(totalCents) / 100
-			out.TotalCostUSD = &x
-		}
-		centsByDay := map[string]int64{}
-		for _, r := range out.Rows {
-			centsByDay[r.UsageDate] += int64(math.Round(r.CostUSD * 100))
-		}
-		out.DailyCosts = make([]DailyBillCost, 0, len(out.Days))
-		out.TotalCostDays = 0
-		for _, d := range out.Days {
-			bill := DailyBillCost{Date: d.Date, Expected: d.Expected, Collected: d.Collected}
-			if d.Collected > 0 && len(models) > 0 {
-				x := float64(centsByDay[d.Date]) / 100
-				bill.CostUSD = &x
-				out.TotalCostDays++
-			}
-			out.DailyCosts = append(out.DailyCosts, bill)
-		}
-	}
-	if models != nil && len(models) == 0 {
+	if len(models) == 0 {
 		for i := range out.Sources {
 			out.Sources[i].CostUSD = nil
 		}
 	}
+	reconcileOverviewDailyCosts(out, len(models) > 0)
 }
 
-func restoreAllModelCosts(out *AccountsOverview) {
-	if out.allModelSources == nil {
-		return
+// Rows have already received their share of each model's rounded total. Use
+// these same cents for the daily and period totals so every breakdown agrees.
+func reconcileOverviewDailyCosts(out *AccountsOverview, selected bool) {
+	centsByDay := make(map[string]int64, len(out.Days))
+	for _, row := range out.Rows {
+		centsByDay[row.UsageDate] += int64(math.Round(row.CostUSD * 100))
 	}
-	for i := range out.Sources {
-		s := &out.Sources[i]
-		s.CostUSD = nil
-		if v, ok := out.allModelSources[s.ID]; ok {
-			s.CostUSD = &v
+	out.TotalCostUSD = nil
+	out.TotalCostDays = 0
+	out.DailyCosts = make([]DailyBillCost, 0, len(out.Days))
+	var totalCents int64
+	for _, day := range out.Days {
+		bill := DailyBillCost{Date: day.Date, Expected: day.Expected, Collected: day.Collected}
+		if selected && day.Collected > 0 {
+			bill.cents = centsByDay[day.Date]
+			usd := float64(bill.cents) / 100
+			bill.CostUSD = &usd
+			totalCents += bill.cents
+			out.TotalCostDays++
 		}
+		out.DailyCosts = append(out.DailyCosts, bill)
+	}
+	if out.TotalCostDays > 0 {
+		usd := float64(totalCents) / 100
+		out.TotalCostUSD = &usd
 	}
 }
 

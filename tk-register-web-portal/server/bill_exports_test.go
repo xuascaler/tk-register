@@ -29,7 +29,8 @@ func (f *fakeBillExporter) ExportClaudeBills(context.Context, string, string, st
 
 func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	a, owner, memberCookie, memberCSRF, _, _ := setupPageSync(t)
-	_, cookie, csrf := vendorSession(t, a, "bills-admin@example.com", "admin")
+	admin, cookie, csrf := vendorSession(t, a, "bills-admin@example.com", "admin")
+	_, superCookie, superCSRF := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
 	body := map[string]string{"user_id": fmt.Sprint(owner.ID), "start_date": "2026-01-01", "end_date": "2026-01-02"}
 	route := "admin/bill-exports"
 	requireStatus(t, request(t, a, "POST", route, body, nil, ""), 401)
@@ -38,6 +39,9 @@ func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	requireStatus(t, request(t, a, "POST", route, map[string]string{"user_id": "1", "start_date": "2026-01-01", "end_date": "2026-04-01"}, cookie, csrf), 400)
 	w := request(t, a, "POST", route, body, cookie, csrf)
 	requireStatus(t, w, 200)
+	if strings.Contains(w.Body.String(), "model_usage_source") {
+		t.Fatal("ordinary admin job creation returned an internal source")
+	}
 	id := data(t, w)["id"].(string)
 	jobID, _ := core.ParseBusinessID(id)
 	for _, suffix := range []string{"", "/results", "/download"} {
@@ -50,7 +54,7 @@ func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	if err != nil || job == nil {
 		t.Fatal(job, err)
 	}
-	report := billing.Report{Currency: "CNY", TotalCNY: "12.34", Columns: []string{"Account", "Cost (CNY)"}, Details: [][]string{{"one@example.com", "12.34"}}}
+	report := billing.Report{Currency: "CNY", TotalCNY: "12.34", Summary: []billing.Summary{{Account: "one@example.com", Status: "matched"}}, Columns: []string{"Account", "Cost (CNY)"}, Details: [][]string{{"one@example.com", "12.34"}}}
 	raw, _ := json.Marshal(report)
 	artifact := []byte("PKfiltered-xlsx-fixture")
 	err = a.store.CompleteBillExport(context.Background(), jobID, token, core.BillExportResult{ReportJSON: string(raw), Artifact: artifact, TotalCNY: "12.34", RowCount: 1, MatchedAccountCount: 1}, time.Now().UTC())
@@ -66,6 +70,14 @@ func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	if strings.Contains(w.Body.String(), "filtered-xlsx-fixture") || strings.Contains(w.Body.String(), "one@example.com") {
 		t.Fatal("polling must not expose artifact/report payload")
 	}
+	if dto := data(t, w); dto["summary_count"] != float64(1) || dto["account_count"] != float64(3) || dto["model_usage_source"] != nil {
+		t.Fatalf("wrong ordinary job metadata: %v", dto)
+	}
+	w = request(t, a, "GET", route+"/"+id+"/results?view=summary", nil, cookie, "")
+	requireStatus(t, w, 200)
+	if data(t, w)["total"] != float64(1) {
+		t.Fatal("summary tab count and actual rows differ")
+	}
 	w = request(t, a, "GET", route+"/"+id+"/results?view=details&page=1", nil, cookie, "")
 	requireStatus(t, w, 200)
 	if data(t, w)["total"] != float64(1) {
@@ -80,6 +92,35 @@ func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	}
 	requireStatus(t, request(t, a, "POST", route+"/"+id+"/download", map[string]string{}, cookie, csrf), 405)
 	requireStatus(t, request(t, a, "GET", route+"/99999999", nil, cookie, ""), 404)
+
+	w = request(t, a, "POST", route, body, superCookie, superCSRF)
+	requireStatus(t, w, 200)
+	rawJob := data(t, w)
+	if rawJob["model_usage_source"] != "raw" {
+		t.Fatal("super admin export should use upstream bills")
+	}
+	rawID := rawJob["id"].(string)
+	// Old exports requested by an ordinary admin still contain supplier bills.
+	if err := a.store.DB.Model(&core.BillExportJob{}).Where("id = ?", rawID).Update("requested_by", admin.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "/results?view=details", "/download?model_usage_source=raw"} {
+		requireStatus(t, request(t, a, "GET", route+"/"+rawID+suffix, nil, cookie, ""), 404)
+	}
+	w = request(t, a, "GET", route+"?model_usage_source=raw", nil, cookie, "")
+	requireStatus(t, w, 200)
+	ordinaryJobs := data(t, w)["items"].([]any)
+	if len(ordinaryJobs) != 1 || ordinaryJobs[0].(map[string]any)["id"] != id || strings.Contains(w.Body.String(), "model_usage_source") {
+		t.Fatal("ordinary admin job list should only contain the modified export")
+	}
+	w = request(t, a, "GET", route, nil, superCookie, "")
+	requireStatus(t, w, 200)
+	superJobs := data(t, w)["items"].([]any)
+	if len(superJobs) != 2 || superJobs[0].(map[string]any)["model_usage_source"] != "raw" || superJobs[1].(map[string]any)["model_usage_source"] != "modified" {
+		t.Fatal("super admin should see both export sources")
+	}
+	requireStatus(t, request(t, a, "GET", route+"/"+rawID, nil, superCookie, ""), 200)
+	requireStatus(t, request(t, a, "GET", route+"/"+id+"/download", nil, superCookie, ""), 200)
 }
 
 func TestBillExportWorkerFailureAndCooldown(t *testing.T) {
@@ -95,7 +136,7 @@ func TestBillExportWorkerFailureAndCooldown(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			a, owner, _, _, _, _ := setupPageSync(t)
-			admin := addUser(t, a, "bills-admin@example.com", "admin")
+			admin := addUser(t, a, core.InitialSuperAdminEmail, "admin")
 			job, err := a.store.CreateBillExport(context.Background(), admin.ID, owner.ID, "2026-01-01", "2026-01-02", time.Now().UTC())
 			if err != nil {
 				t.Fatal(err)
@@ -105,7 +146,7 @@ func TestBillExportWorkerFailureAndCooldown(t *testing.T) {
 			if err = a.processBillExport(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			saved, err := a.store.BillExportData(context.Background(), job.ID)
+			saved, err := a.store.BillExportData(context.Background(), admin.ID, job.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -126,7 +167,7 @@ func TestBillExportWorkerFailureAndCooldown(t *testing.T) {
 
 func TestBillExportWorkerProducesOnlySelectedAccounts(t *testing.T) {
 	a, owner, _, _, rows, _ := setupPageSync(t)
-	admin := addUser(t, a, "bills-admin@example.com", "admin")
+	admin := addUser(t, a, core.InitialSuperAdminEmail, "admin")
 	if err := a.store.DB.Model(&rows[0]).Update("platform_account_id", "15001").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +186,7 @@ func TestBillExportWorkerProducesOnlySelectedAccounts(t *testing.T) {
 	if err = a.processBillExport(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := a.store.BillExportData(context.Background(), job.ID)
+	saved, err := a.store.BillExportData(context.Background(), admin.ID, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

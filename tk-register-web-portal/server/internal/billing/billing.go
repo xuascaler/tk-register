@@ -25,6 +25,7 @@ var beijing = time.FixedZone("Asia/Shanghai", 8*60*60)
 var ErrFormat = errors.New("The supplier bill export has an unsupported format. No report was generated.")
 var sourceColumns = []string{"邮箱", "平台账号ID", "模型", "输入Token", "输出Token", "缓存读Token", "缓存写Token", "消费(人民币/元)", "备注"}
 var decimalPattern = regexp.MustCompile(`^[0-9]{1,15}(\.[0-9]{1,8})?$`)
+var exportNumberPattern = regexp.MustCompile(`^[0-9]{1,70}(\.[0-9]{1,8})?$`)
 var integerPattern = regexp.MustCompile(`^[0-9]{1,18}$`)
 
 type Account struct {
@@ -95,9 +96,13 @@ func submittedTime(value *time.Time) string {
 	return value.In(beijing).Format(submittedLayout)
 }
 
-func Filter(data []byte, accounts []Account) (Report, error) {
+func emptyReport() Report {
 	columns := append([]string{sourceColumns[0], sourceColumns[1], "Submitted"}, sourceColumns[2:8]...)
-	out := Report{Summary: []Summary{}, Details: [][]string{}, Columns: columns, Review: []Review{}, TotalCNY: "0.00", Currency: "CNY"}
+	return Report{Summary: []Summary{}, Details: [][]string{}, Columns: columns, Review: []Review{}, TotalCNY: "0.00", Currency: "CNY"}
+}
+
+func Filter(data []byte, accounts []Account) (Report, error) {
+	out := emptyReport()
 	if len(data) == 0 || len(data) > maxInputBytes {
 		return out, ErrFormat
 	}
@@ -334,8 +339,12 @@ func Workbook(r Report) ([]byte, error) {
 		return nil
 	}
 	numeric := func(sheet, cell, value string) error {
-		if _, e := decimal(value); e != nil {
-			return e
+		if !exportNumberPattern.MatchString(value) {
+			return ErrFormat
+		}
+		digits := strings.Trim(strings.ReplaceAll(value, ".", ""), "0")
+		if len(digits) > 15 {
+			return f.SetCellStr(sheet, cell, value) // Excel numeric cells have 15 significant digits.
 		}
 		return f.SetCellDefault(sheet, cell, value)
 	}
@@ -420,8 +429,10 @@ func Workbook(r Report) ([]byte, error) {
 	if err = write("Account summary", totalRow, []string{"Filtered total (CNY)"}); err != nil {
 		return nil, err
 	}
-	if err = numeric("Account summary", fmt.Sprintf("F%d", totalRow), r.TotalCNY); err != nil {
-		return nil, err
+	if r.TotalCNY != "" {
+		if err = numeric("Account summary", fmt.Sprintf("F%d", totalRow), r.TotalCNY); err != nil {
+			return nil, err
+		}
 	}
 	_ = f.SetCellStyle("Account summary", fmt.Sprintf("F%d", totalRow), fmt.Sprintf("F%d", totalRow), moneyStyle)
 	if err = setup("Bill details", r.Columns); err != nil {

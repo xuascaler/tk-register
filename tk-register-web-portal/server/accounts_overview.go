@@ -9,18 +9,14 @@ import (
 	"goapi-tk-register/server/internal/core"
 )
 
-func (a *app) accountsOverview(w http.ResponseWriter, r *http.Request, userID uint64) {
-	a.serveAccountsOverview(w, r, userID, false, false)
-}
-
-func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, userID uint64, administrative, rawAccount bool) {
+func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, viewer *core.User, administrative, rawAccount bool) {
 	if r.Method != http.MethodGet {
 		fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
 		return
 	}
 	q := r.URL.Query()
 	period, start, end := q.Get("period"), q.Get("start_date"), q.Get("end_date")
-	view, modelCostsEnabled, err := a.modelUsageView(r.Context(), administrative, rawAccount)
+	view, modelCostsEnabled, err := a.modelUsageView(r.Context(), viewer, administrative, rawAccount)
 	if err != nil {
 		internal(w)
 		return
@@ -67,7 +63,7 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 	if allSources && period != "" {
 		// A missing or stale summary is returned as such. Reading never schedules
 		// generation or falls back to scanning the underlying billing tables.
-		result, err = a.store.ReadOverviewSummary(ctx, userID, administrative, period, now)
+		result, err = a.store.ReadOverviewSummary(ctx, viewer.ID, administrative, period, now)
 	} else {
 		if period != "" {
 			zone := time.FixedZone("Asia/Shanghai", 8*60*60)
@@ -87,7 +83,7 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 		if administrative {
 			query = a.store.AdminAccountsOverview
 		}
-		result, err = query(ctx, userID, q.Get("sources"), start, end, allTime, now)
+		result, err = query(ctx, viewer.ID, q.Get("sources"), start, end, allTime, now)
 	}
 	if err == nil {
 		err = core.ProjectOverviewBilling(&result)
@@ -98,6 +94,9 @@ func (a *app) serveAccountsOverview(w http.ResponseWriter, r *http.Request, user
 		vendorFailure(w, err)
 	} else {
 		filterOverviewModels(&result, models)
+		if !viewer.IsSuperAdmin {
+			result.ModelUsageSource = ""
+		}
 		if administrative {
 			ok(w, result)
 			return

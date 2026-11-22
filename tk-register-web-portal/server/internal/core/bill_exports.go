@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"goapi-tk-register/server/internal/billing"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -22,17 +24,19 @@ var ErrBillExportClaimLost = errors.New("bill export worker claim is no longer v
 // BillExportJob keeps only the selected user's filtered results. Supplier-wide
 // source files and website credentials must never be persisted in this table.
 type BillExportJob struct {
-	ID                  uint64     `gorm:"primaryKey"`
-	RequestedBy         uint64     `gorm:"not null;index"`
-	Requester           User       `gorm:"foreignKey:RequestedBy;constraint:OnDelete:RESTRICT" json:"-"`
-	TargetUserID        uint64     `gorm:"not null;index"`
-	TargetUser          User       `gorm:"foreignKey:TargetUserID;constraint:OnDelete:RESTRICT" json:"-"`
-	UserEmail           string     `gorm:"size:50;not null"`
-	VendorID            uint64     `gorm:"not null;index"`
-	Vendor              Vendor     `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT" json:"-"`
-	StartDate           string     `gorm:"size:10;not null"`
-	EndDate             string     `gorm:"size:10;not null"`
-	Timezone            string     `gorm:"size:32;not null"`
+	ID           uint64 `gorm:"primaryKey"`
+	RequestedBy  uint64 `gorm:"not null;index"`
+	Requester    User   `gorm:"foreignKey:RequestedBy;constraint:OnDelete:RESTRICT" json:"-"`
+	TargetUserID uint64 `gorm:"not null;index"`
+	TargetUser   User   `gorm:"foreignKey:TargetUserID;constraint:OnDelete:RESTRICT" json:"-"`
+	UserEmail    string `gorm:"size:50;not null"`
+	VendorID     uint64 `gorm:"not null;index"`
+	Vendor       Vendor `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT" json:"-"`
+	StartDate    string `gorm:"size:10;not null"`
+	EndDate      string `gorm:"size:10;not null"`
+	Timezone     string `gorm:"size:32;not null"`
+	// Every job created before this column existed contains a supplier (Raw) export.
+	UsageSource         string     `gorm:"size:16;not null;default:raw;index" json:"-"`
 	Status              string     `gorm:"size:24;not null;index:idx_bill_export_due,priority:1"`
 	AccountCount        int        `gorm:"not null"`
 	MatchedAccountCount int        `gorm:"not null;default:0"`
@@ -125,7 +129,7 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 			return err
 		}
 		var actor, user User
-		if err := tx.Where("id = ? AND role = ? AND status = ?", actorID, "admin", "active").First(&actor).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND role = ? AND status = ?", actorID, "admin", "active").First(&actor).Error; err != nil {
 			return err
 		}
 		if err := tx.First(&user, userID).Error; err != nil {
@@ -158,7 +162,11 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		if len(accounts) > 20000 {
 			return validationErrorf("This user has too many accounts for one export.")
 		}
-		job = BillExportJob{RequestedBy: actor.ID, TargetUserID: user.ID, UserEmail: user.Email, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
+		source := "modified"
+		if actor.IsSuperAdmin {
+			source = "raw"
+		}
+		job = BillExportJob{RequestedBy: actor.ID, UsageSource: source, TargetUserID: user.ID, UserEmail: user.Email, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
 		if err := tx.Create(&job).Error; err != nil {
 			return err
 		}
@@ -182,25 +190,33 @@ func billExportMetadata(db *gorm.DB) *gorm.DB {
 	return db.Omit("report_json", "artifact", "lease_token")
 }
 
-func (s *Store) BillExport(ctx context.Context, id uint64) (BillExportJob, error) {
+// Scope metadata, JSON and file payloads equally, including direct requests for old job IDs.
+func (s *Store) visibleBillExports(ctx context.Context, actorID uint64) *gorm.DB {
+	return s.DB.WithContext(ctx).Model(&BillExportJob{}).Where(`EXISTS (
+		SELECT 1 FROM users u WHERE u.id=? AND u.role=? AND u.status=?
+		AND (u.is_super_admin=? OR bill_export_jobs.usage_source=?)
+	)`, actorID, "admin", "active", true, "modified")
+}
+
+func (s *Store) BillExport(ctx context.Context, actorID, id uint64) (BillExportJob, error) {
 	var job BillExportJob
 	if id == 0 {
 		return job, ErrNotFound
 	}
-	err := billExportMetadata(s.DB.WithContext(ctx)).First(&job, id).Error
+	err := billExportMetadata(s.visibleBillExports(ctx, actorID)).First(&job, id).Error
 	return job, err
 }
-func (s *Store) BillExportData(ctx context.Context, id uint64) (BillExportJob, error) {
+func (s *Store) BillExportData(ctx context.Context, actorID, id uint64) (BillExportJob, error) {
 	var job BillExportJob
 	if id == 0 {
 		return job, ErrNotFound
 	}
-	err := s.DB.WithContext(ctx).First(&job, id).Error
+	err := s.visibleBillExports(ctx, actorID).First(&job, id).Error
 	return job, err
 }
-func (s *Store) RecentBillExports(ctx context.Context) ([]BillExportJob, error) {
+func (s *Store) RecentBillExports(ctx context.Context, actorID uint64) ([]BillExportJob, error) {
 	jobs := []BillExportJob{}
-	err := billExportMetadata(s.DB.WithContext(ctx)).Order("id DESC").Limit(20).Find(&jobs).Error
+	err := billExportMetadata(s.visibleBillExports(ctx, actorID)).Order("id DESC").Limit(20).Find(&jobs).Error
 	return jobs, err
 }
 func (s *Store) BillExportAccounts(ctx context.Context, id uint64) ([]BillExportAccount, error) {
@@ -210,6 +226,26 @@ func (s *Store) BillExportAccounts(ctx context.Context, id uint64) ([]BillExport
 	}
 	err := s.DB.WithContext(ctx).Where("job_id = ?", id).Order("id ASC").Find(&rows).Error
 	return rows, err
+}
+
+// Read only the saved daily lines for the frozen account identities and period
+// of a Modified job. A re-submission or transfer must not change its selection.
+func (s *Store) ModifiedBillExportRows(ctx context.Context, jobID uint64) ([]billing.StoredUsageRow, error) {
+	var rows []billing.StoredUsageRow
+	err := s.DB.WithContext(ctx).Table("bill_export_jobs j").
+		Joins("JOIN bill_export_accounts a ON a.job_id=j.id").
+		Joins("JOIN account_usage_days d ON d.account_id=a.local_account_id AND d.identity_key=a.identity_key AND d.usage_date BETWEEN j.start_date AND j.end_date AND d.last_success_at IS NOT NULL").
+		Joins("JOIN account_daily_usages_modifiled u ON u.day_id=d.id").
+		Where("j.id=? AND j.usage_source=?", jobID, "modified").
+		Select("a.local_account_id, d.usage_date, u.model, u.cost_cny, u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens").
+		Order("a.id, d.usage_date, u.model").Limit(billing.MaxRows + 1).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > billing.MaxRows {
+		return nil, validationErrorf("This export is too large. Select a shorter date range.")
+	}
+	return rows, nil
 }
 
 // Claim uses a compare-and-swap even when a distributed worker mutex is held.
@@ -273,7 +309,8 @@ func (s *Store) FailBillExport(ctx context.Context, id uint64, token, code, mess
 	return billExportClaimResult(s.billExportClaim(ctx, id, token).Updates(map[string]any{"status": "failed", "error_code": code, "error_message": safeBillExportError(message), "finished_at": now.UTC(), "lease_token": "", "lease_until": nil, "report_json": "", "artifact": nil}))
 }
 func (s *Store) CompleteBillExport(ctx context.Context, id uint64, token string, result BillExportResult, now time.Time) error {
-	if len(result.ReportJSON) > MaxBillExportReportBytes || len(result.Artifact) > MaxBillExportArtifactBytes || !json.Valid([]byte(result.ReportJSON)) || len(result.Artifact) < 4 || string(result.Artifact[:2]) != "PK" || result.MatchedAccountCount < 0 || result.ReviewAccountCount < 0 || result.RowCount < 0 || len(result.TotalCNY) == 0 || len(result.TotalCNY) > 80 {
+	missingTotal := result.TotalCNY == "" && (result.MatchedAccountCount != 0 || result.RowCount != 0)
+	if len(result.ReportJSON) > MaxBillExportReportBytes || len(result.Artifact) > MaxBillExportArtifactBytes || !json.Valid([]byte(result.ReportJSON)) || len(result.Artifact) < 4 || string(result.Artifact[:2]) != "PK" || result.MatchedAccountCount < 0 || result.ReviewAccountCount < 0 || result.RowCount < 0 || missingTotal || len(result.TotalCNY) > 80 {
 		return validationErrorf("Export result is invalid or too large.")
 	}
 	return billExportClaimResult(s.billExportClaim(ctx, id, token).Updates(map[string]any{"status": "completed", "matched_account_count": result.MatchedAccountCount, "review_account_count": result.ReviewAccountCount, "row_count": result.RowCount, "total_cny": result.TotalCNY, "report_json": result.ReportJSON, "artifact": result.Artifact, "finished_at": now.UTC(), "expires_at": now.UTC().Add(BillExportRetention), "error_code": "", "error_message": "", "lease_token": "", "lease_until": nil}))

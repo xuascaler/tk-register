@@ -45,18 +45,26 @@ func billExportFilename(job core.BillExportJob) string {
 	return fmt.Sprintf("claude-bills_%s_%s_to_%s.xlsx", email, job.StartDate, job.EndDate)
 }
 
-func billJobDTO(job core.BillExportJob) map[string]any {
+func billJobDTO(job core.BillExportJob, includeSource bool) map[string]any {
 	if job.Status == "completed" && !job.ExpiresAt.After(time.Now()) {
 		job.Status = "expired"
 	}
-	return map[string]any{
+	summaryCount := job.AccountCount
+	if job.UsageSource == "modified" {
+		summaryCount = job.MatchedAccountCount
+	}
+	result := map[string]any{
 		"id": strconv.FormatUint(job.ID, 10), "status": job.Status,
 		"download_filename": billExportFilename(job),
 		"user":              map[string]string{"id": strconv.FormatUint(job.TargetUserID, 10), "email": job.UserEmail},
 		"start_date":        job.StartDate, "end_date": job.EndDate, "created_at": job.CreatedAt, "finished_at": job.FinishedAt, "expires_at": job.ExpiresAt,
 		"account_count": job.AccountCount, "matched_account_count": job.MatchedAccountCount, "review_account_count": job.ReviewAccountCount,
-		"row_count": job.RowCount, "total_cny": job.TotalCNY, "currency": "CNY", "error": job.ErrorMessage,
+		"summary_count": summaryCount, "row_count": job.RowCount, "total_cny": job.TotalCNY, "currency": "CNY", "error": job.ErrorMessage,
 	}
+	if includeSource {
+		result["model_usage_source"] = job.UsageSource
+	}
+	return result
 }
 
 func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route string) bool {
@@ -75,14 +83,14 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 	if route == base {
 		switch r.Method {
 		case "GET":
-			jobs, err := a.store.RecentBillExports(r.Context())
+			jobs, err := a.store.RecentBillExports(r.Context(), actor.ID)
 			if err != nil {
 				internal(w)
 				return true
 			}
 			items := make([]map[string]any, 0, len(jobs))
 			for _, job := range jobs {
-				items = append(items, billJobDTO(job))
+				items = append(items, billJobDTO(job, actor.IsSuperAdmin))
 			}
 			ok(w, map[string]any{"items": items})
 		case "POST":
@@ -114,7 +122,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 			} else if err != nil {
 				vendorFailure(w, err)
 			} else {
-				ok(w, billJobDTO(job))
+				ok(w, billJobDTO(job, actor.IsSuperAdmin))
 			}
 		default:
 			fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
@@ -131,7 +139,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 		fail(w, 404, "NOT_FOUND", "This export does not exist.")
 		return true
 	}
-	job, err := a.store.BillExport(r.Context(), id)
+	job, err := a.store.BillExport(r.Context(), actor.ID, id)
 	if errors.Is(err, core.ErrNotFound) {
 		fail(w, 404, "NOT_FOUND", "This export does not exist.")
 		return true
@@ -141,7 +149,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 		return true
 	}
 	if len(parts) == 1 {
-		ok(w, billJobDTO(job))
+		ok(w, billJobDTO(job, actor.IsSuperAdmin))
 		return true
 	}
 	if parts[1] != "results" && parts[1] != "download" {
@@ -156,7 +164,11 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 		fail(w, 409, "EXPORT_NOT_READY", "The export is not ready to download.")
 		return true
 	}
-	job, err = a.store.BillExportData(r.Context(), id)
+	job, err = a.store.BillExportData(r.Context(), actor.ID, id)
+	if errors.Is(err, core.ErrNotFound) {
+		fail(w, 404, "NOT_FOUND", "This export does not exist.")
+		return true
+	}
 	if err != nil {
 		internal(w)
 		return true
@@ -246,28 +258,42 @@ func (a *app) processBillExport(parent context.Context) error {
 	// Deferral is bounded by total job age; an unavailable supplier cannot leave
 	// an administrator's export pending forever.
 	if now.Sub(job.CreatedAt) > 30*time.Minute {
-		return finishFailure("EXPORT_EXPIRED", "The supplier did not become available in time. Generate a new export.")
+		return finishFailure("EXPORT_EXPIRED", "The export did not finish in time. Generate a new export.")
 	}
-	settings, err := a.store.Settings(ctx)
-	if err != nil {
-		return finishFailure("CONFIGURATION", "Export configuration could not be read.")
+	// Legacy queued jobs and retries must still be authorized when they run.
+	if _, err = a.store.BillExport(ctx, job.RequestedBy, job.ID); errors.Is(err, core.ErrNotFound) {
+		return finishFailure("ACCESS_CHANGED", "Access to this export has changed.")
+	} else if err != nil {
+		return err
 	}
-	username, password := settings.String("account_sync_website_username"), settings.String("account_sync_website_password")
-	if username == "" || password == "" {
-		return finishFailure("NOT_CONFIGURED", "Configure the vendor website login in Account sync before exporting.")
-	}
-	raw, err := a.billExportClient().ExportClaudeBills(ctx, username, password, job.StartDate, job.EndDate)
-	if err != nil {
-		seconds, at, _, _ := supplier.RetryDetails(err)
-		if seconds > 0 {
-			if at.IsZero() {
-				at = time.Now().UTC().Add(time.Duration(seconds) * time.Second)
-			}
-			save, stop := context.WithTimeout(context.Background(), 10*time.Second)
-			defer stop()
-			return a.store.DeferBillExport(save, job.ID, token, at, "Waiting for the supplier rate limit to reset.")
+	var raw []byte
+	switch job.UsageSource {
+	case "raw":
+		settings, err := a.store.Settings(ctx)
+		if err != nil {
+			return finishFailure("CONFIGURATION", "Export configuration could not be read.")
 		}
-		return finishFailure("UPSTREAM_EXPORT_FAILED", "The supplier bill export failed. Please try again later.")
+		username, password := settings.String("account_sync_website_username"), settings.String("account_sync_website_password")
+		if username == "" || password == "" {
+			return finishFailure("NOT_CONFIGURED", "Configure the vendor website login in Account sync before exporting.")
+		}
+		raw, err = a.billExportClient().ExportClaudeBills(ctx, username, password, job.StartDate, job.EndDate)
+		if err != nil {
+			seconds, at, _, _ := supplier.RetryDetails(err)
+			if seconds > 0 {
+				if at.IsZero() {
+					at = time.Now().UTC().Add(time.Duration(seconds) * time.Second)
+				}
+				save, stop := context.WithTimeout(context.Background(), 10*time.Second)
+				defer stop()
+				return a.store.DeferBillExport(save, job.ID, token, at, "Waiting for the supplier rate limit to reset.")
+			}
+			return finishFailure("UPSTREAM_EXPORT_FAILED", "The supplier bill export failed. Please try again later.")
+		}
+	case "modified":
+		// The report is built from the local ledger after loading its account selection.
+	default:
+		return finishFailure("INVALID_SOURCE", "The export could not be generated.")
 	}
 	if err = a.store.SetBillExportStage(ctx, job.ID, token, "filtering"); err != nil {
 		return err
@@ -280,10 +306,22 @@ func (a *app) processBillExport(parent context.Context) error {
 	for _, row := range selection {
 		accounts = append(accounts, billing.Account{LocalAccountID: strconv.FormatUint(row.LocalAccountID, 10), Account: row.AccountEmail, Plan: row.Plan, PlatformAccountID: billString(row.PlatformAccountID), SupplierRecordID: billString(row.SupplierRecordID), RemoteID: billString(row.RemoteID), IdentityKey: row.IdentityKey, LatestSubmittedAt: row.LatestSubmittedAt})
 	}
-	report, err := billing.Filter(raw, accounts)
-	raw = nil
+	var report billing.Report
+	if job.UsageSource == "modified" {
+		rows, e := a.store.ModifiedBillExportRows(ctx, job.ID)
+		if e != nil {
+			if core.IsValidationError(e) {
+				return finishFailure("REPORT_TOO_LARGE", "This export is too large. Select a shorter date range.")
+			}
+			return finishFailure("BILL_READ_FAILED", "The saved bills could not be read.")
+		}
+		report, err = billing.StoredUsageReport(accounts, rows)
+	} else {
+		report, err = billing.Filter(raw, accounts)
+		raw = nil
+	}
 	if err != nil {
-		return finishFailure("INVALID_BILL_FORMAT", "The supplier bill format could not be verified. No incomplete report was generated.")
+		return finishFailure("INVALID_BILL_FORMAT", "The bill format could not be verified. No incomplete report was generated.")
 	}
 	report.UserEmail, report.StartDate, report.EndDate = job.UserEmail, job.StartDate, job.EndDate
 	artifact, err := billing.Workbook(report)

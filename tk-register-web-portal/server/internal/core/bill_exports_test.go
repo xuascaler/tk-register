@@ -170,18 +170,18 @@ func TestBillExportClaimRecoveryFencingAndPrivatePayload(t *testing.T) {
 	if err := s.CompleteBillExport(ctx, job.ID, token2, result, now); err != nil {
 		t.Fatal(err)
 	}
-	meta, err := s.BillExport(ctx, job.ID)
+	meta, err := s.BillExport(ctx, admin.ID, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if meta.Status != "completed" || meta.TotalCNY != "0.123456" || meta.Artifact != nil || meta.ReportJSON != "" || meta.LeaseToken != "" {
 		t.Fatalf("metadata leaks report or omitted totals %+v", meta)
 	}
-	recent, err := s.RecentBillExports(ctx)
+	recent, err := s.RecentBillExports(ctx, admin.ID)
 	if err != nil || len(recent) != 1 || recent[0].Artifact != nil || recent[0].ReportJSON != "" {
 		t.Fatal("recent jobs leaked file data", err)
 	}
-	full, err := s.BillExportData(ctx, job.ID)
+	full, err := s.BillExportData(ctx, admin.ID, job.ID)
 	if err != nil || full.ReportJSON != result.ReportJSON || string(full.Artifact) != string(result.Artifact) {
 		t.Fatal("result persistence", err)
 	}
@@ -191,7 +191,7 @@ func TestBillExportClaimRecoveryFencingAndPrivatePayload(t *testing.T) {
 	if err := s.ExpireBillExports(ctx, now.Add(BillExportRetention+time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	expired, err := s.BillExportData(ctx, job.ID)
+	expired, err := s.BillExportData(ctx, admin.ID, job.ID)
 	if err != nil || expired.Artifact != nil || expired.ReportJSON != "" || expired.TotalCNY != result.TotalCNY {
 		t.Fatal("payload not purged or audit lost", err)
 	}
@@ -226,7 +226,7 @@ func TestBillExportDefersOnlyUntilDueAndRejectsOversizedResult(t *testing.T) {
 	if err := s.FailBillExport(ctx, job.ID, token, "TEST_FAILURE", "A safe failure message", due); err != nil {
 		t.Fatal(err)
 	}
-	failed, err := s.BillExport(ctx, job.ID)
+	failed, err := s.BillExport(ctx, admin.ID, job.ID)
 	if err != nil || failed.Status != "failed" || failed.ErrorCode != "TEST_FAILURE" {
 		t.Fatal(failed, err)
 	}
@@ -266,5 +266,107 @@ func TestBillExportMissingSubmissionTimeRemainsNull(t *testing.T) {
 	rows, err := s.BillExportAccounts(ctx, job.ID)
 	if err != nil || len(rows) != 1 || rows[0].LatestSubmittedAt != nil {
 		t.Fatalf("missing submission time must stay null: %+v %v", rows, err)
+	}
+}
+
+func TestBillExportSourceUpgradeAndViewerIsolation(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "selected@example.com", "claude/cc-pro", "accepted", "1100", now)
+	old, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce the deployed schema, with a pre-existing supplier workbook.
+	if err := s.DB.Model(&old).Updates(map[string]any{"report_json": `{"total":"raw"}`, "artifact": []byte("PK-raw-file"), "status": "completed", "total_cny": "999.00"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Migrator().DropIndex(&BillExportJob{}, "UsageSource"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Exec("ALTER TABLE bill_export_jobs DROP COLUMN usage_source").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migrateBillExports(); err != nil {
+		t.Fatal(err)
+	}
+	ordinary, err := s.CreateBillExport(WithModelUsageSource(ctx, "raw"), admin.ID, owner.ID, "2026-11-10", "2026-11-11", now)
+	if err != nil || ordinary.UsageSource != "modified" {
+		t.Fatal("ordinary admin selected a raw job", ordinary.UsageSource, err)
+	}
+	meta, err := s.BillExport(ctx, admin.ID, old.ID)
+	if !errors.Is(err, ErrNotFound) || meta.TotalCNY != "" {
+		t.Fatal("old job's raw metadata returned", err)
+	}
+	full, err := s.BillExportData(ctx, admin.ID, old.ID)
+	if !errors.Is(err, ErrNotFound) || len(full.Artifact) != 0 || full.ReportJSON != "" {
+		t.Fatal("old supplier result returned", err)
+	}
+	recent, err := s.RecentBillExports(ctx, admin.ID)
+	if err != nil || len(recent) != 1 || recent[0].ID != ordinary.ID {
+		t.Fatal("recent list includes raw metadata", recent, err)
+	}
+	if _, err := s.BillExport(ctx, owner.ID, ordinary.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("ordinary user read exports", err)
+	}
+	if err := s.DB.Model(&admin).Update("is_super_admin", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	superJob, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now)
+	if err != nil || superJob.UsageSource != "raw" {
+		t.Fatal("super-admin upstream export", superJob.UsageSource, err)
+	}
+	legacy, err := s.BillExportData(ctx, admin.ID, old.ID)
+	if err != nil || legacy.UsageSource != "raw" || legacy.TotalCNY != "999.00" || string(legacy.Artifact) != "PK-raw-file" {
+		t.Fatal("legacy export no longer intact", err)
+	}
+	if err := s.DB.Model(&admin).Update("is_super_admin", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BillExportData(ctx, admin.ID, superJob.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("demoted admin kept raw access", err)
+	}
+}
+
+func TestModifiedBillExportUsesFrozenSelectionAndSavedDates(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	for i, email := range []string{"selected@example.com", "foreign@example.com"} {
+		id := []uint64{owner.ID, admin.ID}[i]
+		syncSubmission(t, s, id, vendor.ID, version.ID, email, "claude/cc-pro", "accepted", fmt.Sprint(100+i), now)
+	}
+	job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accounts []SyncedAccount
+	if err = s.DB.Order("id ASC").Find(&accounts).Error; err != nil || len(accounts) != 2 {
+		t.Fatal("fixture account count", len(accounts), err)
+	}
+	for _, day := range []AccountUsageDay{
+		{AccountID: accounts[0].ID, IdentityKey: accounts[0].IdentityKey, UsageDate: "2026-11-10", LastSuccessAt: &now},
+		{AccountID: accounts[0].ID, IdentityKey: "prior-lifetime", UsageDate: "2026-11-10", LastSuccessAt: &now},
+		{AccountID: accounts[0].ID, IdentityKey: accounts[0].IdentityKey, UsageDate: "2026-11-09", LastSuccessAt: &now},
+		{AccountID: accounts[1].ID, IdentityKey: accounts[1].IdentityKey, UsageDate: "2026-11-10", LastSuccessAt: &now},
+		{AccountID: accounts[0].ID, IdentityKey: accounts[0].IdentityKey, UsageDate: "2026-11-11"},
+	} {
+		if err = s.DB.Create(&day).Error; err != nil {
+			t.Fatal(err)
+		}
+		raw := AccountDailyUsage{DayID: day.ID, Model: "raw-only", CostCNY: "840", InputTokens: "940", OutputTokens: "2", CacheReadTokens: "3", CacheWriteTokens: "4"}
+		if err = s.DB.Create(&raw).Error; err != nil {
+			t.Fatal(err)
+		}
+		u := AccountDailyUsageModified{DayID: day.ID, Model: "stored", CostCNY: "7.125", InputTokens: "18446744073709551616", OutputTokens: "211", CacheReadTokens: "31", CacheWriteTokens: "41"}
+		if err = s.DB.Create(&u).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = s.DB.Model(&accounts[0]).Updates(map[string]any{"identity_key": "subsequent-identity", "user_id": admin.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ModifiedBillExportRows(ctx, job.ID)
+	if err != nil || len(rows) != 1 || rows[0].LocalAccountID != idString(accounts[0].ID) || rows[0].UsageDate != "2026-11-10" || rows[0].Model != "stored" || rows[0].CostCNY != "7.125" || rows[0].InputTokens != "18446744073709551616" {
+		t.Fatal("modified export scope/currency/counter", rows, err)
 	}
 }

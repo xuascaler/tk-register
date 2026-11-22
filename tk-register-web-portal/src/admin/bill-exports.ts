@@ -2,6 +2,7 @@ export type BillExportUser = { id: string; email: string };
 export type BillExportJob = {
   id: string;
   download_filename: string;
+  model_usage_source?: 'raw' | 'modified';
   status: 'queued' | 'fetching' | 'filtering' | 'completed' | 'failed' | 'expired';
   user: BillExportUser;
   start_date: string;
@@ -10,6 +11,7 @@ export type BillExportJob = {
   finished_at?: string;
   expires_at?: string;
   account_count: number;
+  summary_count: number;
   matched_account_count: number;
   review_account_count: number;
   row_count: number;

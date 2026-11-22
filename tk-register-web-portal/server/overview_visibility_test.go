@@ -71,9 +71,9 @@ func TestPersonalOverviewVisibilityTogglesExistingCacheAndLiveData(t *testing.T)
 	if err := a.store.BuildOverviewSummaries(ctx, owner.ID, false, end, "visibility-test", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	var stored []core.OverviewSummary
-	if err := a.store.DB.Order("id").Find(&stored).Error; err != nil {
-		t.Fatal(err)
+	var stored []core.OverviewSummaryModified
+	if err := a.store.DB.Order("id").Find(&stored).Error; err != nil || len(stored) != 4 {
+		t.Fatal("expected four modified summary periods", len(stored), err)
 	}
 	before, _ := json.Marshal(stored)
 	for _, enabled := range []bool{false, true, false} {
@@ -105,7 +105,7 @@ func TestPersonalOverviewVisibilityTogglesExistingCacheAndLiveData(t *testing.T)
 			}
 		}
 	}
-	var afterRows []core.OverviewSummary
+	var afterRows []core.OverviewSummaryModified
 	if err := a.store.DB.Order("id").Find(&afterRows).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +177,7 @@ func TestPersonalTotalsDistinguishCollectedZeroAndUnavailable(t *testing.T) {
 		daily := core.DailyUsageDTO{ExchangeRate: 7.2, Rows: []core.DailyUsageRowDTO{}, Days: []core.DailyUsageDayDTO{{Date: "2026-11-15", Status: "missing"}}}
 		if collected {
 			zero := 0.0
+			out.TotalCostUSD = &zero
 			out.Sources[0].CostUSD = &zero
 			out.Sources[0].CollectedDays = 1
 			daily.Days[0].Status, daily.Days[0].CollectedAt = "complete", &now

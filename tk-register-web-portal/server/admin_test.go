@@ -263,7 +263,7 @@ func TestAdminListsPaginationAndLiteralSearch(t *testing.T) {
 
 func TestAdminRemoteQueriesUseStoredOwnerAndActorRateLimit(t *testing.T) {
 	a, _, _ := fixture(t)
-	admin, ac, csrf := vendorSession(t, a, "admin@example.com", "admin")
+	admin, ac, csrf := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
 	owner, oc, ocsrf := vendorSession(t, a, "owner@example.com", "member")
 	vendor := configuredVendor(t, a, admin.ID)
 	calls := 0

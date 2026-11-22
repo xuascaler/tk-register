@@ -141,7 +141,7 @@ func TestOverviewSummaryFailedViewDoesNotBlockOtherUsers(t *testing.T) {
 	if job.OverviewState != "failed" || job.OverviewFailedViews != 1 || job.OverviewGeneratedViews != 1 || job.OverviewError == "" {
 		t.Fatalf("unexpected batch outcome: %+v", job)
 	}
-	var retained, published []core.OverviewSummary
+	var retained, published []core.OverviewSummaryModified
 	if err := a.store.DB.Where("user_id = ?", failedUser.ID).Find(&retained).Error; err != nil {
 		t.Fatal(err)
 	}

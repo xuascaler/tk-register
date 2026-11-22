@@ -100,7 +100,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {
-				a.writePersonalSubmission(w, r, result)
+				a.writePersonalSubmission(w, r, user, result, nil)
 			}
 		default:
 			fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
@@ -149,7 +149,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {
-				a.writePersonalSubmission(w, r, result)
+				a.writePersonalSubmission(w, r, user, result, nil)
 			}
 			return true
 		}
@@ -165,7 +165,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 				if e != nil {
 					vendorFailure(w, e)
 				} else {
-					a.writePersonalSubmission(w, r, result)
+					a.writePersonalSubmission(w, r, user, result, nil)
 				}
 				return true
 			}
@@ -179,6 +179,15 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 				if !decode(w, r, &input.Bills) {
 					return true
 				}
+				if !user.IsSuperAdmin {
+					detail, err := a.store.SubmissionDetail(r.Context(), user.ID, id)
+					if err != nil {
+						vendorFailure(w, err)
+					} else {
+						a.writePersonalSubmission(w, r, user, detail, &input.Bills)
+					}
+					return true
+				}
 			default:
 				fail(w, 404, "NOT_FOUND", "This endpoint does not exist.")
 				return true
@@ -187,7 +196,7 @@ func (a *app) vendorRoutes(w http.ResponseWriter, r *http.Request, route string)
 			if e != nil {
 				vendorFailure(w, e)
 			} else {
-				a.writePersonalSubmission(w, r, result)
+				a.writePersonalSubmission(w, r, user, result, nil)
 			}
 			return true
 		}
