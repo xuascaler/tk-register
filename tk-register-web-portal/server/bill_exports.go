@@ -33,6 +33,10 @@ func (a *app) billExportClient() billExporter {
 }
 
 func billExportFilename(job core.BillExportJob) string {
+	users := billExportSelectedUsers(job)
+	if len(users) > 1 {
+		return fmt.Sprintf("claude-bills_%d-users_%d_%s_to_%s.xlsx", len(users), job.ID, job.StartDate, job.EndDate)
+	}
 	email := strings.Map(func(r rune) rune {
 		if r < 32 || r == 127 || strings.ContainsRune(`<>:"/\|?*`, r) {
 			return '_'
@@ -45,6 +49,18 @@ func billExportFilename(job core.BillExportJob) string {
 	return fmt.Sprintf("claude-bills_%s_%s_to_%s.xlsx", email, job.StartDate, job.EndDate)
 }
 
+// Older jobs predate the selected-user snapshot table and have one target user.
+func billExportSelectedUsers(job core.BillExportJob) []map[string]string {
+	users := make([]map[string]string, 0, len(job.Users))
+	for _, user := range job.Users {
+		users = append(users, map[string]string{"id": strconv.FormatUint(user.UserID, 10), "email": user.Email})
+	}
+	if len(users) == 0 {
+		users = append(users, map[string]string{"id": strconv.FormatUint(job.TargetUserID, 10), "email": job.UserEmail})
+	}
+	return users
+}
+
 func billJobDTO(job core.BillExportJob, includeSource bool) map[string]any {
 	if job.Status == "completed" && !job.ExpiresAt.After(time.Now()) {
 		job.Status = "expired"
@@ -53,14 +69,18 @@ func billJobDTO(job core.BillExportJob, includeSource bool) map[string]any {
 	if job.UsageSource == "modified" {
 		summaryCount = job.MatchedAccountCount + job.ReviewAccountCount
 	}
+	users := billExportSelectedUsers(job)
 	result := map[string]any{
 		"id": strconv.FormatUint(job.ID, 10), "status": job.Status,
 		"download_filename": billExportFilename(job),
-		"user":              map[string]string{"id": strconv.FormatUint(job.TargetUserID, 10), "email": job.UserEmail},
+		"users":             users,
 		"include_sub_users": job.IncludeSubUsers,
 		"start_date":        job.StartDate, "end_date": job.EndDate, "created_at": job.CreatedAt, "finished_at": job.FinishedAt, "expires_at": job.ExpiresAt,
 		"account_count": job.AccountCount, "matched_account_count": job.MatchedAccountCount, "review_account_count": job.ReviewAccountCount,
 		"summary_count": summaryCount, "row_count": job.RowCount, "total_cny": job.TotalCNY, "currency": "CNY", "error": job.ErrorMessage,
+	}
+	if len(users) == 1 {
+		result["user"] = users[0]
 	}
 	if includeSource {
 		source := job.UsageSource
@@ -100,18 +120,39 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 			ok(w, map[string]any{"items": items})
 		case "POST":
 			var input struct {
-				UserID          string `json:"user_id"`
-				IncludeSubUsers bool   `json:"include_sub_users"`
-				UsageSource     string `json:"model_usage_source"`
-				StartDate       string `json:"start_date"`
-				EndDate         string `json:"end_date"`
+				UserID          string   `json:"user_id"`
+				UserIDs         []string `json:"user_ids"`
+				IncludeSubUsers bool     `json:"include_sub_users"`
+				UsageSource     string   `json:"model_usage_source"`
+				StartDate       string   `json:"start_date"`
+				EndDate         string   `json:"end_date"`
 			}
 			if !decode(w, r, &input) {
 				return true
 			}
-			userID, err := core.ParseBusinessID(input.UserID)
-			if err != nil {
-				fail(w, 400, "INVALID_REQUEST", "Choose a user.")
+			if input.UserIDs != nil && input.UserID != "" {
+				fail(w, 400, "INVALID_REQUEST", "Use user_ids or user_id, not both.")
+				return true
+			}
+			ids := input.UserIDs
+			if ids == nil && input.UserID != "" {
+				ids = []string{input.UserID}
+			}
+			userIDs := make([]uint64, 0, len(ids))
+			seen := make(map[uint64]bool)
+			for _, value := range ids {
+				id, err := core.ParseBusinessID(value)
+				if err != nil {
+					fail(w, 400, "INVALID_REQUEST", "Choose valid users.")
+					return true
+				}
+				if !seen[id] {
+					seen[id] = true
+					userIDs = append(userIDs, id)
+				}
+			}
+			if len(userIDs) == 0 || len(userIDs) > core.MaxBillExportUsers {
+				fail(w, 400, "INVALID_REQUEST", "Choose between 1 and 20 users.")
 				return true
 			}
 			retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "bill-export:create:" + strconv.FormatUint(actor.ID, 10)}, 5, 60).Int()
@@ -123,7 +164,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 				rateFailure(w, retry)
 				return true
 			}
-			job, err := a.store.CreateBillExport(r.Context(), actor.ID, userID, input.StartDate, input.EndDate, time.Now().UTC(), core.BillExportOptions{IncludeSubUsers: input.IncludeSubUsers, UsageSource: input.UsageSource})
+			job, err := a.store.CreateBillExportForUsers(r.Context(), actor.ID, userIDs, input.StartDate, input.EndDate, time.Now().UTC(), core.BillExportOptions{IncludeSubUsers: input.IncludeSubUsers, UsageSource: input.UsageSource})
 			if core.IsValidationError(err) {
 				fail(w, 400, "INVALID_REQUEST", err.Error())
 			} else if err != nil {
@@ -331,6 +372,12 @@ func (a *app) processBillExport(parent context.Context) error {
 		return finishFailure("INVALID_BILL_FORMAT", "The bill format could not be verified. No incomplete report was generated.")
 	}
 	report.UserEmail, report.StartDate, report.EndDate = job.UserEmail, job.StartDate, job.EndDate
+	for _, user := range billExportSelectedUsers(*job) {
+		report.UserEmails = append(report.UserEmails, user["email"])
+	}
+	if len(report.UserEmails) > 1 {
+		report.UserEmail = ""
+	}
 	report.IncludeSubUsers = job.IncludeSubUsers
 	artifact, err := billing.Workbook(report)
 	if err != nil {

@@ -59,6 +59,7 @@ type Review struct {
 type Report struct {
 	IncludeSubUsers bool       `json:"include_sub_users"`
 	UserEmail       string     `json:"user_email"`
+	UserEmails      []string   `json:"user_emails,omitempty"`
 	StartDate       string     `json:"start_date"`
 	EndDate         string     `json:"end_date"`
 	Summary         []Summary  `json:"summary"`
@@ -381,15 +382,41 @@ func Workbook(r Report) ([]byte, error) {
 		if e := f.SetCellStyle(sheet, "A1", "A1", titleStyle); e != nil {
 			return e
 		}
-		if e := write(sheet, 2, []string{"User", r.UserEmail}); e != nil {
+		users := r.UserEmails
+		if len(users) == 0 {
+			users = []string{r.UserEmail}
+		}
+		userLabel := "User"
+		if len(users) > 1 {
+			userLabel = fmt.Sprintf("Users (%d)", len(users))
+		}
+		if e := write(sheet, 2, []string{userLabel, strings.Join(users, "\n")}); e != nil {
 			return e
+		}
+		if len(users) > 1 {
+			userStyle, e := f.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{WrapText: true, Vertical: "top"}})
+			if e != nil {
+				return e
+			}
+			if e = f.MergeCell(sheet, "B2", "D2"); e != nil {
+				return e
+			}
+			if e = f.SetCellStyle(sheet, "B2", "D2", userStyle); e != nil {
+				return e
+			}
+			if e = f.SetRowHeight(sheet, 2, float64(len(users)*15)); e != nil {
+				return e
+			}
 		}
 		if e := write(sheet, 3, []string{"Dates", r.StartDate + " — " + r.EndDate, "Timezone", "Asia/Shanghai"}); e != nil {
 			return e
 		}
 		scope := "Accounts owned by the selected user when the export was requested."
+		if len(users) > 1 {
+			scope = "Accounts owned by the selected users when the export was requested. Each account is counted once."
+		}
 		if r.IncludeSubUsers {
-			scope = "Accounts owned by the selected user and all levels of sub-users when the export was requested. Each account is counted once."
+			scope = "Accounts owned by the selected users and all levels of sub-users when the export was requested. Each account is counted once."
 		}
 		if e := write(sheet, 4, []string{"Scope", scope, "Currency", "CNY"}); e != nil {
 			return e

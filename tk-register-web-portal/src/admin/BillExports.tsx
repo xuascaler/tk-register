@@ -1,4 +1,4 @@
-import { AlertCircle, Check, ChevronDown, Download, FileSpreadsheet, LoaderCircle, Network, Search, X } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Download, FileSpreadsheet, LoaderCircle, Network, Search, Users, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { APIError, errorMessage, request } from '../api';
 import Select from '../submissions/Select';
@@ -6,27 +6,27 @@ import { dateTime, Empty } from '../submissions/shared';
 import { ErrorNotice, Loading } from '../ui';
 import { Pagination } from './shared';
 import type { AdminUser, Page } from './types';
-import { beijingDate, billAmount, billSubmittedTime, exportDateError, exportRunning, offsetDate, type BillExportJob, type BillExportResults, type BillExportReview, type BillExportSummary, type BillExportUser, type BillExportView } from './bill-exports';
+import { BILL_EXPORT_USER_LIMIT, billExportUsers, sameBillExportUsers, toggleBillExportUser, beijingDate, billAmount, billSubmittedTime, exportDateError, exportRunning, offsetDate, type BillExportJob, type BillExportResults, type BillExportReview, type BillExportSummary, type BillExportUser, type BillExportView } from './bill-exports';
 import './bill-exports.css';
 
-function UserPicker({ value, onChange, disabled, invalid }: {
-  value: BillExportUser | null; onChange: (value: BillExportUser | null) => void; disabled: boolean; invalid: boolean;
+function UsersPicker({ value, onChange, disabled, invalid }: {
+  value: BillExportUser[]; onChange: (value: BillExportUser[]) => void; disabled: boolean; invalid: boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  const [search, setSearch] = useState(value?.email || '');
-  const [query, setQuery] = useState(search);
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<AdminUser[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [active, setActive] = useState(0);
   const [attempt, setAttempt] = useState(0);
-  useEffect(() => { if (value) setSearch(value.email); }, [value?.id, value?.email]);
+  const limitReached = value.length >= BILL_EXPORT_USER_LIMIT;
   useEffect(() => {
-    const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); setActive(0); }, 250);
+    const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); }, 250);
     return () => window.clearTimeout(timer);
   }, [search]);
   useEffect(() => {
@@ -36,7 +36,7 @@ function UserPicker({ value, onChange, disabled, invalid }: {
     request<Page<AdminUser>>(`/admin/users?${new URLSearchParams({ search: query, page: String(page) })}`, { signal: controller.signal })
       .then(result => {
         if (controller.signal.aborted) return;
-        setItems(previous => page === 1 ? result.items : [...previous, ...result.items.filter(item => !previous.some(saved => saved.id === item.id))]);
+        setItems(previous => page === 1 ? result.items : [...previous, ...result.items.filter(item => !previous.some(saved => String(saved.id) === String(item.id)))]);
         setTotal(result.total);
       })
       .catch(cause => { if (!controller.signal.aborted) { setError(errorMessage(cause)); if (page === 1) setItems([]); } })
@@ -44,33 +44,42 @@ function UserPicker({ value, onChange, disabled, invalid }: {
     return () => controller.abort();
   }, [open, query, search, page, attempt, disabled]);
   useEffect(() => {
+    if (disabled) setOpen(false);
+    else if (open) input.current?.focus();
+  }, [open, disabled]);
+  useEffect(() => {
     const outside = (event: Event) => { if (event.target instanceof Node && !root.current?.contains(event.target)) setOpen(false); };
     document.addEventListener('pointerdown', outside);
     document.addEventListener('focusin', outside);
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('focusin', outside); };
   }, []);
-  useEffect(() => { root.current?.querySelector(`#bill-user-option-${active}`)?.scrollIntoView({ block: 'nearest' }); }, [active]);
-  function choose(user: AdminUser) { onChange({ id: String(user.id), email: user.email }); setSearch(user.email); setOpen(false); input.current?.focus(); }
-  function keys(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Escape') { setOpen(false); return; }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault(); setOpen(true);
-      setActive(current => !open ? 0 : Math.max(0, Math.min(items.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1))));
+  function close() { setOpen(false); trigger.current?.focus(); }
+  function keys(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); close(); }
+    if (open && event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();
+    if (event.target === input.current && event.key === 'ArrowDown') {
+      event.preventDefault(); root.current?.querySelector<HTMLInputElement>('.bill-user-option input:not(:disabled)')?.focus();
     }
-    if (event.key === 'Enter' && open) { event.preventDefault(); if (!busy && items[active]) choose(items[active]); }
   }
-  return <div className='bill-user-picker' ref={root}>
-    <label htmlFor='bill-export-user'>User</label>
-    <div className='bill-user-control'><Search aria-hidden='true' /><input ref={input} id='bill-export-user' type='text' role='combobox' autoComplete='off' spellCheck={false} autoCapitalize='none' placeholder='Search user email' value={search} disabled={disabled} aria-expanded={open && !disabled} aria-controls='bill-user-listbox' aria-autocomplete='list' aria-activedescendant={open && items[active] && !busy ? `bill-user-option-${active}` : undefined} aria-invalid={invalid} onFocus={() => setOpen(true)} onKeyDown={keys} onChange={event => { setSearch(event.target.value); setItems([]); setBusy(true); onChange(null); setOpen(true); }} />
-      {value ? <button type='button' disabled={disabled} aria-label='Clear selected user' onClick={() => { setSearch(''); onChange(null); setOpen(true); input.current?.focus(); }}><X aria-hidden='true' /></button> : <ChevronDown className='bill-user-chevron' aria-hidden='true' />}
+  return <>
+    <div className='bill-user-picker' ref={root} onKeyDown={keys}>
+      <label id='bill-export-users-label' htmlFor='bill-export-users'>Users</label>
+      <button ref={trigger} id='bill-export-users' type='button' className='bill-users-trigger' disabled={disabled} aria-labelledby='bill-export-users-label' aria-haspopup='dialog' aria-expanded={open && !disabled} aria-controls='bill-user-menu' aria-invalid={invalid} onClick={() => setOpen(previous => !previous)}><Users aria-hidden='true' /><span>{value.length ? `${value.length} ${value.length === 1 ? 'user' : 'users'} selected` : 'Select users'}</span><ChevronDown aria-hidden='true' /></button>
+      {open && !disabled && <div className='bill-user-menu' id='bill-user-menu' role='dialog' aria-label='Select users'>
+        <div className='bill-user-search'><Search aria-hidden='true' /><input ref={input} id='bill-user-search' type='search' autoComplete='off' spellCheck={false} autoCapitalize='none' aria-label='Search user email' placeholder='Search user email' value={search} onChange={event => { setSearch(event.target.value); setItems([]); setBusy(true); }} /></div>
+        <div className='bill-user-options' aria-busy={busy}>
+          {items.map(item => {
+            const selected = value.some(user => user.id === String(item.id));
+            return <label className='bill-user-option' key={item.id}><input type='checkbox' checked={selected} disabled={limitReached && !selected} aria-label={item.email} onChange={() => onChange(toggleBillExportUser(value, { id: String(item.id), email: item.email }))} /><span>{item.email}<small>User #{item.id}</small></span></label>;
+          })}
+          {busy ? <p className='bill-user-message' role='status'><LoaderCircle className='spin' aria-hidden='true' />Loading users…</p> : error ? <div className='bill-user-message'><span role='alert'>{error}</span><button type='button' className='text-button' onClick={() => setAttempt(v => v + 1)}>Try again</button></div> : !items.length ? <p className='bill-user-message'>No matching users.</p> : items.length < total ? <button type='button' className='bill-users-more' onClick={() => setPage(v => v + 1)}>Load more users</button> : null}
+        </div>
+        {limitReached && <p className='bill-user-limit' role='status'>You can select up to {BILL_EXPORT_USER_LIMIT} users.</p>}
+        <div className='bill-user-menu-footer'><span aria-live='polite'>{value.length} of {BILL_EXPORT_USER_LIMIT} selected</span><button type='button' onClick={close}>Done</button></div>
+      </div>}
     </div>
-    {open && !disabled && <div className='bill-user-menu'>
-      <div role='listbox' id='bill-user-listbox' aria-label='Users' aria-busy={busy}>
-        {items.map((item, index) => <button type='button' tabIndex={-1} role='option' id={`bill-user-option-${index}`} key={item.id} aria-selected={String(item.id) === value?.id} className={index === active ? 'is-active' : ''} onPointerMove={() => setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(item)}><span>{item.email}<small>User #{item.id}</small></span>{String(item.id) === value?.id && <Check aria-hidden='true' />}</button>)}
-      </div>
-      {busy ? <p className='bill-user-message' role='status'><LoaderCircle className='spin' aria-hidden='true' />Loading users…</p> : error ? <div className='bill-user-message'><span role='alert'>{error}</span><button type='button' className='text-button' onClick={() => setAttempt(v => v + 1)}>Try again</button></div> : !items.length ? <p className='bill-user-message'>No matching users.</p> : items.length < total ? <button type='button' className='bill-users-more' onClick={() => setPage(v => v + 1)}>Load more users</button> : null}
-    </div>}
-  </div>;
+    {!!value.length && <div className='bill-selected-users'><div className='bill-user-chips' aria-label='Selected users'>{value.map(user => <span className='bill-user-chip' key={user.id}><span>{user.email}</span><button type='button' disabled={disabled} aria-label={`Remove ${user.email}`} onClick={() => { onChange(value.filter(item => item.id !== user.id)); trigger.current?.focus(); }}><X aria-hidden='true' /></button></span>)}</div><button type='button' className='bill-users-clear' disabled={disabled} onClick={() => { onChange([]); setSearch(''); setOpen(true); }}>Clear all</button></div>}
+  </>;
 }
 
 const viewNames: Record<BillExportView, string> = { summary: 'Account summary', details: 'Bill details', review: 'Needs review' };
@@ -123,7 +132,7 @@ function ExportResults({ job, view, onView }: { job: BillExportJob; view: BillEx
 
 export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const today = beijingDate();
-  const [user, setUser] = useState<BillExportUser | null>(null);
+  const [users, setUsers] = useState<BillExportUser[]>([]);
   const [start, setStart] = useState(offsetDate(today, -6));
   const [end, setEnd] = useState(today);
   const [includeSubUsers, setIncludeSubUsers] = useState(false);
@@ -178,12 +187,12 @@ export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean })
     if (submitting.current) return;
     setValidation(true); setError(''); setDownloadError('');
     const problem = exportDateError(start, end);
-    if (!user || problem) { setError(!user ? 'Select a user from the search results.' : problem); return; }
+    if (!users.length || users.length > BILL_EXPORT_USER_LIMIT || problem) { setError(!users.length ? 'Select at least one user.' : users.length > BILL_EXPORT_USER_LIMIT ? `Select up to ${BILL_EXPORT_USER_LIMIT} users.` : problem); return; }
     submitting.current = true; setCreating(true);
     downloadingRequest.current?.abort(); setDownloading(false);
     const controller = new AbortController(); pending.current = controller;
     try {
-      const result = await request<BillExportJob>('/admin/bill-exports', { method: 'POST', body: { user_id: String(user.id), start_date: start, end_date: end, include_sub_users: includeSubUsers, ...(isSuperAdmin ? { model_usage_source: source } : {}) }, signal: controller.signal });
+      const result = await request<BillExportJob>('/admin/bill-exports', { method: 'POST', body: { user_ids: users.map(user => user.id), start_date: start, end_date: end, include_sub_users: includeSubUsers, ...(isSuperAdmin ? { model_usage_source: source } : {}) }, signal: controller.signal });
       if (controller.signal.aborted) return;
       setJob(result); setView('summary'); setValidation(false); setPollError('');
     } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
@@ -209,25 +218,26 @@ export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean })
     finally { if (mounted.current) setDownloading(false); }
   }
   const locked = creating || running;
-  const settingsChanged = !!job && (user?.id !== job.user.id || start !== job.start_date || end !== job.end_date || includeSubUsers !== !!job.include_sub_users || (isSuperAdmin && source !== job.model_usage_source));
+  const jobUsers = billExportUsers(job);
+  const settingsChanged = !!job && (!sameBillExportUsers(users, jobUsers) || start !== job.start_date || end !== job.end_date || includeSubUsers !== !!job.include_sub_users || (isSuperAdmin && source !== job.model_usage_source));
   return <section className='bill-exports'>
-    <div className='section-heading bill-export-heading'><div><h2>Claude bill exports</h2><p className='muted small'>Export a user’s account bills for a selected date range.</p></div><span className='bill-vendor'>TK Register 0</span></div>
+    <div className='section-heading bill-export-heading'><div><h2>Claude bill exports</h2><p className='muted small'>Export account bills for selected users and dates.</p></div><span className='bill-vendor'>TK Register 0</span></div>
     <form className='panel bill-export-form' onSubmit={generate} noValidate>
       <div className='bill-export-fields'>
-        <UserPicker value={user} disabled={locked} invalid={validation && !user} onChange={value => { changed(); setUser(value); }} />
-        <div className='bill-date-field'><label htmlFor='bill-start-date'>Start date</label><input id='bill-start-date' type='date' value={start} max={end || today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setStart(event.target.value); }} /></div>
-        <div className='bill-date-field'><label htmlFor='bill-end-date'>End date</label><input id='bill-end-date' type='date' value={end} min={start || undefined} max={today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setEnd(event.target.value); }} /></div>
+        <UsersPicker value={users} disabled={locked} invalid={validation && !users.length} onChange={value => { changed(); setUsers(value); }} />
+        <div className='bill-date-field bill-start-field'><label htmlFor='bill-start-date'>Start date</label><input id='bill-start-date' type='date' value={start} max={end || today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setStart(event.target.value); }} /></div>
+        <div className='bill-date-field bill-end-field'><label htmlFor='bill-end-date'>End date</label><input id='bill-end-date' type='date' value={end} min={start || undefined} max={today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setEnd(event.target.value); }} /></div>
       </div>
       <div className='bill-export-options'>
-        <label className='switch bill-sub-users'><input id='bill-include-sub-users' type='checkbox' role='switch' checked={includeSubUsers} disabled={locked} aria-labelledby='bill-include-sub-users-label' aria-describedby='bill-include-sub-users-help' onChange={event => { changed(); setIncludeSubUsers(event.target.checked); }} /><span><strong id='bill-include-sub-users-label'>Include all sub-users</strong><small id='bill-include-sub-users-help'>Include every level of sub-users under the selected user.</small></span></label>
+        <label className='switch bill-sub-users'><input id='bill-include-sub-users' type='checkbox' role='switch' checked={includeSubUsers} disabled={locked} aria-labelledby='bill-include-sub-users-label' aria-describedby='bill-include-sub-users-help' onChange={event => { changed(); setIncludeSubUsers(event.target.checked); }} /><span><strong id='bill-include-sub-users-label'>Include all sub-users</strong><small id='bill-include-sub-users-help'>Include every level of sub-users under each selected user.</small></span></label>
         {isSuperAdmin && <div className='bill-source-picker'><Select id='bill-export-source' label='Data source' value={source} disabled={locked} options={[{ value: 'raw', label: 'Raw' }, { value: 'cache', label: 'Cache' }]} onChange={value => { changed(); setSource(value === 'cache' ? 'cache' : 'raw'); }} /></div>}
       </div>
       <div className='bill-date-options'><p id='bill-date-help'>Beijing time · Up to 60 days, including both dates.</p><div className='bill-shortcuts' aria-label='Date shortcuts'><button type='button' disabled={locked} onClick={() => shortcut(1, true)}>Yesterday</button><button type='button' disabled={locked} onClick={() => shortcut(7)}>Last 7 days</button><button type='button' disabled={locked} onClick={() => shortcut(30)}>Last 30 days</button></div></div>
       <ErrorNotice>{error}</ErrorNotice>
-      <div className='bill-form-footer'><p>{includeSubUsers ? 'Selected user and all sub-users.' : 'Selected user only.'}<br />Each account is counted once.</p><button type='submit' className='button primary' disabled={locked}>{creating || running ? <LoaderCircle className='spin' aria-hidden='true' /> : <FileSpreadsheet aria-hidden='true' />}{creating ? 'Creating export…' : running ? 'Export in progress' : 'Generate export'}</button></div>
+      <div className='bill-form-footer'><p>{users.length} selected {users.length === 1 ? 'user' : 'users'}{includeSubUsers ? ' and all their sub-users.' : ' only.'}<br />Each account is counted once.</p><button type='submit' className='button primary' disabled={locked}>{creating || running ? <LoaderCircle className='spin' aria-hidden='true' /> : <FileSpreadsheet aria-hidden='true' />}{creating ? 'Creating export…' : running ? 'Export in progress' : 'Generate export'}</button></div>
     </form>
     {job ? <section className='panel bill-export-result' aria-label='Bill export'>
-      <div className='bill-result-heading'><div><div className='bill-result-title'><h2>{job.user.email}</h2><span className={`bill-job-status is-${job.status}`}>{job.status === 'completed' ? <Check aria-hidden='true' /> : job.status === 'failed' || job.status === 'expired' ? <AlertCircle aria-hidden='true' /> : <LoaderCircle className='spin' aria-hidden='true' />}{phaseNames[job.status] || job.status}</span></div><p className='muted small'>{job.start_date} – {job.end_date} · Beijing time{billSourceLabel(job)}{job.finished_at ? ` · Generated ${dateTime(job.finished_at)}` : ''}</p><p className='bill-result-scope'><Network aria-hidden='true' />{job.include_sub_users ? 'Includes all sub-users' : 'Selected user only'}</p>{job.status === 'completed' && <p className='bill-download-expiry'>{job.expires_at ? `Available until ${dateTime(job.expires_at)}` : 'Downloads are available for 7 days.'}</p>}</div>{job.status === 'completed' && <button type='button' className='button secondary' onClick={download} disabled={downloading}>{downloading ? <LoaderCircle className='spin' aria-hidden='true' /> : <Download aria-hidden='true' />}{downloading ? 'Downloading…' : 'Download Excel'}</button>}</div>
+      <div className='bill-result-heading'><div><div className='bill-result-title'><h2>{jobUsers.length === 1 ? jobUsers[0].email : `${jobUsers.length} users`}</h2><span className={`bill-job-status is-${job.status}`}>{job.status === 'completed' ? <Check aria-hidden='true' /> : job.status === 'failed' || job.status === 'expired' ? <AlertCircle aria-hidden='true' /> : <LoaderCircle className='spin' aria-hidden='true' />}{phaseNames[job.status] || job.status}</span></div>{jobUsers.length > 1 && <p className='bill-result-users'>{jobUsers.map(user => user.email).join(' · ')}</p>}<p className='muted small'>{job.start_date} – {job.end_date} · Beijing time{billSourceLabel(job)}{job.finished_at ? ` · Generated ${dateTime(job.finished_at)}` : ''}</p><p className='bill-result-scope'><Network aria-hidden='true' />{job.include_sub_users ? 'Includes all sub-users' : jobUsers.length === 1 ? 'Selected user only' : 'Selected users only'}</p>{job.status === 'completed' && <p className='bill-download-expiry'>{job.expires_at ? `Available until ${dateTime(job.expires_at)}` : 'Downloads are available for 7 days.'}</p>}</div>{job.status === 'completed' && <button type='button' className='button secondary' onClick={download} disabled={downloading}>{downloading ? <LoaderCircle className='spin' aria-hidden='true' /> : <Download aria-hidden='true' />}{downloading ? 'Downloading…' : 'Download Excel'}</button>}</div>
       {settingsChanged && <p className='bill-settings-changed' role='status'>Settings changed. Generate a new export to apply them.</p>}
       {downloadError && <div className='bill-result-notice'><ErrorNotice>{downloadError}</ErrorNotice></div>}
       {running ? <div className='bill-export-progress' role='status'><ol>{['queued', 'fetching', 'filtering'].map((phase, index) => { const current = ['queued', 'fetching', 'filtering'].indexOf(job.status); return <li className={index < current ? 'is-complete' : index === current ? 'is-current' : ''} key={phase}><span>{index < current ? <Check aria-hidden='true' /> : index + 1}</span>{phaseNames[phase]}</li>; })}</ol><p>{job.status === 'queued' ? 'Your export is queued.' : job.status === 'fetching' ? 'Reading bills for the selected dates.' : 'Matching the selected accounts and preparing the Excel file.'}</p><p className='muted small'>Keep this page open until the export is ready to download.</p>{pollError && <div className='bill-poll-error'><ErrorNotice>{pollError}</ErrorNotice><button type='button' className='button secondary' onClick={() => setPollAttempt(v => v + 1)}>Check status</button></div>}</div>
@@ -237,6 +247,6 @@ export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean })
             {!!job.review_account_count && <div className='bill-review-notice'><AlertCircle aria-hidden='true' /><p>{job.review_account_count} {job.review_account_count === 1 ? 'account needs' : 'accounts need'} review. Unmatched amounts are not included in the total.</p><button type='button' onClick={() => setView('review')}>View accounts</button></div>}
             <ExportResults key={job.id} job={job} view={view} onView={setView} />
           </>}
-    </section> : <div className='panel bill-export-empty'><FileSpreadsheet aria-hidden='true' /><h3>Prepare a Claude bill export</h3><p>Choose a user and dates to see account totals, bill details, and any accounts that need review.</p></div>}
+    </section> : <div className='panel bill-export-empty'><FileSpreadsheet aria-hidden='true' /><h3>Prepare a Claude bill export</h3><p>Choose users and dates to see account totals, bill details, and any accounts that need review.</p></div>}
   </section>;
 }

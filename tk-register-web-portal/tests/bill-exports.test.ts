@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { beijingDate, billAmount, billSubmittedTime, exportDateError, offsetDate } from '../src/admin/bill-exports.ts';
+import { BILL_EXPORT_USER_LIMIT, billExportUsers, sameBillExportUsers, toggleBillExportUser, beijingDate, billAmount, billSubmittedTime, exportDateError, offsetDate } from '../src/admin/bill-exports.ts';
 
 test('bill export dates use the Beijing day even before UTC midnight', () => {
   assert.equal(beijingDate(new Date('2026-11-11T16:01:00Z')), '2026-11-12');
@@ -37,4 +37,36 @@ test('bill submission times use Beijing time and preserve missing values in old 
   for (const value of [null, undefined, '', 'bad', '0001-01-01T00:00:00Z']) {
     assert.equal(billSubmittedTime(value), '—');
   }
+});
+
+test('bill export selections retain unique user IDs and stop at twenty without preventing removal', () => {
+  const selected = Array.from({ length: BILL_EXPORT_USER_LIMIT }, (_, index) => ({ id: String(index + 1), email: `user${index + 1}@example.test` }));
+  const extra = { id: '21', email: 'extra@example.test' };
+  assert.deepEqual(toggleBillExportUser(selected, extra), selected);
+  const removed = toggleBillExportUser(selected, { ...selected[0], email: 'renamed@example.test' });
+  assert.equal(removed.length, 19);
+  assert.ok(!removed.some(user => user.id === '1'));
+  assert.equal(toggleBillExportUser(removed, extra).length, 20);
+  assert.deepEqual(toggleBillExportUser([selected[0], selected[0]], extra), [selected[0], extra]);
+  assert.equal(selected.length, 20, 'selection updates do not mutate saved references');
+});
+
+test('bill export users use the task snapshot and fall back to the old single-user response', () => {
+  const first = { id: '1', email: 'first@example.test' };
+  const second = { id: '2', email: 'second@example.test' };
+  assert.deepEqual(billExportUsers({ users: [first, second], user: first }), [first, second]);
+  assert.deepEqual(billExportUsers({ user: first }), [first]);
+  assert.deepEqual(billExportUsers({ users: [], user: first }), [first]);
+  assert.deepEqual(billExportUsers({ users: [second, second] }), [second]);
+  assert.deepEqual(billExportUsers(null), []);
+});
+
+test('bill export selection changes compare identity independently of order and email updates', () => {
+  const first = { id: '1', email: 'first@example.test' };
+  const second = { id: '2', email: 'second@example.test' };
+  assert.equal(sameBillExportUsers([first, second], [second, first]), true);
+  assert.equal(sameBillExportUsers([first], [{ ...first, email: 'updated@example.test' }]), true);
+  assert.equal(sameBillExportUsers([first], [{ id: '3', email: first.email }]), false);
+  assert.equal(sameBillExportUsers([first, second], [first]), false);
+  assert.equal(sameBillExportUsers([], []), true);
 });

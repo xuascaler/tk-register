@@ -1,10 +1,12 @@
 export type BillExportUser = { id: string; email: string };
+export const BILL_EXPORT_USER_LIMIT = 20;
 export type BillExportJob = {
   id: string;
   download_filename: string;
   model_usage_source?: 'raw' | 'cache';
   status: 'queued' | 'fetching' | 'filtering' | 'completed' | 'failed' | 'expired';
-  user: BillExportUser;
+  users?: BillExportUser[];
+  user?: BillExportUser;
   include_sub_users: boolean;
   start_date: string;
   end_date: string;
@@ -40,6 +42,32 @@ export type BillExportResults = {
   page_size: number;
   columns?: string[];
 };
+
+function uniqueUsers(users: BillExportUser[]) {
+  const seen = new Set<string>();
+  return users.filter(user => {
+    if (seen.has(user.id)) return false;
+    seen.add(user.id);
+    return true;
+  });
+}
+
+export function billExportUsers(job: Pick<BillExportJob, 'users' | 'user'> | null) {
+  if (!job) return [];
+  return uniqueUsers(job.users?.length ? job.users : job.user ? [job.user] : []);
+}
+
+export function toggleBillExportUser(users: BillExportUser[], user: BillExportUser) {
+  const selected = uniqueUsers(users);
+  if (selected.some(item => item.id === user.id)) return selected.filter(item => item.id !== user.id);
+  return selected.length < BILL_EXPORT_USER_LIMIT ? [...selected, user] : selected;
+}
+
+export function sameBillExportUsers(left: BillExportUser[], right: BillExportUser[]) {
+  const leftIds = new Set(left.map(user => user.id));
+  const rightIds = new Set(right.map(user => user.id));
+  return leftIds.size === rightIds.size && [...leftIds].every(id => rightIds.has(id));
+}
 
 export function beijingDate(now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
