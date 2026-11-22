@@ -16,20 +16,22 @@ import (
 const (
 	MaxBillExportReportBytes   = 4 << 20
 	MaxBillExportArtifactBytes = 8 << 20
+	MaxBillExportUsers         = 20
 	BillExportRetention        = 7 * 24 * time.Hour
 )
 
 var ErrBillExportClaimLost = errors.New("bill export worker claim is no longer valid")
 
-// BillExportJob keeps only the selected user's filtered results. Supplier-wide
+// BillExportJob keeps only the selected users' filtered results. Supplier-wide
 // source files and website credentials must never be persisted in this table.
 type BillExportJob struct {
-	ID           uint64 `gorm:"primaryKey"`
-	RequestedBy  uint64 `gorm:"not null;index"`
-	Requester    User   `gorm:"foreignKey:RequestedBy;constraint:OnDelete:RESTRICT" json:"-"`
-	TargetUserID uint64 `gorm:"not null;index"`
-	TargetUser   User   `gorm:"foreignKey:TargetUserID;constraint:OnDelete:RESTRICT" json:"-"`
-	UserEmail    string `gorm:"size:50;not null"`
+	ID           uint64           `gorm:"primaryKey"`
+	RequestedBy  uint64           `gorm:"not null;index"`
+	Requester    User             `gorm:"foreignKey:RequestedBy;constraint:OnDelete:RESTRICT" json:"-"`
+	TargetUserID uint64           `gorm:"not null;index"`
+	TargetUser   User             `gorm:"foreignKey:TargetUserID;constraint:OnDelete:RESTRICT" json:"-"`
+	UserEmail    string           `gorm:"size:50;not null"`
+	Users        []BillExportUser `gorm:"foreignKey:JobID" json:"-"`
 	// Scope is frozen with the selected accounts, not recalculated by the worker.
 	IncludeSubUsers bool   `gorm:"not null;default:false"`
 	VendorID        uint64 `gorm:"not null;index"`
@@ -62,6 +64,17 @@ type BillExportJob struct {
 	ExpiresAt  time.Time `gorm:"not null;index"`
 }
 
+// BillExportUser freezes the explicitly selected users, including roots without
+// their own accounts. Row order preserves the selection order after deduplication.
+type BillExportUser struct {
+	ID     uint64        `gorm:"primaryKey"`
+	JobID  uint64        `gorm:"not null;uniqueIndex:idx_bill_export_user"`
+	Job    BillExportJob `gorm:"foreignKey:JobID;constraint:OnDelete:RESTRICT" json:"-"`
+	UserID uint64        `gorm:"not null;uniqueIndex:idx_bill_export_user"`
+	User   User          `gorm:"foreignKey:UserID;constraint:OnDelete:RESTRICT" json:"-"`
+	Email  string        `gorm:"size:50;not null"`
+}
+
 // BillExportAccount freezes current ownership and the precise ID namespaces at
 // job creation. Repeated submissions are represented by one stable account row.
 type BillExportAccount struct {
@@ -90,7 +103,7 @@ type BillExportResult struct {
 }
 
 func (s *Store) migrateBillExports() error {
-	return s.DB.AutoMigrate(&BillExportJob{}, &BillExportAccount{})
+	return s.DB.AutoMigrate(&BillExportJob{}, &BillExportUser{}, &BillExportAccount{})
 }
 
 func ValidateBillExportDates(start, end string, now time.Time) error {
@@ -122,6 +135,10 @@ type BillExportOptions struct {
 }
 
 func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, start, end string, now time.Time, options ...BillExportOptions) (BillExportJob, error) {
+	return s.CreateBillExportForUsers(ctx, actorID, []uint64{userID}, start, end, now, options...)
+}
+
+func (s *Store) CreateBillExportForUsers(ctx context.Context, actorID uint64, userIDs []uint64, start, end string, now time.Time, options ...BillExportOptions) (BillExportJob, error) {
 	var job BillExportJob
 	var selected BillExportOptions
 	if len(options) > 0 {
@@ -130,8 +147,23 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 	if err := ValidateBillExportDates(start, end, now); err != nil {
 		return job, err
 	}
-	if actorID == 0 || userID == 0 {
-		return job, validationErrorf("Select a user.")
+	if actorID == 0 || len(userIDs) == 0 {
+		return job, validationErrorf("Select at least one user.")
+	}
+	uniqueIDs := make([]uint64, 0, MaxBillExportUsers)
+	seen := make(map[uint64]bool, MaxBillExportUsers)
+	for _, id := range userIDs {
+		if id == 0 {
+			return job, validationErrorf("Select valid users.")
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniqueIDs = append(uniqueIDs, id)
+		if len(uniqueIDs) > MaxBillExportUsers {
+			return job, validationErrorf("Select no more than 20 users.")
+		}
 	}
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// All exports currently use this one vendor. The short row lock serializes
@@ -140,7 +172,7 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("code = ?", "tk-register-0").First(&vendor).Error; err != nil {
 			return err
 		}
-		var actor, user User
+		var actor User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND role = ? AND status = ?", actorID, "admin", "active").First(&actor).Error; err != nil {
 			return err
 		}
@@ -158,8 +190,20 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 				return validationErrorf("Choose Raw or Cache bill data.")
 			}
 		}
-		if err := tx.First(&user, userID).Error; err != nil {
+		var selectedUsers []User
+		if err := tx.Where("id IN ?", uniqueIDs).Find(&selectedUsers).Error; err != nil {
 			return err
+		}
+		if len(selectedUsers) != len(uniqueIDs) {
+			return ErrNotFound
+		}
+		byID := make(map[uint64]User, len(selectedUsers))
+		for _, user := range selectedUsers {
+			byID[user.ID] = user
+		}
+		users := make([]BillExportUser, 0, len(uniqueIDs))
+		for _, id := range uniqueIDs {
+			users = append(users, BillExportUser{UserID: id, Email: byID[id].Email})
 		}
 		active := []string{"queued", "fetching", "filtering"}
 		var global, own int64
@@ -184,26 +228,33 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		if selected.IncludeSubUsers {
 			// The closure table includes every depth. EXISTS selects each actual
 			// account once even though several ancestors can see the same account.
-			selection = selection.Where(`a.user_id = ? OR EXISTS (
-    SELECT 1 FROM user_hierarchy h WHERE h.ancestor_user_id = ? AND h.descendant_user_id = a.user_id
-)`, userID, userID)
+			selection = selection.Where(`a.user_id IN ? OR EXISTS (
+    SELECT 1 FROM user_hierarchy h WHERE h.ancestor_user_id IN ? AND h.descendant_user_id = a.user_id
+)`, uniqueIDs, uniqueIDs)
 		} else {
-			selection = selection.Where("a.user_id = ?", userID)
+			selection = selection.Where("a.user_id IN ?", uniqueIDs)
 		}
 		err := selection.Order("a.id ASC").Limit(20001).Scan(&accounts).Error
 		if err != nil {
 			return err
 		}
 		if len(accounts) == 0 {
-			return validationErrorf("This user has no current Claude accounts to export.")
+			return validationErrorf("The selected users have no current Claude accounts to export.")
 		}
 		if len(accounts) > 20000 {
-			return validationErrorf("This user has too many accounts for one export.")
+			return validationErrorf("The selected users have too many accounts for one export.")
 		}
-		job = BillExportJob{RequestedBy: actor.ID, UsageSource: source, TargetUserID: user.ID, UserEmail: user.Email, IncludeSubUsers: selected.IncludeSubUsers, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
-		if err := tx.Create(&job).Error; err != nil {
+		job = BillExportJob{RequestedBy: actor.ID, UsageSource: source, TargetUserID: users[0].UserID, UserEmail: users[0].Email, IncludeSubUsers: selected.IncludeSubUsers, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
+		if err := tx.Omit("Users").Create(&job).Error; err != nil {
 			return err
 		}
+		for i := range users {
+			users[i].JobID = job.ID
+		}
+		if err := tx.CreateInBatches(users, MaxBillExportUsers).Error; err != nil {
+			return err
+		}
+		job.Users = users
 		for i := range accounts {
 			accounts[i].JobID = job.ID
 			if submitted := accounts[i].LatestSubmittedAt; submitted != nil {
@@ -221,7 +272,11 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 }
 
 func billExportMetadata(db *gorm.DB) *gorm.DB {
-	return db.Omit("report_json", "artifact", "lease_token")
+	return billExportWithUsers(db).Omit("report_json", "artifact", "lease_token")
+}
+
+func billExportWithUsers(db *gorm.DB) *gorm.DB {
+	return db.Preload("Users", func(tx *gorm.DB) *gorm.DB { return tx.Order("id ASC") })
 }
 
 // Scope metadata, JSON and file payloads equally, including direct requests for old job IDs.
@@ -245,7 +300,7 @@ func (s *Store) BillExportData(ctx context.Context, actorID, id uint64) (BillExp
 	if id == 0 {
 		return job, ErrNotFound
 	}
-	err := s.visibleBillExports(ctx, actorID).First(&job, id).Error
+	err := billExportWithUsers(s.visibleBillExports(ctx, actorID)).First(&job, id).Error
 	return job, err
 }
 func (s *Store) RecentBillExports(ctx context.Context, actorID uint64) ([]BillExportJob, error) {
