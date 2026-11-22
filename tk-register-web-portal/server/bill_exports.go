@@ -63,7 +63,11 @@ func billJobDTO(job core.BillExportJob, includeSource bool) map[string]any {
 		"summary_count": summaryCount, "row_count": job.RowCount, "total_cny": job.TotalCNY, "currency": "CNY", "error": job.ErrorMessage,
 	}
 	if includeSource {
-		result["model_usage_source"] = job.UsageSource
+		source := job.UsageSource
+		if source == "modified" {
+			source = "cache"
+		}
+		result["model_usage_source"] = source
 	}
 	return result
 }

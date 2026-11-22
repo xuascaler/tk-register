@@ -78,7 +78,7 @@ const phaseNames: Record<string, string> = { queued: 'Queued', fetching: 'Readin
 
 function billSourceLabel(job: BillExportJob) {
   if (!job.model_usage_source) return '';
-  return job.model_usage_source === 'raw' ? ' · Raw data' : ' · Modified data';
+  return job.model_usage_source === 'raw' ? ' · Raw' : ' · Cache';
 }
 
 function ExportResults({ job, view, onView }: { job: BillExportJob; view: BillExportView; onView: (view: BillExportView) => void }) {
@@ -127,7 +127,7 @@ export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean })
   const [start, setStart] = useState(offsetDate(today, -6));
   const [end, setEnd] = useState(today);
   const [includeSubUsers, setIncludeSubUsers] = useState(false);
-  const [source, setSource] = useState<'raw' | 'modified'>('raw');
+  const [source, setSource] = useState<'raw' | 'cache'>('raw');
   const [job, setJob] = useState<BillExportJob | null>(null);
   const [creating, setCreating] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -220,7 +220,7 @@ export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean })
       </div>
       <div className='bill-export-options'>
         <label className='switch bill-sub-users'><input id='bill-include-sub-users' type='checkbox' role='switch' checked={includeSubUsers} disabled={locked} aria-labelledby='bill-include-sub-users-label' aria-describedby='bill-include-sub-users-help' onChange={event => { changed(); setIncludeSubUsers(event.target.checked); }} /><span><strong id='bill-include-sub-users-label'>Include all sub-users</strong><small id='bill-include-sub-users-help'>Include every level of sub-users under the selected user.</small></span></label>
-        {isSuperAdmin && <div className='bill-source-picker'><Select id='bill-export-source' label='Data source' value={source} disabled={locked} options={[{ value: 'raw', label: 'Raw data' }, { value: 'modified', label: 'Modified data' }]} onChange={value => { changed(); setSource(value === 'modified' ? 'modified' : 'raw'); }} /></div>}
+        {isSuperAdmin && <div className='bill-source-picker'><Select id='bill-export-source' label='Data source' value={source} disabled={locked} options={[{ value: 'raw', label: 'Raw' }, { value: 'cache', label: 'Cache' }]} onChange={value => { changed(); setSource(value === 'cache' ? 'cache' : 'raw'); }} /></div>}
       </div>
       <div className='bill-date-options'><p id='bill-date-help'>Beijing time · Up to 60 days, including both dates.</p><div className='bill-shortcuts' aria-label='Date shortcuts'><button type='button' disabled={locked} onClick={() => shortcut(1, true)}>Yesterday</button><button type='button' disabled={locked} onClick={() => shortcut(7)}>Last 7 days</button><button type='button' disabled={locked} onClick={() => shortcut(30)}>Last 30 days</button></div></div>
       <ErrorNotice>{error}</ErrorNotice>

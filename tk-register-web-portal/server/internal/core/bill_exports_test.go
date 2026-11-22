@@ -466,7 +466,7 @@ func TestBillExportSourceChoiceRequiresCurrentSuperAdmin(t *testing.T) {
 		include   bool
 		want      string
 		count     int
-	}{{"", false, "raw", 1}, {"raw", true, "raw", 2}, {"modified", true, "modified", 2}} {
+	}{{"", false, "raw", 1}, {"raw", true, "raw", 2}, {"cache", true, "modified", 2}, {"modified", true, "modified", 2}} {
 		job, err := s.CreateBillExport(WithModelUsageSource(ctx, "modified"), admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{IncludeSubUsers: tc.include, UsageSource: tc.requested})
 		if err != nil || job.UsageSource != tc.want || job.IncludeSubUsers != tc.include || job.AccountCount != tc.count {
 			t.Fatalf("source/scope %q: %+v %v", tc.requested, job, err)
@@ -499,7 +499,7 @@ func TestBillExportOrdinaryAdminAlwaysUsesModified(t *testing.T) {
 	s, owner, admin, vendor, version, now := billExportFixture(t)
 	ctx := WithModelUsageSource(context.Background(), "raw")
 	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "ordinary-source@example.com", "claude/cc-pro", "accepted", "1200", now)
-	for _, source := range []string{"", "raw", "modified", "invalid"} {
+	for _, source := range []string{"", "raw", "cache", "modified", "invalid"} {
 		job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, BillExportOptions{UsageSource: source})
 		if err != nil || job.UsageSource != "modified" {
 			t.Fatalf("ordinary source %q selected data outside Modified: %+v %v", source, job, err)
