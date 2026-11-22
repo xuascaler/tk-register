@@ -11,7 +11,7 @@ try {
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}) });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
   const errors = [], calls = [], unknown = [];
-  let enabled = false, modelSource = 'modified', superAdmin = true, historicalOnly = false;
+  let enabled = false, apiModelCostsEnabled = false, modelSource = 'modified', superAdmin = true, historicalOnly = false;
   const delegate = { id: '2', email: 'delegate@example.com', role: 'admin', is_super_admin: false, status: 'active', created_at: '2026-11-01T08:00:00Z' };
   page.on('pageerror', error => errors.push(error.message));
   const yesterday = new Date(Date.parse(new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)) - 86400_000).toISOString().slice(0, 10);
@@ -35,10 +35,11 @@ try {
       if (req.method() === 'PUT') {
         const patch = req.postDataJSON().settings;
         if ('user_overview_model_costs_enabled' in patch) enabled = patch.user_overview_model_costs_enabled === 'true';
+        if ('api_user_overview_model_costs_enabled' in patch) apiModelCostsEnabled = patch.api_user_overview_model_costs_enabled === 'true';
         modelSource = patch.model_usage_source || modelSource;
         assert.ok(modelSource !== 'raw' || !enabled);
       }
-      return ok({ settings: [{ key: 'user_overview_model_costs_enabled', category: 'overview', type: 'boolean', value: String(enabled), description: 'Enable model costs on personal Overview pages.', read_only: false }, { key: 'model_usage_source', category: 'overview', type: 'enum', options: ['modified', 'raw'], value: modelSource, description: 'Model usage source' }] });
+      return ok({ settings: [{ key: 'user_overview_model_costs_enabled', category: 'overview', type: 'boolean', value: String(enabled), description: 'Enable model costs on personal Overview pages.', read_only: false }, { key: 'model_usage_source', category: 'overview', type: 'enum', options: ['modified', 'raw'], value: modelSource, description: 'Model usage source' }, { key: 'api_user_overview_model_costs_enabled', category: 'overview', type: 'boolean', value: String(apiModelCostsEnabled), description: 'Include model costs in the Daily usage API.', read_only: false }] });
     }
     if (historicalOnly && (path.endsWith('/daily-usage') || path.endsWith('/overview'))) {
       const date = yesterday;
@@ -191,15 +192,20 @@ try {
   await page.getByRole('button', { name: 'Last 30 days', exact: true }).click();
   await page.locator('.overview-daily-chart.is-curve').waitFor();
   await goto('config/overview');
-  const toggle = page.getByRole('switch');
+  const toggle = page.locator('#value-user_overview_model_costs_enabled');
+  const apiToggle = page.locator('#value-api_user_overview_model_costs_enabled');
   await toggle.waitFor();
   assert.equal(await page.getByRole('tab', { name: 'Overview', exact: false }).getAttribute('aria-selected'), 'true');
   assert.equal(await toggle.isChecked(), false);
+  assert.equal(await apiToggle.isChecked(), false);
+  assert.ok(await apiToggle.isEnabled());
   await page.screenshot({ path: 'test-results/overview-config-disabled.png', fullPage: true });
   await toggle.check();
+  await apiToggle.check();
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
   await page.getByText('Changes saved.', { exact: true }).waitFor();
   assert.equal(enabled, true);
+  assert.equal(apiModelCostsEnabled, true);
   await goto('accounts');
   await page.locator('.overview-model-summary').waitFor();
   await assertUsageLabels(page.locator('.accounts-overview'));
@@ -216,14 +222,22 @@ try {
   };
   await selectSource('Raw data');
   assert.ok(await toggle.isDisabled() && !(await toggle.isChecked()));
+  assert.ok(await apiToggle.isEnabled() && await apiToggle.isChecked(), 'Raw source must not disable API model details');
   await page.getByRole('button', {name:'Discard',exact:true}).click();
   assert.ok(await toggle.isEnabled() && await toggle.isChecked());
   await selectSource('Raw data');
   await page.getByRole('button', {name:'Save changes',exact:true}).click();
   await page.getByText('Changes saved.', {exact:true}).waitFor();
   assert.equal(modelSource, 'raw'); assert.equal(enabled, false);
+  assert.equal(apiModelCostsEnabled, true, 'Source changes must preserve the API setting');
   await page.reload(); await toggle.waitFor();
   assert.ok(await toggle.isDisabled() && !(await toggle.isChecked()));
+  assert.ok(await apiToggle.isEnabled() && await apiToggle.isChecked(), 'Raw source must not disable API model details');
+  await apiToggle.uncheck();
+  await page.getByRole('button', {name:'Save changes',exact:true}).click();
+  await page.getByText('Changes saved.', {exact:true}).waitFor();
+  assert.equal(apiModelCostsEnabled, false);
+  assert.equal(modelSource, 'raw'); assert.equal(enabled, false);
   await goto('accounts');
   await assertPrivate();
   await assertUsageLabels(page.locator('.accounts-overview'));

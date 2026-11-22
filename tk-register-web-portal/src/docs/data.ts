@@ -1,4 +1,4 @@
-export type DocTopic = 'getting-started' | 'submit-account' | 'account-lookup' | 'update-auth-json';
+export type DocTopic = 'getting-started' | 'submit-account' | 'account-lookup' | 'daily-usage' | 'update-auth-json';
 export type DocSection = 'parameters' | 'example' | 'response' | 'errors';
 export type EndpointTopic = Exclude<DocTopic, 'getting-started'>;
 
@@ -9,6 +9,7 @@ export const docTopics: { id: DocTopic; label: string }[] = [
   { id: 'getting-started', label: 'Getting started' },
   { id: 'submit-account', label: 'Submit account' },
   { id: 'account-lookup', label: 'Account lookup' },
+  { id: 'daily-usage', label: 'Daily usage' },
   { id: 'update-auth-json', label: 'Update Auth JSON' },
 ];
 
@@ -38,6 +39,15 @@ export const endpoints = {
     limit: '600 requests / minute',
     note: 'Reads saved data. Collection runs every 300 seconds by default when enabled; administrators can change the interval in seconds. This request does not start a new collection.',
   },
+  'daily-usage': {
+    title: 'Read daily usage',
+    method: 'POST',
+    path: `${accountsPath}/daily-usage`,
+    description: 'Read saved daily bills for up to 100 of your Claude accounts on one date.',
+    scope: 'accounts:read',
+    limit: '60 requests / minute',
+    note: 'Reads saved daily bills only. The date must be yesterday or earlier in Asia/Shanghai. Requests do not fetch new bills or include sub-users’ accounts. Model costs are included only when an administrator enables API model details.',
+  },
   'update-auth-json': {
     title: 'Update Auth JSON',
     method: 'POST',
@@ -59,6 +69,47 @@ export type FieldDefinition = {
 export const lookupFields: FieldDefinition[] = [
   { name: 'username', type: 'string', required: true, description: 'Your TK Register login email: a valid ASCII email address of at most 50 bytes. It must match the token’s owner, including when that user is an administrator.' },
   { name: 'account', type: 'string', required: true, description: 'The submitted Claude account login ID or email, not its alias or an account ID. Maximum 254 UTF-8 bytes; no internal Unicode whitespace or control characters.' },
+];
+
+export const dailyUsageFields: FieldDefinition[] = [
+  lookupFields[0],
+  { name: 'accounts', type: 'string[]', required: true, description: 'One to 100 submitted Claude account login IDs or emails, before deduplication. Each identifier is limited to 254 UTF-8 bytes after trimming, without internal whitespace or control characters. Identifiers are matched case-insensitively; duplicates are removed while preserving the first occurrence order.' },
+  { name: 'date', type: 'string', required: true, description: 'One complete calendar date in YYYY-MM-DD format, interpreted in Asia/Shanghai (Beijing time). Yesterday and earlier dates are accepted; today and future dates are rejected.' },
+];
+
+export const dailyUsageResponseFields: FieldDefinition[] = [
+  { name: 'username', type: 'string', description: 'The normalized TK Register email of the token owner.' },
+  { name: 'date', type: 'string', description: 'The requested billing date in YYYY-MM-DD format.' },
+  { name: 'timezone', type: 'string', description: 'Asia/Shanghai. The response covers one Beijing calendar day.' },
+  { name: 'exchange_rate_cny_per_usd', type: 'string', description: 'The system exchange rate used for this response, in CNY per USD; for example "7.2". Decimal string, not a JSON number.' },
+  { name: 'model_costs_enabled', type: 'boolean', description: 'Whether this API response includes per-model costs. If false, models and model_totals are omitted; account and summary totals are still returned.' },
+  { name: 'summary', type: 'object', description: 'Availability counts and the sum of the available daily bills. Unavailable accounts are not treated as zero.' },
+  { name: 'accounts', type: 'object[]', description: 'One result per unique normalized requested account, in first occurrence order. Missing and inaccessible accounts both use status not_found.' },
+  { name: 'model_totals', type: 'object[]', description: 'Costs grouped by model across available accounts. Present only when model_costs_enabled is true.' },
+];
+
+export const dailyUsageSummaryFields: FieldDefinition[] = [
+  { name: 'status', type: 'string', description: 'complete when every requested account has a saved bill; partial when some do; no_data when none do. These are data-availability states, not account health states.' },
+  { name: 'requested_accounts', type: 'integer', description: 'Number of unique normalized account identifiers after deduplication.' },
+  { name: 'available_accounts', type: 'integer', description: 'Accounts with an available bill, including a saved zero-cost bill.' },
+  { name: 'no_data_accounts', type: 'integer', description: 'Owned accounts without a saved bill for this date.' },
+  { name: 'not_found_accounts', type: 'integer', description: 'Identifiers that do not match an account accessible to the token owner.' },
+  { name: 'cost_cny', type: 'string | null', description: 'Sum of available account bills in CNY, with eight decimal places. Null when no bills are available.' },
+  { name: 'cost_usd', type: 'string | null', description: 'Sum of the available accounts’ reported USD costs, with two decimal places. Null when no bills are available. Per-account rounding can make this differ from converting the combined CNY total once.' },
+];
+
+export const dailyUsageAccountFields: FieldDefinition[] = [
+  { name: 'account', type: 'string', description: 'The normalized requested Claude account identifier.' },
+  { name: 'status', type: 'string', description: 'ok for a saved bill, no_data for an owned account without a bill, or not_found for a missing or inaccessible account.' },
+  { name: 'cost_cny', type: 'string | null', description: 'Daily CNY cost with eight decimal places. An available zero is "0.00000000"; no_data and not_found use null.' },
+  { name: 'cost_usd', type: 'string | null', description: 'Daily USD cost with two decimal places. An available zero is "0.00"; no_data and not_found use null.' },
+  { name: 'models', type: 'object[]', description: 'Per-model costs for this account; [] for no_data or not_found. Present only when model_costs_enabled is true.' },
+];
+
+export const dailyUsageModelFields: FieldDefinition[] = [
+  { name: 'model', type: 'string', description: 'Saved model name.' },
+  { name: 'cost_cny', type: 'string', description: 'Model cost in CNY with eight decimal places.' },
+  { name: 'cost_usd', type: 'string', description: 'Model cost in USD with two decimal places, using the returned exchange rate.' },
 ];
 
 export const submissionFields: FieldDefinition[] = [
@@ -166,6 +217,19 @@ export const lookupErrors: ErrorDefinition[] = [
   { status: '503', code: 'UNAVAILABLE', description: 'A required database or Redis service is unavailable. Retry with a delay.' },
 ];
 
+export const dailyUsageErrors: ErrorDefinition[] = [
+  { status: '400', code: 'INVALID_REQUEST', description: 'Send exactly username, accounts, and date, each once, in one JSON object. Rejects query parameters, unsupported or duplicate JSON fields, invalid identifiers, an empty accounts array, and more than 100 entries before deduplication.' },
+  { status: '400', code: 'INVALID_DATE', description: 'Use a valid YYYY-MM-DD date. Today and future dates in Asia/Shanghai are not accepted.' },
+  ...sharedErrors,
+  { status: '404', code: 'ACCOUNT_NOT_FOUND', description: 'The username does not match the token owner. Missing or inaccessible individual accounts instead receive not_found results inside HTTP 200.' },
+  { status: '405', code: 'METHOD_NOT_ALLOWED', description: 'Use POST. The Allow header identifies the supported method.' },
+  { status: '413', code: 'REQUEST_TOO_LARGE', description: 'The request body exceeds 64 KiB.' },
+  { status: '415', code: 'INVALID_CONTENT_TYPE', description: 'Use Content-Type: application/json; a charset parameter is accepted.' },
+  { status: '429', code: 'RATE_LIMITED', description: 'The separate per-user daily-usage limit of 60 requests per minute has been reached. Wait for Retry-After before retrying.' },
+  { status: '503', code: 'UNAVAILABLE', description: 'A required local database or rate-limit service is unavailable. Retry with a delay.' },
+  { status: '504', code: 'REQUEST_TIMEOUT', description: 'Reading saved daily bills timed out. Retry with a delay.' },
+];
+
 export const submissionErrors: ErrorDefinition[] = [
   { status: '400', code: 'INVALID_REQUEST', description: 'Send one JSON object in the request body, with no query parameters.' },
   { status: '400', code: 'INVALID_PARAMETERS', description: 'A required field is missing, a value is invalid, or an unsupported top-level parameter was supplied.' },
@@ -236,6 +300,12 @@ export const sampleAuthJSONUpdate = {
   auth_json: sampleSubmission.auth_json,
 };
 
+export const sampleDailyUsage = {
+  username: 'member@example.com',
+  accounts: ['claude.user@example.com', 'zero@example.com', 'waiting@example.com', 'missing@example.com'],
+  date: '2026-11-01',
+};
+
 export function curlExample(topic: EndpointTopic, baseURL: string) {
   const url = baseURL + endpoints[topic].path;
   if (topic === 'account-lookup') {
@@ -254,7 +324,7 @@ export function curlExample(topic: EndpointTopic, baseURL: string) {
     '  -H "Authorization: Bearer ${TK_REGISTER_API_TOKEN}" \\',
     "  -H 'Content-Type: application/json' \\",
     "  --data-binary @- <<'JSON'",
-    JSON.stringify(topic === 'update-auth-json' ? sampleAuthJSONUpdate : sampleSubmission, null, 2),
+    JSON.stringify(topic === 'daily-usage' ? sampleDailyUsage : topic === 'update-auth-json' ? sampleAuthJSONUpdate : sampleSubmission, null, 2),
     'JSON',
   ].join('\n');
 }
@@ -311,3 +381,30 @@ export const authJSONUpdateResponse = (rate: number) => ({
     },
   },
 });
+
+export const dailyUsageResponse = (rate: number, modelCostsEnabled = false) => {
+  const costUSD = (72 / rate).toFixed(2);
+  const firstModelUSD = (18 / rate).toFixed(2);
+  const models = [
+    { model: 'claude-fable-example', cost_cny: '18.00000000', cost_usd: firstModelUSD },
+    { model: 'claude-opus-example', cost_cny: '54.00000000', cost_usd: ((Math.round(Number(costUSD) * 100) - Math.round(Number(firstModelUSD) * 100)) / 100).toFixed(2) },
+  ];
+  return {
+    success: true,
+    data: {
+      username: sampleDailyUsage.username,
+      date: sampleDailyUsage.date,
+      timezone: 'Asia/Shanghai',
+      exchange_rate_cny_per_usd: String(rate),
+      model_costs_enabled: modelCostsEnabled,
+      summary: { status: 'partial', requested_accounts: 4, available_accounts: 2, no_data_accounts: 1, not_found_accounts: 1, cost_cny: '72.00000000', cost_usd: costUSD },
+      accounts: [
+        { account: sampleDailyUsage.accounts[0], status: 'ok', cost_cny: '72.00000000', cost_usd: costUSD, ...(modelCostsEnabled ? { models } : {}) },
+        { account: sampleDailyUsage.accounts[1], status: 'ok', cost_cny: '0.00000000', cost_usd: '0.00', ...(modelCostsEnabled ? { models: [{ model: 'claude-opus-example', cost_cny: '0.00000000', cost_usd: '0.00' }] } : {}) },
+        { account: sampleDailyUsage.accounts[2], status: 'no_data', cost_cny: null, cost_usd: null, ...(modelCostsEnabled ? { models: [] } : {}) },
+        { account: sampleDailyUsage.accounts[3], status: 'not_found', cost_cny: null, cost_usd: null, ...(modelCostsEnabled ? { models: [] } : {}) },
+      ],
+      ...(modelCostsEnabled ? { model_totals: models } : {}),
+    },
+  };
+};

@@ -3,6 +3,8 @@ import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, Copy, Info, KeyRo
 import {
   API_BASE_PATH, authenticationFields, curlExample, docSections, docTopics, endpoints,
   authJSONUpdateErrors, authJSONUpdateFields, authJSONUpdateResponse, authJSONUpdateResponseFields,
+  dailyUsageErrors, dailyUsageFields, dailyUsageResponse, dailyUsageResponseFields,
+  dailyUsageSummaryFields, dailyUsageAccountFields, dailyUsageModelFields,
   lookupErrors, lookupFields, lookupResponse, lookupResponseFields, optionalSubmissionFields,
   snapshotFields, submissionErrors, submissionFields,
   type DocSection, type DocTopic, type EndpointTopic, type ErrorDefinition, type FieldDefinition,
@@ -147,6 +149,7 @@ function DocumentationIndex({ baseURL, onNavigate, onManageToken, onFeedback }: 
       <div className='api-docs-api-list'>
         <EndpointLink topic='submit-account' onNavigate={onNavigate} />
         <EndpointLink topic='account-lookup' onNavigate={onNavigate} />
+        <EndpointLink topic='daily-usage' onNavigate={onNavigate} />
         <EndpointLink topic='update-auth-json' onNavigate={onNavigate} />
       </div>
     </section>
@@ -170,6 +173,7 @@ function GettingStarted({ baseURL, onNavigate, onManageToken, onFeedback }: Navi
     <section className='api-docs-content-block'>
       <h2>Access and limits</h2>
       <p>New tokens include the three scopes below. Existing tokens gain Auth JSON update access automatically without changing their value. You do not need to regenerate your token or update your scripts.</p>
+      <p>The existing <code>accounts:read</code> scope covers both Account lookup and Daily usage. A valid token with this scope already has access to the new endpoint; no new token is needed.</p>
       <p>Requests using different tokens for the same user share that user’s limits.</p>
       <table className='api-docs-table api-docs-limits-table'>
         <caption className='sr-only'>API scopes and per-user rate limits</caption>
@@ -177,6 +181,7 @@ function GettingStarted({ baseURL, onNavigate, onManageToken, onFeedback }: Navi
         <tbody>
           <tr><th scope='row'><DocLink topic='submit-account' onNavigate={onNavigate}>Submit account</DocLink></th><td><code>claude:submit</code><p>100 requests per minute per user, shared with the web submission form.</p></td></tr>
           <tr><th scope='row'><DocLink topic='account-lookup' onNavigate={onNavigate}>Account lookup</DocLink></th><td><code>accounts:read</code><p>600 requests per minute per user, separate from the submission limit.</p></td></tr>
+          <tr><th scope='row'><DocLink topic='daily-usage' onNavigate={onNavigate}>Daily usage</DocLink></th><td><code>accounts:read</code><p>60 requests per minute per user, separate from account lookups and submissions. Up to 100 account identifiers per request.</p></td></tr>
           <tr><th scope='row'><DocLink topic='update-auth-json' onNavigate={onNavigate}>Update Auth JSON</DocLink></th><td><code>claude:auth-json:update</code><p>100 requests per minute per user, shared with web Auth JSON updates. Separate from account submissions.</p></td></tr>
         </tbody>
       </table>
@@ -184,19 +189,33 @@ function GettingStarted({ baseURL, onNavigate, onManageToken, onFeedback }: Navi
     </section>
     <section className='api-docs-content-block'>
       <h2>Choose the response contract</h2>
-      <p>Submissions return the vendor’s status, content type, and response body, with the vendor name masked in <code>alias</code> and any echoed shared credential redacted. Lookups and Auth JSON updates return TK Register’s <code>success</code> / <code>data</code> JSON envelope.</p>
+      <p>Submissions return the vendor’s status, content type, and response body, with the vendor name masked in <code>alias</code> and any echoed shared credential redacted. Lookups, Daily usage, and Auth JSON updates return TK Register’s <code>success</code> / <code>data</code> JSON envelope.</p>
       <p>Account lookup reads saved snapshots and does not refresh supplier data. Use the returned collection timestamps when displaying account status or usage.</p>
+      <p>Daily usage reads saved bills for one completed Beijing calendar day. Account availability is reported separately within a successful batch response; missing bills are not zero-cost bills.</p>
       <p>A confirmed Auth JSON update returns <code>updated: true</code> with <code>refresh_status: not_requested</code>. It does not trigger extra account collections. Status and usage are collected by the existing background schedule. The returned account contains saved database data; it does not prove a post-update collection has completed. The credential write is never repeated automatically.</p>
     </section>
     <div className='api-docs-next-links'>
       <DocLink topic='submit-account' onNavigate={onNavigate}>Submit an account <ArrowRight aria-hidden='true' /></DocLink>
       <DocLink topic='account-lookup' onNavigate={onNavigate}>Look up an account <ArrowRight aria-hidden='true' /></DocLink>
+      <DocLink topic='daily-usage' onNavigate={onNavigate}>Read daily usage <ArrowRight aria-hidden='true' /></DocLink>
       <DocLink topic='update-auth-json' onNavigate={onNavigate}>Update Auth JSON <ArrowRight aria-hidden='true' /></DocLink>
     </div>
   </div>;
 }
 
 function Parameters({ topic, onNavigate }: Navigation & { topic: EndpointTopic }) {
+  if (topic === 'daily-usage') return <>
+    <div className='api-docs-auth-line'><LockKeyhole aria-hidden='true' /><span>Authentication</span><code>Authorization: Bearer YOUR_TOKEN</code><DocLink topic='getting-started' onNavigate={onNavigate} className='api-docs-text-link'>View guide <ArrowRight aria-hidden='true' /></DocLink></div>
+    <section className='api-docs-content-block'><h3>JSON body</h3>
+      <p>Send exactly these three fields, each once, in one JSON object with <code>Content-Type: application/json</code>. The body must be 64 KiB or smaller. Do not add query parameters or unsupported fields.</p>
+      <FieldTable fields={dailyUsageFields} label='Required daily usage request fields' />
+    </section>
+    <section className='api-docs-content-block'><h3>Ownership and account order</h3>
+      <p><code>username</code> must match your personal token’s owner. Administrator and super-administrator tokens also read only their own accounts. This endpoint does not include sub-users or search other users’ accounts.</p>
+      <p>Surrounding whitespace is trimmed and identifiers are matched case-insensitively. Duplicate account identifiers count once in the response, preserving the first occurrence order. The 100-entry input limit is checked before deduplication.</p>
+      <p>A missing account and an account outside your scope both return <code>not_found</code> within the batch. An owned account with no saved bill for the date returns <code>no_data</code>. Neither case starts a new collection.</p>
+    </section>
+  </>;
   const lookup = topic === 'account-lookup';
   const update = topic === 'update-auth-json';
   return <>
@@ -230,11 +249,11 @@ function Parameters({ topic, onNavigate }: Navigation & { topic: EndpointTopic }
 
 function CurlExample({ topic, baseURL, onFeedback }: { topic: EndpointTopic; baseURL: string; onFeedback: CopyFeedback }) {
   return <>
-    <section className='api-docs-content-block'><h3>{topic === 'account-lookup' ? 'Find your submitted account' : topic === 'update-auth-json' ? 'Replace an account’s Auth JSON' : 'Submit a Claude account'}</h3>
+    <section className='api-docs-content-block'><h3>{topic === 'daily-usage' ? 'Read one day of account bills' : topic === 'account-lookup' ? 'Find your submitted account' : topic === 'update-auth-json' ? 'Replace an account’s Auth JSON' : 'Submit a Claude account'}</h3>
       <p>Set your personal token in your shell, then run the request. All account values and credentials below are placeholders; replace them before use{topic === 'submit-account' ? ', including the sample dates' : ''}.</p>
       <CodeBlock title='Token environment variable' text="export TK_REGISTER_API_TOKEN='YOUR_TOKEN'" onFeedback={onFeedback} />
       <CodeBlock title='cURL request' text={curlExample(topic, baseURL)} onFeedback={onFeedback} />
-      <p>{topic === 'account-lookup' ? 'username identifies your TK Register login. account identifies the Claude account you submitted. This request reads saved data only.' : topic === 'update-auth-json' ? 'This changes the account’s credentials at the supplier. username is your TK Register email; account and auth_json.email identify the Claude account. Replace every credential placeholder and sample timestamp. TK Register sends the write once and does not automatically retry it.' : 'The request sends account credentials and can create a real vendor submission. TK Register does not retry the request automatically.'}</p>
+      <p>{topic === 'daily-usage' ? 'Replace username with your TK Register email and accounts with your submitted Claude identifiers. Choose yesterday or an earlier date in Beijing time. The POST reads saved daily bills only; it does not submit accounts or fetch new bills.' : topic === 'account-lookup' ? 'username identifies your TK Register login. account identifies the Claude account you submitted. This request reads saved data only.' : topic === 'update-auth-json' ? 'This changes the account’s credentials at the supplier. username is your TK Register email; account and auth_json.email identify the Claude account. Replace every credential placeholder and sample timestamp. TK Register sends the write once and does not automatically retry it.' : 'The request sends account credentials and can create a real vendor submission. TK Register does not retry the request automatically.'}</p>
     </section>
     <details className='api-docs-disclosure'><summary>Using a self-signed certificate</summary><div className='api-docs-disclosure-body'><p>The examples use normal TLS certificate verification. For a deployment whose self-signed certificate you intentionally trust, you can add <code>--insecure</code> to cURL. Omit this option when using a trusted certificate.</p></div></details>
   </>;
@@ -286,6 +305,31 @@ function LookupResponse({ onFeedback, rate }: { onFeedback: CopyFeedback; rate: 
   </>;
 }
 
+function DailyUsageResponse({ onFeedback, rate }: { onFeedback: CopyFeedback; rate: number }) {
+  return <>
+    <section className='api-docs-content-block'><h3>200 · Batch result</h3>
+      <p>A valid batch returns HTTP 200 even when some or all accounts have no available bill. Inspect each account’s <code>status</code> and <code>summary.status</code>. The example includes a bill, a saved zero-cost bill, an owned account without data, and a missing or inaccessible account.</p>
+      <CodeBlock title='JSON · Totals-only response' text={JSON.stringify(dailyUsageResponse(rate), null, 2)} onFeedback={onFeedback} />
+      <p><code>model_costs_enabled</code> is controlled by an administrator’s API setting and defaults to false. When false, every <code>models</code> field and the top-level <code>model_totals</code> field are omitted. Account totals remain available.</p>
+    </section>
+    <details className='api-docs-disclosure'><summary>Response with model costs enabled</summary><div className='api-docs-disclosure-body'><CodeBlock title='JSON · Model-cost response' text={JSON.stringify(dailyUsageResponse(rate, true), null, 2)} onFeedback={onFeedback} /></div></details>
+    <details className='api-docs-disclosure'><summary>Response fields <span>data</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={dailyUsageResponseFields} label='Fields in daily usage response data' /></div></details>
+    <details className='api-docs-disclosure'><summary>Summary fields <span>data.summary</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={dailyUsageSummaryFields} label='Daily usage availability and totals' /></div></details>
+    <details className='api-docs-disclosure'><summary>Account fields <span>data.accounts[]</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={dailyUsageAccountFields} label='Daily usage account result fields' /></div></details>
+    <details className='api-docs-disclosure'><summary>Model fields <span>models / model_totals</span></summary><div className='api-docs-disclosure-body'><FieldTable fields={dailyUsageModelFields} label='Per-account and combined model-cost fields' /></div></details>
+    <section className='api-docs-content-block'><h3>Availability and amounts</h3>
+      <ul className='api-docs-bullets'>
+        <li><code>complete</code>: every unique requested account has an available bill, including known zero-cost bills.</li>
+        <li><code>partial</code>: at least one account has a bill and at least one has <code>no_data</code> or <code>not_found</code>.</li>
+        <li><code>no_data</code>: no accounts have available bills. Both summary amount fields are <code>null</code>, even when every account is <code>not_found</code>.</li>
+      </ul>
+      <p>Amounts are decimal strings: CNY has eight decimal places and USD has two. <code>null</code> means unavailable; a saved zero is <code>"0.00000000"</code> / <code>"0.00"</code>. Use decimal arithmetic when processing amounts.</p>
+      <p>The response reports the configured exchange rate as a string, currently <code>{String(rate)}</code> CNY per USD. Each account’s USD total is calculated first; the summary sums these reported account totals. Model USD amounts add up to their account total, and combined model totals sum those account model amounts. Converting the combined CNY total once can differ by a few cents because of per-account rounding.</p>
+      <p>When model costs are enabled, <code>no_data</code> and <code>not_found</code> accounts have empty <code>models</code> arrays. If no accounts have data, <code>model_totals</code> is also empty. Requests never return credentials or start supplier queries.</p>
+    </section>
+  </>;
+}
+
 function SubmissionResponse({ onFeedback }: { onFeedback: CopyFeedback }) {
   return <>
     <section className='api-docs-content-block'><h3>Vendor response</h3>
@@ -333,6 +377,17 @@ function AuthJSONUpdateResponse({ onNavigate, onFeedback, rate }: Navigation & {
 }
 
 function Errors({ topic, onFeedback }: { topic: EndpointTopic; onFeedback: CopyFeedback }) {
+  if (topic === 'daily-usage') return <>
+    <section className='api-docs-content-block'><h3>Error responses</h3>
+      <p>Use the HTTP status and error code; message wording can change. Request-level validation or authentication failures use this error envelope. Individual <code>no_data</code> and <code>not_found</code> account results use the successful HTTP 200 response instead.</p>
+      <CodeBlock title='JSON · Local error example' text={JSON.stringify({ success: false, code: 'INVALID_DATE', message: 'Choose yesterday or an earlier date in Asia/Shanghai.' }, null, 2)} onFeedback={onFeedback} />
+      <ErrorTable errors={dailyUsageErrors} />
+    </section>
+    <section className='api-docs-content-block'><h3>Rate limits and retries</h3>
+      <p>The limit is 60 requests per minute per user, separate from account lookup and submission limits. A <code>429 RATE_LIMITED</code> response includes <code>Retry-After</code> and JSON <code>retry_after</code>, both in seconds. Wait that long before another request.</p>
+      <p>This endpoint only reads saved daily bills. Transient failures and 503/504 responses can be retried with a delay. Repeatedly requesting a <code>no_data</code> result does not collect a missing bill. Keep <code>X-Request-ID</code> when requesting support.</p>
+    </section>
+  </>;
   const lookup = topic === 'account-lookup';
   const update = topic === 'update-auth-json';
   const example = lookup ? { success: false, code: 'ACCOUNT_NOT_FOUND', message: 'The account could not be found.' } : update ? { success: false, code: 'AUTH_JSON_UPDATE_UNCONFIRMED', message: 'We could not confirm whether the update completed. Check the account before trying again.' } : { success: false, code: 'INVALID_PARAMETERS', message: 'Choose a supported Claude plan.' };
@@ -375,7 +430,7 @@ function EndpointDocumentation({ topic, section, baseURL, onNavigate, onFeedback
       <code>{endpoint.path}</code><CopyButton text={baseURL + endpoint.path} label='Full endpoint URL' iconOnly onFeedback={onFeedback} />
     </div>
     <p className='api-docs-base-caption'>Base URL · <code>{baseURL}</code></p>
-    <div className='api-docs-meta'><span>Scope <code>{endpoint.scope}</code></span><span>{endpoint.limit} per user{topic !== 'account-lookup' ? ' · shared with the web form' : ''}</span></div>
+    <div className='api-docs-meta'><span>Scope <code>{endpoint.scope}</code></span><span>{endpoint.limit} per user{topic === 'submit-account' || topic === 'update-auth-json' ? ' · shared with the web form' : ''}</span></div>
     <div className='api-docs-info'><Info aria-hidden='true' /><p>{endpoint.note}</p></div>
     <div className='api-docs-tabs' role='tablist' aria-label='Endpoint documentation sections'>
       {docSections.map((tab, index) => <button key={tab.id} type='button' role='tab'
@@ -388,7 +443,7 @@ function EndpointDocumentation({ topic, section, baseURL, onNavigate, onFeedback
       id={`${tabPrefix}-panel-${tab.id}`} aria-labelledby={`${tabPrefix}-tab-${tab.id}`} hidden={section !== tab.id} tabIndex={0}>
       {section === tab.id && (tab.id === 'parameters' ? <Parameters topic={topic} onNavigate={onNavigate} />
         : tab.id === 'example' ? <CurlExample topic={topic} baseURL={baseURL} onFeedback={onFeedback} />
-        : tab.id === 'response' ? topic === 'submit-account' ? <SubmissionResponse onFeedback={onFeedback} /> : <CurrencyDocumentation>{rate => topic === 'account-lookup' ? <LookupResponse rate={rate} onFeedback={onFeedback} /> : <AuthJSONUpdateResponse rate={rate} onNavigate={onNavigate} onFeedback={onFeedback} />}</CurrencyDocumentation>
+        : tab.id === 'response' ? topic === 'submit-account' ? <SubmissionResponse onFeedback={onFeedback} /> : <CurrencyDocumentation>{rate => topic === 'daily-usage' ? <DailyUsageResponse rate={rate} onFeedback={onFeedback} /> : topic === 'account-lookup' ? <LookupResponse rate={rate} onFeedback={onFeedback} /> : <AuthJSONUpdateResponse rate={rate} onNavigate={onNavigate} onFeedback={onFeedback} />}</CurrencyDocumentation>
         : <Errors topic={topic} onFeedback={onFeedback} />)}
     </div>)}
   </>;
