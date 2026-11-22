@@ -107,17 +107,38 @@ type RequestEvent struct {
 }
 
 type SyncEvent struct {
-	Event         string
-	Outcome       string
-	FailureStage  string
-	ErrorKind     string
-	DurationMS    int64
-	UpdatedCount  int
-	FailedCount   int
-	SkippedCount  int
-	Limit         int
-	WindowSeconds int
-	WaitSeconds   int
+	Event                 string
+	Outcome               string
+	FailureStage          string
+	ErrorKind             string
+	DurationMS            int64
+	UpdatedCount          int
+	FailedCount           int
+	SkippedCount          int
+	IncompleteCount       int
+	ValidationFailedCount int
+	Limit                 int
+	WindowSeconds         int
+	WaitSeconds           int
+}
+
+// CollectionEvent describes pagination only; it never includes account data.
+type CollectionEvent struct {
+	Complete                                                                         bool
+	TotalRecords, CollectedRecords, CompletedPages, FailedPage, PageSize, RetryCount int
+}
+
+func LogCollection(ctx context.Context, e CollectionEvent) {
+	emit(ctx, "TK_SUPPLIER_COLLECTION", struct {
+		traceFields
+		Complete         bool `json:"complete"`
+		TotalRecords     int  `json:"total_records"`
+		CollectedRecords int  `json:"collected_records"`
+		CompletedPages   int  `json:"completed_pages"`
+		FailedPage       int  `json:"failed_page,omitempty"`
+		PageSize         int  `json:"page_size"`
+		RetryCount       int  `json:"retry_count"`
+	}{fields(ctx), e.Complete, max(0, e.TotalRecords), max(0, e.CollectedRecords), max(0, e.CompletedPages), max(0, e.FailedPage), max(0, e.PageSize), max(0, e.RetryCount)})
 }
 
 type traceFields struct {
@@ -249,7 +270,7 @@ func LogRequest(ctx context.Context, e RequestEvent) {
 
 func LogSync(ctx context.Context, e SyncEvent) {
 	event := allowed(e.Event, "summary", "gate")
-	outcome := allowed(e.Outcome, "succeeded", "failed", "rejected", "skipped")
+	outcome := allowed(e.Outcome, "succeeded", "partial", "failed", "rejected", "skipped")
 	if event == "summary" && (outcome == "succeeded" || outcome == "skipped") && !allRequests() {
 		return
 	}
@@ -259,19 +280,21 @@ func LogSync(ctx context.Context, e SyncEvent) {
 	}
 	emit(ctx, "TK_ACCOUNT_SYNC", struct {
 		traceFields
-		Event            string `json:"event"`
-		Outcome          string `json:"outcome"`
-		FailureStage     string `json:"failure_stage,omitempty"`
-		ErrorKind        string `json:"error_kind,omitempty"`
-		DurationMS       int64  `json:"duration_ms"`
-		HTTPRequestCount int64  `json:"http_request_count"`
-		UpdatedCount     int    `json:"updated_count"`
-		FailedCount      int    `json:"failed_count"`
-		SkippedCount     int    `json:"skipped_count"`
-		Limit            int    `json:"limit,omitempty"`
-		WindowSeconds    int    `json:"window_seconds,omitempty"`
-		WaitSeconds      int    `json:"wait_seconds,omitempty"`
-	}{fields(ctx), event, outcome, stage, errorKind(e.ErrorKind), max(int64(0), e.DurationMS), RequestCount(ctx), max(0, e.UpdatedCount), max(0, e.FailedCount), max(0, e.SkippedCount), max(0, e.Limit), max(0, e.WindowSeconds), max(0, e.WaitSeconds)})
+		Event                 string `json:"event"`
+		Outcome               string `json:"outcome"`
+		FailureStage          string `json:"failure_stage,omitempty"`
+		ErrorKind             string `json:"error_kind,omitempty"`
+		DurationMS            int64  `json:"duration_ms"`
+		HTTPRequestCount      int64  `json:"http_request_count"`
+		UpdatedCount          int    `json:"updated_count"`
+		FailedCount           int    `json:"failed_count"`
+		SkippedCount          int    `json:"skipped_count"`
+		IncompleteCount       int    `json:"incomplete_count"`
+		ValidationFailedCount int    `json:"validation_failed_count"`
+		Limit                 int    `json:"limit,omitempty"`
+		WindowSeconds         int    `json:"window_seconds,omitempty"`
+		WaitSeconds           int    `json:"wait_seconds,omitempty"`
+	}{fields(ctx), event, outcome, stage, errorKind(e.ErrorKind), max(int64(0), e.DurationMS), RequestCount(ctx), max(0, e.UpdatedCount), max(0, e.FailedCount), max(0, e.SkippedCount), max(0, e.IncompleteCount), max(0, e.ValidationFailedCount), max(0, e.Limit), max(0, e.WindowSeconds), max(0, e.WaitSeconds)})
 }
 
 // LogSession records fixed operational state names only. Tokens, usernames,

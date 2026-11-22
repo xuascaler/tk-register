@@ -81,4 +81,5 @@ export type SyncConfig = {
   last_success_at: string | null;
   last_error: string;
   next_run_at: string | null;
+  last_outcome?: 'idle' | 'running' | 'succeeded' | 'partial' | 'failed' | 'skipped';
 };

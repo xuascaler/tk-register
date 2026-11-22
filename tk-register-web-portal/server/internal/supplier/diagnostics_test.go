@@ -21,7 +21,7 @@ func diagnosticEvents(t *testing.T, output string) []map[string]any {
 	t.Helper()
 	var events []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "TK_SUPPLIER_COLLECTION ") {
 			continue
 		}
 		if !strings.HasPrefix(line, "TK_SUPPLIER_REQUEST ") {

@@ -46,6 +46,7 @@ type accountSyncConfig struct {
 	LastRunAt          *time.Time `json:"last_run_at"`
 	LastSuccessAt      *time.Time `json:"last_success_at"`
 	LastError          string     `json:"last_error"`
+	LastOutcome        string     `json:"last_outcome"`
 	NextRunAt          *time.Time `json:"next_run_at"`
 }
 
@@ -71,6 +72,7 @@ func (a *app) syncConfig(ctx context.Context) (accountSyncConfig, error) {
 		return out, err
 	}
 	out = accountSyncConfig{Enabled: v.Bool("account_sync_enabled"), IntervalSeconds: v.Int("account_sync_interval_seconds"), Timezone: v.String("account_sync_timezone"), DataSource: "website", WebsiteUsername: v.String("account_sync_website_username"), PasswordConfigured: v.String("account_sync_website_password") != "", Running: running > 0, LastRunAt: state.LastStartedAt, LastSuccessAt: state.LastSuccessAt, LastError: state.LastError, NextRunAt: state.NextRunAt}
+	out.LastOutcome = state.Status
 	if state.Status == "running" && running == 0 {
 		out.LastError = "The last collection was interrupted. Previously collected data is retained."
 	}
@@ -411,6 +413,21 @@ func publicCollectionError(err error) string {
 	return "The supplier website could not be queried. Previously collected data is retained."
 }
 
+// Saved failures are historical observations, not live retry countdowns.
+func savedCollectionError(err error) string {
+	var upstream *supplier.Error
+	if errors.As(err, &upstream) && upstream.Code == supplier.CodeRateLimited {
+		if upstream.Stage == "login" {
+			return "Supplier sign-in is temporarily rate limited. This collection could not finish. Previously collected data is retained."
+		}
+		return "Supplier account queries are temporarily rate limited. This collection could not finish. Previously collected data is retained."
+	}
+	if _, _, stage, _ := supplier.RetryDetails(err); stage == "login_lock" {
+		return "A supplier sign-in was in progress. This collection could not finish. Previously collected data is retained."
+	}
+	return publicCollectionError(err)
+}
+
 func matchSupplierAccount(target core.SyncedAccount, records []supplier.Account) (*supplier.Account, error) {
 	var matches []int
 	for i := range records {
@@ -464,6 +481,9 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	defer func() {
 		if resultErr != nil {
 			summary.Outcome = "failed"
+			if summary.UpdatedCount > 0 {
+				summary.Outcome = "partial"
+			}
 			if summary.ErrorKind == "" || summary.ErrorKind == "unknown" {
 				summary.ErrorKind = syncDiagnosticError(resultErr)
 			}
@@ -485,7 +505,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		defer func() {
 			message := scheduleMessage
 			if message == "" && resultErr != nil {
-				message = publicCollectionError(resultErr)
+				message = savedCollectionError(resultErr)
 			}
 			skipped := errors.Is(resultErr, errSyncBusy)
 			if skipped {
@@ -494,7 +514,8 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 			_, retryAt, _, _ := supplier.RetryDetails(resultErr)
 			finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer finishCancel()
-			if err := a.store.FinishScheduledAccountSync(finishCtx, *claim, time.Now().UTC(), message, retryAt, skipped); err != nil && resultErr == nil {
+			partial := summary.UpdatedCount > 0 && (message != "" || resultErr != nil)
+			if err := a.store.FinishScheduledAccountSync(finishCtx, *claim, time.Now().UTC(), message, retryAt, skipped, partial); err != nil && resultErr == nil {
 				resultErr = err
 			}
 		}()
@@ -542,46 +563,82 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	// Collect reuses the shared supplier session when valid; account data is
 	// always read afresh. Query and login cooldowns remain separate.
 	records, collectionErr := a.collector().Collect(ctx, username, password)
+	partial, hasPartial := supplier.CollectionDetails(collectionErr)
+	partialSafe := hasPartial && partial.PartialSafe
 	if collectionErr != nil {
 		summary.ErrorKind = syncDiagnosticError(collectionErr)
 	}
 	// Persist a failed attempt even if the read deadline has expired. No further
 	// upstream work happens under this short persistence-only context.
-	saveCtx, saveCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	saveTimeout := 15 * time.Second
+	if accountID == 0 {
+		// A full inventory may contain thousands of independent transactions.
+		// One minute still fits within the seven-minute lease after collection.
+		saveTimeout = time.Minute
+	}
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), saveTimeout)
 	defer saveCancel()
 	at := time.Now().UTC()
 	failures := 0
 	for _, target := range targets {
 		message := ""
 		var record *supplier.Account
-		if collectionErr != nil {
-			message = publicCollectionError(collectionErr)
-		} else {
+		incomplete := false
+		if collectionErr == nil || partialSafe {
 			var e error
 			record, e = matchSupplierAccount(target, records)
 			if e != nil {
-				message = e.Error()
+				if collectionErr == nil {
+					message = e.Error()
+				} else {
+					// Missing or mismatching records in an incomplete inventory
+					// cannot prove that the supplier account is absent/changed.
+					incomplete = true
+				}
 			}
+			if partialSafe && (target.PlatformAccountID == nil || *target.PlatformAccountID == "") && (target.RemoteID == nil || *target.RemoteID == "") {
+				// Email uniqueness cannot be established from only a prefix.
+				record, incomplete = nil, true
+			}
+		} else {
+			incomplete = true
+		}
+		if incomplete {
+			message = savedCollectionError(collectionErr)
 		}
 		if message != "" {
-			failures++
-			summary.FailedCount++
 			if summary.ErrorKind == "unknown" {
 				summary.ErrorKind = "contract"
 			}
 			e := a.store.RecordAccountFailure(saveCtx, target.ID, target.IdentityKey, message, at)
-			if e != nil && !errors.Is(e, core.ErrAccountIdentityChanged) {
+			if errors.Is(e, core.ErrAccountIdentityChanged) {
+				summary.SkippedCount++
+				continue
+			}
+			if e != nil {
 				summary.ErrorKind = "persistence"
 				scheduleMessage = "Could not save account collection results."
 				return e
 			}
+			failures++
+			summary.FailedCount++
+			if incomplete {
+				summary.IncompleteCount++
+			} else {
+				summary.ValidationFailedCount++
+			}
 			continue
 		}
 		values := supplierAccountSnapshot(record)
-		e := a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, values, at, v.String("account_sync_timezone"))
+		observedAt := record.CollectedAt
+		if observedAt.IsZero() || observedAt.After(at) {
+			observedAt = at
+		}
+		e := a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, values, observedAt, v.String("account_sync_timezone"))
 		if core.IsValidationError(e) {
 			failures++
 			summary.FailedCount++
+			summary.ValidationFailedCount++
 			summary.ErrorKind = "contract"
 			e = a.store.RecordAccountFailure(saveCtx, target.ID, target.IdentityKey, "The supplier returned invalid usage data. Previously collected data is retained.", at)
 		} else if e == nil {
@@ -597,14 +654,22 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	}
 	message := ""
 	if collectionErr != nil {
-		message = publicCollectionError(collectionErr)
+		message = savedCollectionError(collectionErr)
 	} else if failures > 0 {
 		message = fmt.Sprintf("%d account(s) could not be updated. Their last successful data is retained.", failures)
 	}
 	if message == "" {
 		summary.Outcome, summary.ErrorKind = "succeeded", ""
+	} else if summary.UpdatedCount > 0 {
+		summary.Outcome = "partial"
+		message = fmt.Sprintf("Partial collection: %d updated, %d not updated. %s", summary.UpdatedCount, summary.FailedCount, message)
 	}
 	scheduleMessage = message
+	// A targeted request reports the requested account's saved outcome even
+	// when a later, unrelated inventory page could not be read.
+	if !scheduled && accountID != 0 && summary.UpdatedCount == 1 && failures == 0 {
+		return nil
+	}
 	// Preserve the saved failure but expose a supplier cooldown to direct callers.
 	if seconds, _, _, _ := supplier.RetryDetails(collectionErr); seconds > 0 {
 		return collectionErr

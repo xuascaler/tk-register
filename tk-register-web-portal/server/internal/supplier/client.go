@@ -99,6 +99,8 @@ type Account struct {
 	Reset5HAt            *time.Time
 	Reset7DAt            *time.Time
 	SourceUpdatedAt      *time.Time
+	// CollectedAt is when this complete page was validated, before any later retries.
+	CollectedAt time.Time
 }
 
 type Client struct {
@@ -137,6 +139,7 @@ type session struct {
 	targetReads          int
 	targetReadDelegate   func(context.Context, string, string, string) (int, []byte, error)
 	classifyReadErrors   bool
+	retryAccountQueries  bool
 }
 
 func (c *Client) newSession() *session {
@@ -161,83 +164,6 @@ func (c *Client) TestLogin(ctx context.Context, username, password string) error
 	s := c.newSession()
 	defer s.http.CloseIdleConnections()
 	return s.authenticate(ctx, username, password, true)
-}
-
-// Collect obtains a reusable session, then reads the website account list. A single expired
-// session can trigger one fresh login and one retry of the failed read. There
-// are no retries of login failures or any mutating vendor endpoints.
-func (c *Client) Collect(ctx context.Context, username, password string) ([]Account, error) {
-	s := c.newSession()
-	defer s.http.CloseIdleConnections()
-	if err := s.authenticate(ctx, username, password, false); err != nil {
-		return nil, err
-	}
-	accounts := make([]Account, 0)
-	seen := make(map[string]bool)
-	reauthenticated := false
-	for page := 1; page <= maxPages; page++ {
-		params := url.Values{
-			"status": {"all"}, "provider": {"claude"}, "account_type": {"2"},
-			"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)},
-		}
-		path := apiPrefix + "/accounts?" + params.Encode()
-		status, body, err := s.request(ctx, http.MethodGet, path, nil)
-		if err != nil {
-			return nil, err
-		}
-		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			if reauthenticated {
-				return nil, safeError(CodeSessionExpired)
-			}
-			reauthenticated = true
-			if err = s.reauthenticate(ctx, username, password); err != nil {
-				return nil, err
-			}
-			status, body, err = s.request(ctx, http.MethodGet, path, nil)
-			if err != nil {
-				return nil, err
-			}
-			if status == http.StatusUnauthorized || status == http.StatusForbidden {
-				return nil, safeError(CodeSessionExpired)
-			}
-		}
-		if err = readStatus(status); err != nil {
-			return nil, err
-		}
-		var result struct {
-			List  json.RawMessage `json:"list"`
-			Total json.RawMessage `json:"total"`
-		}
-		if common.Unmarshal(body, &result) != nil {
-			return nil, contractError(page, "invalid response envelope")
-		}
-		total, err := optionalInt(result.Total)
-		if err != nil || total == nil || *total > maxPages*pageSize || len(result.List) == 0 || strings.TrimSpace(string(result.List)) == "null" {
-			return nil, contractError(page, "missing or invalid total/list, or inventory exceeds the supported limit")
-		}
-		var rows []rawAccount
-		if common.Unmarshal(result.List, &rows) != nil || len(rows) > pageSize {
-			return nil, contractError(page, "invalid list or too many rows")
-		}
-		for index, row := range rows {
-			account, err := parseAccount(row)
-			if err != nil {
-				return nil, contractError(page, fmt.Sprintf("row %d contains invalid account or usage fields", index+1))
-			}
-			if seen[account.ID] {
-				return nil, contractError(page, "an account record was repeated across pages; the supplier inventory may have changed during pagination")
-			}
-			seen[account.ID] = true
-			accounts = append(accounts, account)
-		}
-		if int64(len(accounts)) >= *total {
-			return accounts, nil
-		}
-		if len(rows) == 0 {
-			return nil, contractError(page, "an empty page was returned before the reported total")
-		}
-	}
-	return nil, contractError(maxPages, "pagination limit reached before the reported total")
 }
 
 func (s *session) request(ctx context.Context, method, path string, payload any) (int, []byte, error) {
@@ -315,6 +241,13 @@ func (s *session) request(ctx context.Context, method, path string, payload any)
 		if err := s.invalidateCurrent(ctx); err != nil {
 			return 0, nil, err
 		}
+	}
+	if s.retryAccountQueries && queryRequest && response.StatusCode == http.StatusTooManyRequests {
+		wait := fallbackCooldown
+		if retry := cooldownRetryAfter(response.Header.Get("Retry-After"), time.Now()); retry != nil {
+			wait = time.Duration(max(int64(1), *retry)) * time.Second
+		}
+		return 0, nil, retryError("accounts", time.Now().Add(wait), false)
 	}
 	if s.classifyReadErrors && response.StatusCode == http.StatusTooManyRequests {
 		return 0, nil, safeError(CodeRateLimited)

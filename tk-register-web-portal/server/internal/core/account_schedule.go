@@ -147,7 +147,7 @@ func (s *Store) ClaimScheduledAccountSync(ctx context.Context, now time.Time) (*
 // Finalization reads the current schedule, rather than writing the claimed
 // schedule back. An interval edited during a run therefore retains its new grid.
 // The started_at guard also prevents a stale worker overwriting a later claim.
-func (s *Store) FinishScheduledAccountSync(ctx context.Context, claim AccountSyncClaim, at time.Time, message string, retryAt time.Time, skipped bool) error {
+func (s *Store) FinishScheduledAccountSync(ctx context.Context, claim AccountSyncClaim, at time.Time, message string, retryAt time.Time, skipped, partial bool) error {
 	at = at.UTC().Truncate(time.Millisecond)
 	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		values, err := s.values(tx.Clauses(clause.Locking{Strength: "UPDATE"}))
@@ -164,6 +164,10 @@ func (s *Store) FinishScheduledAccountSync(ctx context.Context, claim AccountSyn
 		updates := map[string]any{"last_finished_at": at, "last_error": message, "status": "failed"}
 		if skipped {
 			updates["status"] = "skipped"
+		} else if partial {
+			// Individual snapshots can advance while the full collection is
+			// incomplete. Preserve the last fully successful round's timestamp.
+			updates["status"] = "partial"
 		} else if message == "" {
 			updates["status"], updates["last_success_at"] = "succeeded", at
 		}
