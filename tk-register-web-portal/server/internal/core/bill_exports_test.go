@@ -88,6 +88,9 @@ func TestBillExportFreezesAllCurrentUserClaudeAccountsAndSnapshotIDs(t *testing.
 	}
 	found := false
 	for _, row := range rows {
+		if row.Username != user.Email {
+			t.Fatalf("actual account owner missing from export snapshot: %+v", row)
+		}
 		if row.LocalAccountID == first.ID {
 			found = true
 			if row.LatestSubmittedAt == nil || !row.LatestSubmittedAt.Equal(now.Add(time.Minute)) {
@@ -115,8 +118,129 @@ func TestBillExportFreezesAllCurrentUserClaudeAccountsAndSnapshotIDs(t *testing.
 	if frozen[0].LatestSubmittedAt == nil || !frozen[0].LatestSubmittedAt.Equal(now.Add(time.Minute)) {
 		t.Fatalf("submission time was not frozen: %+v", frozen[0])
 	}
-	if frozen[0].AccountEmail != "account-00@example.com" || frozen[0].PlatformAccountID == nil || *frozen[0].PlatformAccountID != currentID {
+	if frozen[0].Username != user.Email || frozen[0].AccountEmail != "account-00@example.com" || frozen[0].PlatformAccountID == nil || *frozen[0].PlatformAccountID != currentID {
 		t.Fatalf("selection was not frozen: %+v", frozen[0])
+	}
+}
+
+func TestBillExportOptionalDescendantsFreezeActualOwnersAndFullTree(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	child := hierarchyChild(t, s, owner, "export-child@example.com")
+	grandchild := hierarchyChild(t, s, child, "export-grandchild@example.com")
+	greatGrandchild := hierarchyChild(t, s, grandchild, "export-great-grandchild@example.com")
+	sibling := hierarchyChild(t, s, owner, "export-sibling@example.com")
+	users := []User{owner, child, grandchild, greatGrandchild, sibling, admin}
+	owners := map[string]string{}
+	for i, user := range users {
+		email := fmt.Sprintf("tree-account-%d@example.com", i)
+		syncSubmission(t, s, user.ID, vendor.ID, version.ID, email, "claude/cc-pro", "accepted", fmt.Sprint(700+i), now)
+		owners[email] = user.Email
+	}
+	self, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now)
+	if err != nil || self.IncludeSubUsers || self.AccountCount != 1 {
+		t.Fatalf("default export must include only direct ownership: %+v %v", self, err)
+	}
+	all, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-10", "2026-11-11", now, true)
+	if err != nil || !all.IncludeSubUsers || all.AccountCount != 5 || all.UsageSource != "modified" {
+		t.Fatalf("full descendant export: %+v %v", all, err)
+	}
+	rows, err := s.BillExportAccounts(ctx, all.ID)
+	if err != nil || len(rows) != 5 {
+		t.Fatalf("descendant selection: %+v %v", rows, err)
+	}
+	seen := map[uint64]bool{}
+	for _, row := range rows {
+		if seen[row.LocalAccountID] || row.Username != owners[row.AccountEmail] || row.Username == admin.Email {
+			t.Fatalf("repeated visibility, wrong owner, or foreign account: %+v", row)
+		}
+		seen[row.LocalAccountID] = true
+		// Each selected account still contributes every valid date/model line.
+		for _, date := range []string{"2026-11-10", "2026-11-11"} {
+			day := AccountUsageDay{AccountID: row.LocalAccountID, IdentityKey: row.IdentityKey, UsageDate: date, LastSuccessAt: &now}
+			if err := s.DB.Create(&day).Error; err != nil {
+				t.Fatal(err)
+			}
+			for _, model := range []string{"claude-fable-5", "claude-opus-5"} {
+				usage := AccountDailyUsageModified{DayID: day.ID, Model: model, CostCNY: "3.25", InputTokens: "10", OutputTokens: "20", CacheReadTokens: "30", CacheWriteTokens: "40"}
+				if err := s.DB.Create(&usage).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	usage, err := s.ModifiedBillExportRows(ctx, all.ID)
+	if err != nil || len(usage) != 20 {
+		t.Fatalf("date/model lines were dropped or duplicated: %+v %v", usage, err)
+	}
+	subtree, err := s.CreateBillExport(ctx, admin.ID, child.ID, "2026-11-10", "2026-11-11", now, true)
+	if err != nil || subtree.AccountCount != 3 {
+		t.Fatalf("subtree includes ancestors or siblings: %+v %v", subtree, err)
+	}
+	newChild := hierarchyChild(t, s, greatGrandchild, "export-new-child@example.com")
+	syncSubmission(t, s, newChild.ID, vendor.ID, version.ID, "new-after-export@example.com", "claude/cc-pro", "accepted", "800", now.Add(time.Minute))
+	if err := s.DB.Model(&User{}).Where("id = ?", child.ID).Update("email", "renamed-child@example.com").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.Model(&SyncedAccount{}).Where("user_id = ?", child.ID).Update("user_id", admin.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := s.BillExportAccounts(ctx, all.ID)
+	if err != nil || len(frozen) != 5 {
+		t.Fatalf("new descendant changed an existing export: %+v %v", frozen, err)
+	}
+	for _, row := range frozen {
+		if row.Username != owners[row.AccountEmail] {
+			t.Fatalf("later owner changes altered the snapshot: %+v", row)
+		}
+	}
+	usage, err = s.ModifiedBillExportRows(ctx, all.ID)
+	if err != nil || len(usage) != 20 {
+		t.Fatalf("later ownership changed frozen bill lines: %+v %v", usage, err)
+	}
+}
+
+func TestBillExportDescendantsWorkWithoutDirectAccounts(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	child := hierarchyChild(t, s, owner, "only-child@example.com")
+	syncSubmission(t, s, child.ID, vendor.ID, version.ID, "only-child-account@example.com", "claude/cc-pro", "accepted", "900", now)
+	if _, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-11", "2026-11-11", now, false); !IsValidationError(err) {
+		t.Fatal("direct-only empty export accepted", err)
+	}
+	job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-11", "2026-11-11", now, true)
+	if err != nil || job.AccountCount != 1 {
+		t.Fatalf("root without direct accounts could not export its child: %+v %v", job, err)
+	}
+	rows, err := s.BillExportAccounts(ctx, job.ID)
+	if err != nil || len(rows) != 1 || rows[0].Username != child.Email {
+		t.Fatalf("child owner was replaced with root: %+v %v", rows, err)
+	}
+}
+
+func TestBillExportScopeColumnsMigrateExistingRows(t *testing.T) {
+	s, owner, admin, vendor, version, now := billExportFixture(t)
+	ctx := context.Background()
+	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "before-upgrade@example.com", "claude/cc-pro", "accepted", "1000", now)
+	job, err := s.CreateBillExport(ctx, admin.ID, owner.ID, "2026-11-11", "2026-11-11", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"ALTER TABLE bill_export_jobs DROP COLUMN include_sub_users", "ALTER TABLE bill_export_accounts DROP COLUMN username"} {
+		if err := s.DB.Exec(query).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.migrateBillExports(); err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.BillExport(ctx, admin.ID, job.ID)
+	if err != nil || old.IncludeSubUsers {
+		t.Fatalf("existing export gained descendant scope: %+v %v", old, err)
+	}
+	rows, err := s.BillExportAccounts(ctx, job.ID)
+	if err != nil || len(rows) != 1 || rows[0].Username != "" {
+		t.Fatalf("existing snapshot was recomputed during migration: %+v %v", rows, err)
 	}
 }
 

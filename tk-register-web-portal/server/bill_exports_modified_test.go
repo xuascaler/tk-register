@@ -72,8 +72,8 @@ func TestModifiedBillExportUsesStoredRowsAndPreservesEmptyPeriods(t *testing.T) 
 		t.Fatalf("incorrect period totals: %+v", report)
 	}
 	tokens := "18014398509481986"
-	if report.Details[0][3] != "local-model" || report.Details[0][4] != tokens || report.Details[0][5] != "20" || report.Details[0][6] != "4" || report.Details[0][7] != "6" ||
-		report.Details[0][8] != result.TotalCNY || report.Summary[1].Account != accounts[2].Account || report.Summary[1].AmountCNY == nil || *report.Summary[1].AmountCNY != "0.00" {
+	if report.Details[0][4] != "local-model" || report.Details[0][5] != tokens || report.Details[0][6] != "20" || report.Details[0][7] != "4" || report.Details[0][8] != "6" ||
+		report.Details[0][9] != result.TotalCNY || report.Summary[1].Account != accounts[2].Account || report.Summary[1].AmountCNY == nil || *report.Summary[1].AmountCNY != "0.00" {
 		t.Fatalf("wrong account/model data: %+v", report)
 	}
 	book, err := excelize.OpenReader(bytes.NewReader(result.Artifact))
@@ -81,7 +81,7 @@ func TestModifiedBillExportUsesStoredRowsAndPreservesEmptyPeriods(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer book.Close()
-	for cell, want := range map[string]string{"D7": "local-model", "E7": tokens, "I7": result.TotalCNY, "D8": "free"} {
+	for cell, want := range map[string]string{"E7": "local-model", "F7": tokens, "J7": result.TotalCNY, "E8": "free"} {
 		got, err := book.GetCellValue("Bill details", cell, excelize.Options{RawCellValue: true})
 		if err != nil || got != want {
 			t.Fatalf("XLSX cell %s = %q, want %q, err %v", cell, got, want, err)

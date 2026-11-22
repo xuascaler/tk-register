@@ -20,6 +20,7 @@ func StoredUsageReport(accounts []Account, rows []StoredUsageRow) (Report, error
 	if len(rows) > MaxRows {
 		return out, ErrFormat
 	}
+	accounts, _, _, conflicts := selectAccounts(accounts, false)
 	byAccount := make(map[string]map[string]*DailyRow, len(accounts))
 	for _, account := range accounts {
 		byAccount[account.LocalAccountID] = make(map[string]*DailyRow)
@@ -39,9 +40,14 @@ func StoredUsageReport(accounts []Account, rows []StoredUsageRow) (Report, error
 		}
 	}
 	grandTotal := new(big.Rat)
-	for _, account := range accounts {
+	for i, account := range accounts {
 		models := byAccount[account.LocalAccountID]
 		if len(models) == 0 {
+			continue
+		}
+		if reason := conflicts[i]; reason != "" {
+			out.Summary = append(out.Summary, Summary{Username: account.Username, Account: account.Account, PlatformAccountID: account.PlatformAccountID, LatestSubmittedAt: account.LatestSubmittedAt, Plan: account.Plan, Status: "needs_review", Reason: reason})
+			out.Review = append(out.Review, Review{Username: account.Username, Account: account.Account, PlatformAccountID: account.PlatformAccountID, Reason: reason})
 			continue
 		}
 		names := make([]string, 0, len(models))
@@ -54,10 +60,10 @@ func StoredUsageReport(accounts []Account, rows []StoredUsageRow) (Report, error
 			row := models[name]
 			value, _ := new(big.Rat).SetString(row.CostCNY)
 			subtotal.Add(subtotal, value)
-			out.Details = append(out.Details, []string{account.Account, account.PlatformAccountID, submittedTime(account.LatestSubmittedAt), name, row.InputTokens, row.OutputTokens, row.CacheReadTokens, row.CacheWriteTokens, row.CostCNY})
+			out.Details = append(out.Details, []string{account.Username, account.Account, account.PlatformAccountID, submittedTime(account.LatestSubmittedAt), name, row.InputTokens, row.OutputTokens, row.CacheReadTokens, row.CacheWriteTokens, row.CostCNY})
 		}
 		cost := amount(subtotal)
-		out.Summary = append(out.Summary, Summary{Account: account.Account, PlatformAccountID: account.PlatformAccountID, LatestSubmittedAt: account.LatestSubmittedAt, Plan: account.Plan, RowCount: len(models), AmountCNY: &cost, Status: "matched"})
+		out.Summary = append(out.Summary, Summary{Username: account.Username, Account: account.Account, PlatformAccountID: account.PlatformAccountID, LatestSubmittedAt: account.LatestSubmittedAt, Plan: account.Plan, RowCount: len(models), AmountCNY: &cost, Status: "matched"})
 		grandTotal.Add(grandTotal, subtotal)
 	}
 	if len(out.Details) > 0 {

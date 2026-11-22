@@ -41,7 +41,7 @@ func TestFilterExcludesOtherUsersAndGrandTotals(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if r.TotalCNY != "12.34" || len(r.Details) != 1 || len(r.Columns) != 9 || r.Summary[0].Status != "matched" {
+	if r.TotalCNY != "12.34" || len(r.Details) != 1 || len(r.Columns) != 10 || r.Summary[0].Status != "matched" {
 		t.Fatalf("unexpected report %+v", r)
 	}
 	for _, row := range r.Details {
@@ -88,9 +88,9 @@ func TestMoneyExactAndWorkbookLiteralText(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer f.Close()
-	formula, _ := f.GetCellFormula("Bill details", "A7")
-	got, _ := f.GetCellValue("Bill details", "A7")
-	amount, _ := f.GetCellValue("Account summary", "F7", excelize.Options{RawCellValue: true})
+	formula, _ := f.GetCellFormula("Bill details", "B7")
+	got, _ := f.GetCellValue("Bill details", "B7")
+	amount, _ := f.GetCellValue("Account summary", "G7", excelize.Options{RawCellValue: true})
 	if formula != "" || got != email || amount != "0.30000001" {
 		t.Fatalf("literal/numeric mismatch %q %q %q", formula, got, amount)
 	}
@@ -107,7 +107,7 @@ func TestUnsupportedOrInvalidSourceFails(t *testing.T) {
 		t.Fatal("invalid file accepted")
 	}
 	f := excelize.NewFile()
-	_ = f.SetCellStr("Sheet1", "A1", "Changed contract")
+	_ = f.SetCellStr("Sheet1", "B1", "Changed contract")
 	b, _ := f.WriteToBuffer()
 	_ = f.Close()
 	if _, e := Filter(b.Bytes(), nil); e == nil {
@@ -140,7 +140,7 @@ func TestLargeTokenCountersStayExactInWorkbook(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	got, err := f.GetCellValue("Bill details", "E7", excelize.Options{RawCellValue: true})
+	got, err := f.GetCellValue("Bill details", "F7", excelize.Options{RawCellValue: true})
 	if err != nil || got != row[3] {
 		t.Fatalf("token precision lost: %q %v", got, err)
 	}
@@ -166,8 +166,8 @@ func TestSubmissionTimesAreBeijingDatesInBothWorkbookSheets(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTime := "2026-11-14 14:15:29"
-	if r.Columns[2] != "Submitted" || r.Details[0][2] != wantTime || r.Details[1][2] != wantTime ||
-		r.Details[2][2] != "—" || r.Details[3][2] != "—" || r.TotalCNY != "1.00" {
+	if r.Columns[3] != "Submitted" || r.Details[0][3] != wantTime || r.Details[1][3] != wantTime ||
+		r.Details[2][3] != "—" || r.Details[3][3] != "—" || r.TotalCNY != "1.00" {
 		t.Fatalf("incorrect timestamp propagation or totals: %+v", r)
 	}
 	b, err := Workbook(r)
@@ -180,15 +180,15 @@ func TestSubmissionTimesAreBeijingDatesInBothWorkbookSheets(t *testing.T) {
 	}
 	defer f.Close()
 	for _, sheet := range []string{"Account summary", "Bill details"} {
-		header, err := f.GetCellValue(sheet, "C6")
+		header, err := f.GetCellValue(sheet, "D6")
 		if err != nil || header != "Submitted" {
 			t.Fatalf("%s missing Submitted header: %q %v", sheet, header, err)
 		}
-		formatted, err := f.GetCellValue(sheet, "C7")
+		formatted, err := f.GetCellValue(sheet, "D7")
 		if err != nil || formatted != wantTime {
 			t.Fatalf("%s timestamp changed timezone: %q %v", sheet, formatted, err)
 		}
-		raw, err := f.GetCellValue(sheet, "C7", excelize.Options{RawCellValue: true})
+		raw, err := f.GetCellValue(sheet, "D7", excelize.Options{RawCellValue: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -202,12 +202,12 @@ func TestSubmissionTimesAreBeijingDatesInBothWorkbookSheets(t *testing.T) {
 		}
 	}
 	for _, check := range []struct{ sheet, cell, want string }{
-		{"Account summary", "C8", "—"}, {"Account summary", "C9", "—"},
-		{"Bill details", "C8", wantTime}, {"Bill details", "C9", "—"}, {"Bill details", "C10", "—"},
-		{"Bill details", "D7", "claude-test"}, {"Bill details", "E7", "10"},
-		{"Bill details", "F7", "20"}, {"Bill details", "G7", "30"}, {"Bill details", "H7", "40"},
-		{"Bill details", "I7", "0.10"}, {"Account summary", "F7", "0.30"},
-		{"Account summary", "F11", "1.00"},
+		{"Account summary", "D8", "—"}, {"Account summary", "D9", "—"},
+		{"Bill details", "D8", wantTime}, {"Bill details", "D9", "—"}, {"Bill details", "D10", "—"},
+		{"Bill details", "E7", "claude-test"}, {"Bill details", "F7", "10"},
+		{"Bill details", "G7", "20"}, {"Bill details", "H7", "30"}, {"Bill details", "I7", "40"},
+		{"Bill details", "J7", "0.10"}, {"Account summary", "G7", "0.30"},
+		{"Account summary", "G11", "1.00"},
 	} {
 		value, err := f.GetCellValue(check.sheet, check.cell)
 		if err != nil || value != check.want {

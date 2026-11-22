@@ -54,7 +54,7 @@ func Daily(data []byte, accounts []Account) ([]DailyAccount, error) {
 	// Combine duplicate date/model lines exactly (including counters > 2^53).
 	grouped := map[string]map[string]*DailyRow{}
 	for _, line := range report.Details {
-		id, model := line[1], line[3]
+		id, model := line[2], line[4]
 		if len(model) > 254 {
 			return nil, ErrFormat
 		}
@@ -66,7 +66,7 @@ func Daily(data []byte, accounts []Account) ([]DailyAccount, error) {
 			row = newDailyRow(model)
 			grouped[id][model] = row
 		}
-		if err := row.add(DailyRow{InputTokens: line[4], OutputTokens: line[5], CacheReadTokens: line[6], CacheWriteTokens: line[7], CostCNY: line[8]}); err != nil {
+		if err := row.add(DailyRow{InputTokens: line[5], OutputTokens: line[6], CacheReadTokens: line[7], CacheWriteTokens: line[8], CostCNY: line[9]}); err != nil {
 			return nil, err
 		}
 	}

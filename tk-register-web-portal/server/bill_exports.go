@@ -51,12 +51,13 @@ func billJobDTO(job core.BillExportJob, includeSource bool) map[string]any {
 	}
 	summaryCount := job.AccountCount
 	if job.UsageSource == "modified" {
-		summaryCount = job.MatchedAccountCount
+		summaryCount = job.MatchedAccountCount + job.ReviewAccountCount
 	}
 	result := map[string]any{
 		"id": strconv.FormatUint(job.ID, 10), "status": job.Status,
 		"download_filename": billExportFilename(job),
 		"user":              map[string]string{"id": strconv.FormatUint(job.TargetUserID, 10), "email": job.UserEmail},
+		"include_sub_users": job.IncludeSubUsers,
 		"start_date":        job.StartDate, "end_date": job.EndDate, "created_at": job.CreatedAt, "finished_at": job.FinishedAt, "expires_at": job.ExpiresAt,
 		"account_count": job.AccountCount, "matched_account_count": job.MatchedAccountCount, "review_account_count": job.ReviewAccountCount,
 		"summary_count": summaryCount, "row_count": job.RowCount, "total_cny": job.TotalCNY, "currency": "CNY", "error": job.ErrorMessage,
@@ -95,9 +96,10 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 			ok(w, map[string]any{"items": items})
 		case "POST":
 			var input struct {
-				UserID    string `json:"user_id"`
-				StartDate string `json:"start_date"`
-				EndDate   string `json:"end_date"`
+				UserID          string `json:"user_id"`
+				IncludeSubUsers bool   `json:"include_sub_users"`
+				StartDate       string `json:"start_date"`
+				EndDate         string `json:"end_date"`
 			}
 			if !decode(w, r, &input) {
 				return true
@@ -116,7 +118,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 				rateFailure(w, retry)
 				return true
 			}
-			job, err := a.store.CreateBillExport(r.Context(), actor.ID, userID, input.StartDate, input.EndDate, time.Now().UTC())
+			job, err := a.store.CreateBillExport(r.Context(), actor.ID, userID, input.StartDate, input.EndDate, time.Now().UTC(), input.IncludeSubUsers)
 			if core.IsValidationError(err) {
 				fail(w, 400, "INVALID_REQUEST", err.Error())
 			} else if err != nil {
@@ -304,7 +306,7 @@ func (a *app) processBillExport(parent context.Context) error {
 	}
 	accounts := make([]billing.Account, 0, len(selection))
 	for _, row := range selection {
-		accounts = append(accounts, billing.Account{LocalAccountID: strconv.FormatUint(row.LocalAccountID, 10), Account: row.AccountEmail, Plan: row.Plan, PlatformAccountID: billString(row.PlatformAccountID), SupplierRecordID: billString(row.SupplierRecordID), RemoteID: billString(row.RemoteID), IdentityKey: row.IdentityKey, LatestSubmittedAt: row.LatestSubmittedAt})
+		accounts = append(accounts, billing.Account{LocalAccountID: strconv.FormatUint(row.LocalAccountID, 10), Username: row.Username, Account: row.AccountEmail, Plan: row.Plan, PlatformAccountID: billString(row.PlatformAccountID), SupplierRecordID: billString(row.SupplierRecordID), RemoteID: billString(row.RemoteID), IdentityKey: row.IdentityKey, LatestSubmittedAt: row.LatestSubmittedAt})
 	}
 	var report billing.Report
 	if job.UsageSource == "modified" {
@@ -324,6 +326,7 @@ func (a *app) processBillExport(parent context.Context) error {
 		return finishFailure("INVALID_BILL_FORMAT", "The bill format could not be verified. No incomplete report was generated.")
 	}
 	report.UserEmail, report.StartDate, report.EndDate = job.UserEmail, job.StartDate, job.EndDate
+	report.IncludeSubUsers = job.IncludeSubUsers
 	artifact, err := billing.Workbook(report)
 	if err != nil {
 		return finishFailure("REPORT_FAILED", "The filtered Excel report could not be generated.")
