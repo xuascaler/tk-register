@@ -50,7 +50,8 @@ type settingSpec struct {
 }
 
 var specs = []settingSpec{
-	{"user_overview_model_costs_enabled", "overview", "boolean", "false", "Show model costs and model-level usage on personal account pages and APIs. Management views always retain model details.", 0, 0, nil},
+	{"user_overview_model_costs_enabled", "overview", "boolean", "false", "Show model costs and model-level usage on personal account pages. Management views always retain model details.", 0, 0, nil},
+	{"api_user_overview_model_costs_enabled", "overview", "boolean", "false", "Show model costs in the personal daily usage API. Independent of the personal page setting and the Accounts data source.", 0, 0, nil},
 	{"model_usage_source", "overview", "enum", "modified", "Data source for super administrators in Accounts Overview and Daily usage.", 0, 0, []string{"modified", "raw"}},
 	{"fable_trigger_percent", "daily_usage", "decimal", "19", "Allocate the combined Fable cost when its share exceeds this percentage.", 0, 100, nil},
 	{"fable_min_percent", "daily_usage", "decimal", "16", "Lower bound for the allocated Fable share on a new account day.", 0, 100, nil},
@@ -159,6 +160,18 @@ func (s *Store) ModelUsageSettings(ctx context.Context) (source string, personal
 		}
 	}
 	return source, personalDetails && source != "raw", err
+}
+
+// The external daily usage API has its own model visibility control. Its saved
+// billing source is fixed and never follows the browser's source selection.
+func (s *Store) APIUserModelCostsEnabled(ctx context.Context) (bool, error) {
+	var row Setting
+	err := s.DB.WithContext(ctx).Select("value").
+		Where(clause.Eq{Column: "key", Value: "api_user_overview_model_costs_enabled"}).First(&row).Error
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return row.Value == "true", err
 }
 
 func (s *Store) Descriptors(ctx context.Context) ([]SettingDescriptor, error) {

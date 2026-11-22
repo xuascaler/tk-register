@@ -137,6 +137,10 @@ func (a *app) serve(w http.ResponseWriter, r *http.Request) {
 		a.claudeAccountLookupAPI(w, r)
 		return
 	}
+	if r.URL.Path == claudeAccountDailyUsageAPIPath {
+		a.claudeAccountDailyUsageAPI(w, r)
+		return
+	}
 	if r.URL.Path == claudeAccountAuthJSONAPIPath {
 		a.claudeAccountAuthJSONAPI(w, r)
 		return

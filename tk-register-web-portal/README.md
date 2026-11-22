@@ -196,6 +196,24 @@ This endpoint requires `accounts:read` and both exact query identifiers, with no
 
 See the [Account Lookup API reference](docs/account-lookup-api.md) for cURL examples, response fields, null/zero/freshness behavior and error handling. The [Account usage collection guide](docs/account-sync.md) explains the default 300-second collection schedule and administrator configuration.
 
+### Saved daily usage batch API
+
+```http
+POST /tk-register/api/v1/vendors/tk-register-0/claude/accounts/daily-usage
+Authorization: Bearer <personal token with accounts:read>
+Content-Type: application/json
+```
+
+Send exactly `username`, `accounts` (1–100 input strings), and `date` (`YYYY-MM-DD`, yesterday or earlier in `Asia/Shanghai`). The username must match the token owner, including administrator and super-administrator tokens. Requests never include sub-users implicitly. Account identifiers are normalized, deduplicated, and returned in first occurrence order; the input limit applies before deduplication. The JSON body limit is 64 KiB, and the separate per-user limit is 60 requests per minute with `Retry-After` on 429.
+
+This endpoint only reads saved `account_daily_usages_modifiled` bills for the token owner's matching accounts. It does not use global model source selection, fetch supplier bills, trigger synchronization, read Raw fallback data, or treat missing days as zero. Account results are `ok`, `no_data`, or `not_found`; inaccessible accounts use the same `not_found` result as missing accounts. A username mismatch rejects the request with 404, while mixed or entirely unavailable account batches return 200 with availability counts and `summary.status` (`complete`, `partial`, or `no_data`).
+
+Costs are decimal strings (`cost_cny` with eight places, `cost_usd` with two), with the configured exchange rate returned as a string. Missing bill amounts are null. USD summary totals sum the per-account USD amounts; per-model cents are reconciled within each account so account/model totals agree.
+
+**Config → Overview → `api_user_overview_model_costs_enabled`** is a super-administrator-only boolean, default `false`. It controls model details in this API independently of `user_overview_model_costs_enabled` and `model_usage_source`. Choosing Raw for the website must not disable this API setting. When false, responses omit every account's `models` and the top-level `model_totals`, while preserving account and summary totals. When true, unavailable accounts have empty model arrays. The public API documentation describes saved daily bills without exposing internal source or ratio fields.
+
+See the [Daily Usage API reference](docs/daily-usage-api.md) for request examples, complete response fields, precision rules, and errors. The in-app guide is `/tk-register#/docs/daily-usage`.
+
 ### Auth JSON updates
 
 ```http

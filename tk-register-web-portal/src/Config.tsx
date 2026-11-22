@@ -190,7 +190,7 @@ export default function Config({
             checked={String(value) === 'true'}
             onChange={(event) => update(setting, String(event.target.checked))}
           />
-          <span aria-hidden='true'>{setting.key === 'user_overview_model_costs_enabled' ? String(value) === 'true' ? 'Enabled' : 'Disabled' : String(value)}</span>
+          <span aria-hidden='true'>{setting.key === 'user_overview_model_costs_enabled' || setting.key === 'api_user_overview_model_costs_enabled' ? String(value) === 'true' ? 'Enabled' : 'Disabled' : String(value)}</span>
         </label>
       );
     if (setting.options?.length)
@@ -402,7 +402,7 @@ export default function Config({
                             className='cell-description'
                             id={`description-${setting.key}`}
                           >
-                            {rawSource && setting.key === 'user_overview_model_costs_enabled' ? 'Personal model details are disabled when Raw data is selected. Select Modified data to enable this switch.' : setting.description}
+                            {setting.key === 'api_user_overview_model_costs_enabled' ? 'Include per-model costs in the Daily usage API. Disabled by default; account totals remain available. This API switch is independent of personal website model details and the model usage source.' : rawSource && setting.key === 'user_overview_model_costs_enabled' ? 'Personal model details are disabled when Raw data is selected. Select Modified data to enable this switch.' : setting.description}
                           </td>
                         </tr>
                       ))}
