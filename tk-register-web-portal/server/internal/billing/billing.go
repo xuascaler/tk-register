@@ -30,6 +30,7 @@ var integerPattern = regexp.MustCompile(`^[0-9]{1,18}$`)
 
 type Account struct {
 	LocalAccountID    string
+	Username          string
 	Account           string
 	Plan              string
 	PlatformAccountID string
@@ -39,6 +40,7 @@ type Account struct {
 	LatestSubmittedAt *time.Time
 }
 type Summary struct {
+	Username          string     `json:"username"`
 	Account           string     `json:"account"`
 	PlatformAccountID string     `json:"platform_account_id"`
 	LatestSubmittedAt *time.Time `json:"latest_submitted_at"`
@@ -49,20 +51,22 @@ type Summary struct {
 	Reason            string     `json:"reason,omitempty"`
 }
 type Review struct {
+	Username          string `json:"username"`
 	Account           string `json:"account"`
 	PlatformAccountID string `json:"platform_account_id"`
 	Reason            string `json:"reason"`
 }
 type Report struct {
-	UserEmail string     `json:"user_email"`
-	StartDate string     `json:"start_date"`
-	EndDate   string     `json:"end_date"`
-	Summary   []Summary  `json:"summary"`
-	Details   [][]string `json:"details"`
-	Columns   []string   `json:"columns"`
-	Review    []Review   `json:"review"`
-	TotalCNY  string     `json:"total_cny"`
-	Currency  string     `json:"currency"`
+	IncludeSubUsers bool       `json:"include_sub_users"`
+	UserEmail       string     `json:"user_email"`
+	StartDate       string     `json:"start_date"`
+	EndDate         string     `json:"end_date"`
+	Summary         []Summary  `json:"summary"`
+	Details         [][]string `json:"details"`
+	Columns         []string   `json:"columns"`
+	Review          []Review   `json:"review"`
+	TotalCNY        string     `json:"total_cny"`
+	Currency        string     `json:"currency"`
 }
 
 func normalized(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
@@ -97,8 +101,47 @@ func submittedTime(value *time.Time) string {
 }
 
 func emptyReport() Report {
-	columns := append([]string{sourceColumns[0], sourceColumns[1], "Submitted"}, sourceColumns[2:8]...)
+	columns := append([]string{"Username", sourceColumns[0], sourceColumns[1], "Submitted"}, sourceColumns[2:8]...)
 	return Report{Summary: []Summary{}, Details: [][]string{}, Columns: columns, Review: []Review{}, TotalCNY: "0.00", Currency: "CNY"}
+}
+
+// selectAccounts counts inherited visibility once and excludes conflicting local
+// ownership. Missing upstream IDs do not prevent exports of local ledger lines.
+func selectAccounts(accounts []Account, requirePlatformID bool) ([]Account, map[string]int, map[string]int, map[int]string) {
+	idOwner := map[string]int{}
+	emailOwner := map[string]int{}
+	seenLocal := map[string]bool{}
+	selected := []Account{}
+	conflicts := map[int]string{}
+	for _, a := range accounts {
+		key := a.LocalAccountID + ":" + a.IdentityKey
+		if a.LocalAccountID != "" && seenLocal[key] {
+			continue
+		}
+		seenLocal[key] = true
+		i := len(selected)
+		selected = append(selected, a)
+		email := normalized(a.Account)
+		id := strings.TrimSpace(a.PlatformAccountID)
+		if !validID(id) && requirePlatformID {
+			conflicts[i] = "Platform account ID is missing or invalid."
+		}
+		if validID(id) {
+			if other, ok := idOwner[id]; ok {
+				conflicts[i] = "Multiple local accounts share this platform account ID."
+				conflicts[other] = conflicts[i]
+			} else {
+				idOwner[id] = i
+			}
+		}
+		if other, ok := emailOwner[email]; ok {
+			conflicts[i] = "Multiple local account records share this email."
+			conflicts[other] = conflicts[i]
+		} else {
+			emailOwner[email] = i
+		}
+	}
+	return selected, idOwner, emailOwner, conflicts
 }
 
 func Filter(data []byte, accounts []Account) (Report, error) {
@@ -189,39 +232,7 @@ func Filter(data []byte, accounts []Account) (Report, error) {
 	if rows.Error() != nil {
 		return out, ErrFormat
 	}
-	// Keep IDs distinct from submission IDs. No fuzzy email or alias fallback.
-	idOwner := map[string]int{}
-	emailOwner := map[string]int{}
-	seenLocal := map[string]bool{}
-	selected := []Account{}
-	conflicts := map[int]string{}
-	for _, a := range accounts {
-		key := a.LocalAccountID + ":" + a.IdentityKey
-		if a.LocalAccountID != "" && seenLocal[key] {
-			continue
-		}
-		seenLocal[key] = true
-		i := len(selected)
-		selected = append(selected, a)
-		email := normalized(a.Account)
-		id := strings.TrimSpace(a.PlatformAccountID)
-		if !validID(id) {
-			conflicts[i] = "Platform account ID is missing or invalid."
-			continue
-		}
-		if other, ok := idOwner[id]; ok {
-			conflicts[i] = "Multiple local accounts share this platform account ID."
-			conflicts[other] = conflicts[i]
-		} else {
-			idOwner[id] = i
-		}
-		if other, ok := emailOwner[email]; ok {
-			conflicts[i] = "Multiple local account records share this email."
-			conflicts[other] = conflicts[i]
-		} else {
-			emailOwner[email] = i
-		}
-	}
+	selected, idOwner, emailOwner, conflicts := selectAccounts(accounts, true)
 	for _, e := range entries {
 		if i, ok := idOwner[e.id]; ok && normalized(selected[i].Account) != e.email {
 			conflicts[i] = "The supplier email does not match the saved platform account ID."
@@ -267,15 +278,15 @@ func Filter(data []byte, accounts []Account) (Report, error) {
 		total.Add(total, value)
 		counts[i]++
 		// Add local metadata only after validating the unchanged supplier contract.
-		row = append([]string{row[0], row[1], submittedTime(selected[i].LatestSubmittedAt)}, row[2:]...)
+		row = append([]string{selected[i].Username, row[0], row[1], submittedTime(selected[i].LatestSubmittedAt)}, row[2:]...)
 		out.Details = append(out.Details, row)
 	}
 	for i, a := range selected {
-		s := Summary{Account: a.Account, PlatformAccountID: strings.TrimSpace(a.PlatformAccountID), LatestSubmittedAt: a.LatestSubmittedAt, Plan: a.Plan, RowCount: counts[i]}
+		s := Summary{Username: a.Username, Account: a.Account, PlatformAccountID: strings.TrimSpace(a.PlatformAccountID), LatestSubmittedAt: a.LatestSubmittedAt, Plan: a.Plan, RowCount: counts[i]}
 		if reason := conflicts[i]; reason != "" {
 			s.Status = "needs_review"
 			s.Reason = reason
-			out.Review = append(out.Review, Review{s.Account, s.PlatformAccountID, reason})
+			out.Review = append(out.Review, Review{Username: s.Username, Account: s.Account, PlatformAccountID: s.PlatformAccountID, Reason: reason})
 		} else if counts[i] == 0 {
 			s.Status = "no_bills"
 			s.Reason = "No bill rows were returned for this account in the selected dates."
@@ -376,7 +387,11 @@ func Workbook(r Report) ([]byte, error) {
 		if e := write(sheet, 3, []string{"Dates", r.StartDate + " — " + r.EndDate, "Timezone", "Asia/Shanghai"}); e != nil {
 			return e
 		}
-		if e := write(sheet, 4, []string{"Scope", "Accounts owned by this user when the export was requested.", "Currency", "CNY"}); e != nil {
+		scope := "Accounts owned by the selected user when the export was requested."
+		if r.IncludeSubUsers {
+			scope = "Accounts owned by the selected user and all levels of sub-users when the export was requested. Each account is counted once."
+		}
+		if e := write(sheet, 4, []string{"Scope", scope, "Currency", "CNY"}); e != nil {
 			return e
 		}
 		if e := write(sheet, 6, headers); e != nil {
@@ -392,7 +407,7 @@ func Workbook(r Report) ([]byte, error) {
 		if e := f.SetColWidth(sheet, "A", "A", 34); e != nil {
 			return e
 		}
-		if e := f.SetColWidth(sheet, "B", "B", 22); e != nil {
+		if e := f.SetColWidth(sheet, "B", "B", 34); e != nil {
 			return e
 		}
 		if len(headers) > 2 {
@@ -403,7 +418,7 @@ func Workbook(r Report) ([]byte, error) {
 		}
 		return f.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 6, TopLeftCell: "A7", ActivePane: "bottomLeft"})
 	}
-	if err = setup("Account summary", []string{"Account", "Platform account ID", "Submitted", "Plan", "Bill rows", "Total (CNY)", "Result", "Notes"}); err != nil {
+	if err = setup("Account summary", []string{"Username", "Account", "Platform account ID", "Submitted", "Plan", "Bill rows", "Total (CNY)", "Result", "Notes"}); err != nil {
 		return nil, err
 	}
 	for i, s := range r.Summary {
@@ -412,17 +427,17 @@ func Workbook(r Report) ([]byte, error) {
 		if s.AmountCNY != nil {
 			v = *s.AmountCNY
 		}
-		if err = write("Account summary", row, []string{s.Account, s.PlatformAccountID, submittedTime(s.LatestSubmittedAt), s.Plan, fmt.Sprint(s.RowCount), v, s.Status, s.Reason}); err != nil {
+		if err = write("Account summary", row, []string{s.Username, s.Account, s.PlatformAccountID, submittedTime(s.LatestSubmittedAt), s.Plan, fmt.Sprint(s.RowCount), v, s.Status, s.Reason}); err != nil {
 			return nil, err
 		}
-		if err = dateCell("Account summary", fmt.Sprintf("C%d", row), submittedTime(s.LatestSubmittedAt)); err != nil {
+		if err = dateCell("Account summary", fmt.Sprintf("D%d", row), submittedTime(s.LatestSubmittedAt)); err != nil {
 			return nil, err
 		}
 		if v != "" {
-			if err = numeric("Account summary", fmt.Sprintf("F%d", row), v); err != nil {
+			if err = numeric("Account summary", fmt.Sprintf("G%d", row), v); err != nil {
 				return nil, err
 			}
-			_ = f.SetCellStyle("Account summary", fmt.Sprintf("F%d", row), fmt.Sprintf("F%d", row), moneyStyle)
+			_ = f.SetCellStyle("Account summary", fmt.Sprintf("G%d", row), fmt.Sprintf("G%d", row), moneyStyle)
 		}
 	}
 	totalRow := len(r.Summary) + 8
@@ -430,43 +445,43 @@ func Workbook(r Report) ([]byte, error) {
 		return nil, err
 	}
 	if r.TotalCNY != "" {
-		if err = numeric("Account summary", fmt.Sprintf("F%d", totalRow), r.TotalCNY); err != nil {
+		if err = numeric("Account summary", fmt.Sprintf("G%d", totalRow), r.TotalCNY); err != nil {
 			return nil, err
 		}
 	}
-	_ = f.SetCellStyle("Account summary", fmt.Sprintf("F%d", totalRow), fmt.Sprintf("F%d", totalRow), moneyStyle)
+	_ = f.SetCellStyle("Account summary", fmt.Sprintf("G%d", totalRow), fmt.Sprintf("G%d", totalRow), moneyStyle)
 	if err = setup("Bill details", r.Columns); err != nil {
 		return nil, err
 	}
 	for i, row := range r.Details {
-		if len(row) != 9 {
+		if len(row) != 10 {
 			return nil, ErrFormat
 		}
 		if err = write("Bill details", i+7, row); err != nil {
 			return nil, err
 		}
-		if err = dateCell("Bill details", fmt.Sprintf("C%d", i+7), row[2]); err != nil {
+		if err = dateCell("Bill details", fmt.Sprintf("D%d", i+7), row[3]); err != nil {
 			return nil, err
 		}
-		for c := 4; c < 9; c++ {
+		for c := 5; c < 10; c++ {
 			cell, _ := excelize.CoordinatesToCellName(c+1, i+7)
-			if c < 8 && len(row[c]) > 15 {
+			if c < 9 && len(row[c]) > 15 {
 				continue
 			}
 			if err = numeric("Bill details", cell, row[c]); err != nil {
 				return nil, err
 			}
-			if c == 8 {
+			if c == 9 {
 				_ = f.SetCellStyle("Bill details", cell, cell, moneyStyle)
 			}
 		}
 	}
-	if err = setup("Needs review", []string{"Account", "Platform account ID", "Reason"}); err != nil {
+	if err = setup("Needs review", []string{"Username", "Account", "Platform account ID", "Reason"}); err != nil {
 		return nil, err
 	}
-	_ = f.SetColWidth("Needs review", "C", "C", 80)
+	_ = f.SetColWidth("Needs review", "D", "D", 80)
 	for i, v := range r.Review {
-		if err = write("Needs review", i+7, []string{v.Account, v.PlatformAccountID, v.Reason}); err != nil {
+		if err = write("Needs review", i+7, []string{v.Username, v.Account, v.PlatformAccountID, v.Reason}); err != nil {
 			return nil, err
 		}
 	}

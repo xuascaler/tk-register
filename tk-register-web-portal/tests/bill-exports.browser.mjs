@@ -1,0 +1,119 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { mkdir, readFile } from 'node:fs/promises';
+import { dirname, extname, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium, expect } from '@playwright/test';
+
+// Exercise built UI with synthetic responses only. No vendor or live TK traffic.
+const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const dist = resolve(project, 'dist');
+const output = resolve(project, 'test-results/bill-exports');
+await mkdir(output, { recursive: true });
+const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+const server = createServer(async (req, res) => {
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  const path = resolve(dist, pathname === '/tk-register/' ? 'index.html' : pathname.replace(/^\/tk-register\//, ''));
+  if (!path.startsWith(dist + sep)) return res.writeHead(404).end();
+  try { const data = await readFile(path); res.writeHead(200, { 'Content-Type': mime[extname(path)] || 'application/octet-stream' }); res.end(data); }
+  catch { res.writeHead(404).end(); }
+});
+await new Promise((resolveListening, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolveListening); });
+const origin = `http://127.0.0.1:${server.address().port}`;
+let browser;
+try {
+  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined) });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const unexpected = [], errors = [], requests = [], jobs = new Map();
+  page.on('pageerror', error => errors.push(error.message));
+  const admin = { id: 1, email: 'admin@example.test', role: 'admin', status: 'active', created_at: '2026-11-19T00:00:00Z' };
+  const owner = { id: '2', email: 'team@example.test' };
+  const account = (username, email, id) => ({ username, account: email, platform_account_id: id, latest_submitted_at: '2026-11-15T00:00:00Z', plan: 'claude/cc-max-20x', row_count: 2, amount_cny: '100.00', status: 'matched' });
+  const summary = [account(owner.email, 'claude-parent@example.test', '101'), account('member@example.test', 'claude-child@example.test', '102'), account('nested@example.test', 'claude-nested@example.test', '103')];
+  await page.route('**/*', async route => {
+    const req = route.request(), url = new URL(req.url());
+    if (url.origin !== origin) { unexpected.push(`External request ${url.origin}`); return route.abort(); }
+    if (!url.pathname.startsWith('/tk-register/api/')) return route.continue();
+    const path = url.pathname.slice('/tk-register/api'.length), method = req.method();
+    const ok = data => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
+    if (path === '/auth/me') return ok({ user: admin, csrf_token: 'bill-export-ui-test' });
+    if (path === '/auth/status') return ok({ registration_enabled: true, password_login_enabled: true, email_code_login_enabled: true });
+    if (path === '/members/sources') return ok({ sources: [{ id: 'myself', label: 'myself' }] });
+    if (path === '/admin/settings') return ok({ settings: [] });
+    if (path === '/admin/users') return ok({ items: [{ ...admin, ...owner }], page: 1, page_size: 20, total: 1 });
+    if (path === '/admin/bill-exports' && method === 'POST') {
+      const body = req.postDataJSON(); requests.push(body);
+      const include = body.include_sub_users;
+      const job = { id: String(requests.length), user: owner, include_sub_users: include, start_date: body.start_date, end_date: body.end_date, status: 'queued', download_filename: 'test-bills.xlsx', account_count: include ? 4 : 1, summary_count: include ? 3 : 1, matched_account_count: include ? 3 : 1, review_account_count: include ? 1 : 0, row_count: include ? 6 : 2, total_cny: include ? '300.00' : '100.00', currency: 'CNY', created_at: '2026-11-22T00:00:00Z' };
+      jobs.set(job.id, { ...job, status: 'completed' }); return ok(job);
+    }
+    const match = path.match(/^\/admin\/bill-exports\/(\d+)(?:\/(results))?$/);
+    if (match) {
+      const job = jobs.get(match[1]);
+      if (!match[2]) return ok(job);
+      const items = job.include_sub_users ? summary : summary.slice(0, 1);
+      const view = url.searchParams.get('view');
+      const columns = ['Username', 'Account', 'Platform ID', 'Submitted', 'Model', 'Input tokens', 'Output tokens', 'Cache read', 'Cache write', 'Amount (CNY)'];
+      const rows = view === 'summary' ? items : view === 'details' ? items.flatMap(item => ['fable', 'opus'].map(model => [item.username, item.account, item.platform_account_id, '2026-11-15 08:00:00', model, '10', '20', '30', '40', '50.00'])) : job.include_sub_users ? [{ username: '', account: 'ambiguous@example.test', platform_account_id: '104', reason: 'Account ownership is ambiguous.' }] : [];
+      return ok({ items: rows, columns, total: rows.length, page: 1, page_size: 20 });
+    }
+    unexpected.push(`${method} ${path}`);
+    return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Unexpected test request' }) });
+  });
+  await page.goto(`${origin}/tk-register/#/config/bill_exports`);
+  await expect(page.getByRole('heading', { name: 'Claude bill exports', exact: true })).toBeVisible();
+  await expect(page.getByText('Prepare a Claude bill export', { exact: true })).toBeVisible();
+  await expect(page.getByText('Recent exports', { exact: true })).toHaveCount(0);
+  const scope = page.getByRole('switch', { name: 'Include all sub-users', exact: true });
+  await expect(scope).not.toBeChecked();
+  const scopeFont = await page.locator('#bill-include-sub-users-label').evaluate(element => getComputedStyle(element).fontFamily);
+  assert.doesNotMatch(scopeFont, /monospace|SFMono/i, 'scope label uses the product sans-serif font');
+  console.log('Scope label font:', scopeFont);
+  await page.getByRole('combobox', { name: 'User', exact: true }).fill('team');
+  await page.getByRole('option', { name: /team@example.test/ }).click();
+  await page.getByLabel('Start date', { exact: true }).fill('2026-11-15');
+  await page.getByLabel('End date', { exact: true }).fill('2026-11-21');
+  await page.getByRole('button', { name: 'Generate export', exact: true }).click();
+  await expect(scope).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Download Excel', exact: true })).toBeVisible();
+  await expect(page.locator('.bill-summary-table tbody tr')).toHaveCount(1);
+  assert.equal(requests[0].include_sub_users, false);
+  await expect(page.locator('.bill-summary-table th').first()).toHaveText('Username');
+  await expect(page.locator('.bill-summary-table tbody td').first()).toHaveText(owner.email);
+  // Form edits must not silently change the completed result or its saved scope.
+  await scope.check();
+  await expect(page.getByText('Settings changed. Generate a new export to apply them.', { exact: true })).toBeVisible();
+  await expect(page.locator('.bill-result-scope')).toHaveText('Selected user only');
+  await expect(page.locator('.bill-summary-table tbody tr')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Generate export', exact: true }).click();
+  await expect(page.locator('.bill-summary-table tbody tr')).toHaveCount(3);
+  assert.equal(requests[1].include_sub_users, true);
+  await expect(page.locator('.bill-result-scope')).toHaveText('Includes all sub-users');
+  await expect(page.locator('.bill-summary-table tbody')).toContainText('nested@example.test');
+  await expect(page.getByText('Settings changed. Generate a new export to apply them.', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: resolve(output, 'desktop.png'), fullPage: true });
+  await page.getByRole('tab', { name: /Bill details/ }).click();
+  await expect(page.locator('.bill-details-table tbody tr')).toHaveCount(6);
+  await expect(page.locator('.bill-details-table th').first()).toHaveText('Username');
+  await expect(page.locator('.bill-details-table tbody')).toContainText('nested@example.test');
+  await page.getByRole('tab', { name: /Needs review/ }).click();
+  await expect(page.locator('.bill-review-table tbody tr')).toHaveCount(1);
+  await expect(page.locator('.bill-review-table tbody td').first()).toHaveText('—');
+  await page.getByRole('tab', { name: /Account summary/ }).click();
+  await expect(page.locator('.bill-summary-table tbody tr')).toHaveCount(3);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: resolve(output, 'mobile.png'), fullPage: true });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'mobile page overflow');
+  await page.setViewportSize({ width: 320, height: 700 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'narrow page overflow');
+  await page.reload();
+  await expect(page.getByText('Prepare a Claude bill export', { exact: true })).toBeVisible();
+  await expect(scope).not.toBeChecked();
+  await expect(page.locator('.bill-export-result')).toHaveCount(0);
+  assert.deepEqual(unexpected, [], 'No recent-export lookup or unexpected API requests');
+  assert.deepEqual(errors, []);
+  console.log('Bill export UI passed: default self-only, complete hierarchy scope, fresh generation, immutable current result, Username in all result tabs, no history lookup, responsive layout.');
+} finally {
+  await browser?.close();
+  await new Promise(resolveClosed => server.close(resolveClosed));
+}

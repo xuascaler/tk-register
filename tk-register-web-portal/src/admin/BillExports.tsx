@@ -1,7 +1,6 @@
-import { AlertCircle, Check, ChevronDown, Download, FileSpreadsheet, LoaderCircle, Search, X } from 'lucide-react';
+import { AlertCircle, Check, ChevronDown, Download, FileSpreadsheet, LoaderCircle, Network, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { APIError, errorMessage, request } from '../api';
-import Select from '../submissions/Select';
 import { dateTime, Empty } from '../submissions/shared';
 import { ErrorNotice, Loading } from '../ui';
 import { Pagination } from './shared';
@@ -111,9 +110,9 @@ function ExportResults({ job, view, onView }: { job: BillExportJob; view: BillEx
       <ErrorNotice>{error}</ErrorNotice>
       {busy || (result !== null && resultView !== view) ? <Loading label={`Loading ${viewNames[view].toLowerCase()}…`} /> : error ? <button type='button' className='button secondary bill-result-retry' onClick={() => setAttempt(v => v + 1)}>Try again</button> : result && <>
         {!result.items.length ? <Empty title={view === 'review' ? 'No accounts need review' : 'No bill records'}>{view === 'review' ? 'This export contains no accounts flagged for review.' : 'No bill rows are available for these accounts and dates.'}</Empty> : <div className='admin-table-wrap bill-table-wrap'>
-          {view === 'summary' ? <table className='admin-table bill-summary-table'><caption className='sr-only'>Selected user account billing summary</caption><thead><tr><th scope='col'>Account / plan</th><th scope='col'>Platform ID</th><th scope='col' title='Latest submission time when this export was requested, in Beijing time'>Submitted</th><th scope='col'>Bill rows</th><th scope='col'>Amount (CNY)</th><th scope='col'>Result</th></tr></thead><tbody>{(result.items as BillExportSummary[]).map((item, index) => <tr key={`${item.account}-${index}`}><td className='admin-primary-cell' data-label='Account / plan'><span className='bill-account-email'>{item.account}</span><span className='admin-cell-note'>{item.plan}</span></td><td data-label='Platform ID'>{item.platform_account_id || '—'}</td><td data-label='Submitted (Beijing)' className='bill-submitted-time'>{billSubmittedTime(item.latest_submitted_at)}</td><td data-label='Bill rows' className='bill-number'>{item.row_count}</td><td data-label='Amount (CNY)' className='bill-number bill-amount'>{billAmount(item.amount_cny)}</td><td data-label='Result'><span className={`bill-result-label ${item.status === 'needs_review' ? 'is-review' : item.status === 'matched' ? 'is-matched' : ''}`}>{item.status === 'matched' ? 'Matched' : item.status === 'no_bills' ? 'No bill rows' : 'Needs review'}</span>{item.reason && <span className='admin-cell-note'>{item.reason}</span>}</td></tr>)}</tbody></table>
+          {view === 'summary' ? <table className='admin-table bill-summary-table'><caption className='sr-only'>Selected accounts and their owners’ billing summary</caption><thead><tr><th scope='col'>Username</th><th scope='col'>Account / plan</th><th scope='col'>Platform ID</th><th scope='col' title='Latest submission time when this export was requested, in Beijing time'>Submitted</th><th scope='col'>Bill rows</th><th scope='col'>Amount (CNY)</th><th scope='col'>Result</th></tr></thead><tbody>{(result.items as BillExportSummary[]).map((item, index) => <tr key={`${item.account}-${index}`}><td data-label='Username' className='bill-username'>{item.username || '—'}</td><td className='admin-primary-cell' data-label='Account / plan'><span className='bill-account-email'>{item.account}</span><span className='admin-cell-note'>{item.plan}</span></td><td data-label='Platform ID'>{item.platform_account_id || '—'}</td><td data-label='Submitted (Beijing)' className='bill-submitted-time'>{billSubmittedTime(item.latest_submitted_at)}</td><td data-label='Bill rows' className='bill-number'>{item.row_count}</td><td data-label='Amount (CNY)' className='bill-number bill-amount'>{billAmount(item.amount_cny)}</td><td data-label='Result'><span className={`bill-result-label ${item.status === 'needs_review' ? 'is-review' : item.status === 'matched' ? 'is-matched' : ''}`}>{item.status === 'matched' ? 'Matched' : item.status === 'no_bills' ? 'No bill rows' : 'Needs review'}</span>{item.reason && <span className='admin-cell-note'>{item.reason}</span>}</td></tr>)}</tbody></table>
             : view === 'details' ? <table className='bill-details-table'><caption className='sr-only'>Bill details for the selected accounts, in CNY</caption><thead><tr>{result.columns?.map((column, index) => <th scope='col' key={`${column}-${index}`}>{column}</th>)}</tr></thead><tbody>{(result.items as string[][]).map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column}>{cell || '—'}</td>)}</tr>)}</tbody></table>
-              : <table className='admin-table bill-review-table'><caption className='sr-only'>Accounts requiring review before their bills can be matched</caption><thead><tr><th scope='col'>Account</th><th scope='col'>Platform ID</th><th scope='col'>Reason</th></tr></thead><tbody>{(result.items as BillExportReview[]).map((item, index) => <tr key={`${item.account}-${index}`}><td className='admin-primary-cell' data-label='Account'><span className='bill-account-email'>{item.account}</span></td><td data-label='Platform ID'>{item.platform_account_id || '—'}</td><td data-label='Reason'>{item.reason}</td></tr>)}</tbody></table>}
+              : <table className='admin-table bill-review-table'><caption className='sr-only'>Accounts requiring review before their bills can be matched</caption><thead><tr><th scope='col'>Username</th><th scope='col'>Account</th><th scope='col'>Platform ID</th><th scope='col'>Reason</th></tr></thead><tbody>{(result.items as BillExportReview[]).map((item, index) => <tr key={`${item.account}-${index}`}><td data-label='Username' className='bill-username'>{item.username || '—'}</td><td className='admin-primary-cell' data-label='Account'><span className='bill-account-email'>{item.account}</span></td><td data-label='Platform ID'>{item.platform_account_id || '—'}</td><td data-label='Reason'>{item.reason}</td></tr>)}</tbody></table>}
         </div>}
         <Pagination data={result} noun={view === 'details' ? 'bill row' : 'account'} busy={busy} onPage={setPage} />
       </>}
@@ -126,40 +125,24 @@ export default function BillExports() {
   const [user, setUser] = useState<BillExportUser | null>(null);
   const [start, setStart] = useState(offsetDate(today, -6));
   const [end, setEnd] = useState(today);
+  const [includeSubUsers, setIncludeSubUsers] = useState(false);
   const [job, setJob] = useState<BillExportJob | null>(null);
-  const [recent, setRecent] = useState<BillExportJob[]>([]);
-  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
-  const [recentError, setRecentError] = useState('');
   const [pollError, setPollError] = useState('');
   const [downloadError, setDownloadError] = useState('');
   const [validation, setValidation] = useState(false);
-  const [attempt, setAttempt] = useState(0);
   const [pollAttempt, setPollAttempt] = useState(0);
   const [view, setView] = useState<BillExportView>('summary');
   const pending = useRef<AbortController | null>(null);
   const downloadingRequest = useRef<AbortController | null>(null);
   const submitting = useRef(false);
-  const touched = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; pending.current?.abort(); downloadingRequest.current?.abort(); };
   }, []);
-  useEffect(() => {
-    const controller = new AbortController(); setLoading(true); setRecentError('');
-    request<{ items: BillExportJob[] }>('/admin/bill-exports', { signal: controller.signal }).then(result => {
-      if (controller.signal.aborted) return;
-      setRecent(result.items);
-      if (!touched.current && result.items[0]) {
-        const latest = result.items[0];
-        setJob(latest); setUser(latest.user); setStart(latest.start_date); setEnd(latest.end_date);
-      }
-    }).catch(cause => { if (!controller.signal.aborted) setRecentError(errorMessage(cause)); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [attempt]);
   const running = exportRunning(job);
   useEffect(() => {
     if (!job || !running) return;
@@ -173,7 +156,6 @@ export default function BillExports() {
         const latest = await request<BillExportJob>(`/admin/bill-exports/${encodeURIComponent(id)}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
         failures = 0; setPollError(''); setJob(latest);
-        setRecent(previous => previous.map(item => item.id === latest.id ? latest : item));
         if (exportRunning(latest)) timer = window.setTimeout(poll, 2000);
       } catch (cause) {
         if (controller.signal.aborted) return;
@@ -185,12 +167,7 @@ export default function BillExports() {
     timer = window.setTimeout(poll, 1000);
     return () => { controller.abort(); window.clearTimeout(timer); };
   }, [job?.id, running, pollAttempt]);
-  function changed() { touched.current = true; downloadingRequest.current?.abort(); setDownloading(false); setJob(null); setError(''); setDownloadError(''); setValidation(false); setView('summary'); }
-  function chooseRecent(id: string) {
-    const selected = recent.find(item => item.id === id);
-    if (!selected) return;
-    touched.current = true; downloadingRequest.current?.abort(); setDownloading(false); setJob(selected); setUser(selected.user); setStart(selected.start_date); setEnd(selected.end_date); setView('summary'); setError(''); setDownloadError(''); setValidation(false);
-  }
+  function changed() { setError(''); setValidation(false); }
   function shortcut(days: number, yesterday = false) {
     changed(); const last = yesterday ? offsetDate(today, -1) : today; setEnd(last); setStart(offsetDate(last, -(days - 1)));
   }
@@ -200,12 +177,13 @@ export default function BillExports() {
     setValidation(true); setError(''); setDownloadError('');
     const problem = exportDateError(start, end);
     if (!user || problem) { setError(!user ? 'Select a user from the search results.' : problem); return; }
-    touched.current = true; submitting.current = true; setCreating(true);
+    submitting.current = true; setCreating(true);
+    downloadingRequest.current?.abort(); setDownloading(false);
     const controller = new AbortController(); pending.current = controller;
     try {
-      const result = await request<BillExportJob>('/admin/bill-exports', { method: 'POST', body: { user_id: String(user.id), start_date: start, end_date: end }, signal: controller.signal });
+      const result = await request<BillExportJob>('/admin/bill-exports', { method: 'POST', body: { user_id: String(user.id), start_date: start, end_date: end, include_sub_users: includeSubUsers }, signal: controller.signal });
       if (controller.signal.aborted) return;
-      setJob(result); setRecent(previous => [result, ...previous.filter(item => item.id !== result.id)].slice(0, 20)); setView('summary'); setValidation(false);
+      setJob(result); setView('summary'); setValidation(false); setPollError('');
     } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
     finally { submitting.current = false; if (mounted.current) setCreating(false); }
   }
@@ -229,6 +207,7 @@ export default function BillExports() {
     finally { if (mounted.current) setDownloading(false); }
   }
   const locked = creating || running;
+  const settingsChanged = !!job && (user?.id !== job.user.id || start !== job.start_date || end !== job.end_date || includeSubUsers !== !!job.include_sub_users);
   return <section className='bill-exports'>
     <div className='section-heading bill-export-heading'><div><h2>Claude bill exports</h2><p className='muted small'>Export a user’s account bills for a selected date range.</p></div><span className='bill-vendor'>TK Register 0</span></div>
     <form className='panel bill-export-form' onSubmit={generate} noValidate>
@@ -237,22 +216,22 @@ export default function BillExports() {
         <div className='bill-date-field'><label htmlFor='bill-start-date'>Start date</label><input id='bill-start-date' type='date' value={start} max={end || today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setStart(event.target.value); }} /></div>
         <div className='bill-date-field'><label htmlFor='bill-end-date'>End date</label><input id='bill-end-date' type='date' value={end} min={start || undefined} max={today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setEnd(event.target.value); }} /></div>
       </div>
+      <label className='switch bill-sub-users'><input id='bill-include-sub-users' type='checkbox' role='switch' checked={includeSubUsers} disabled={locked} aria-labelledby='bill-include-sub-users-label' aria-describedby='bill-include-sub-users-help' onChange={event => { changed(); setIncludeSubUsers(event.target.checked); }} /><span><strong id='bill-include-sub-users-label'>Include all sub-users</strong><small id='bill-include-sub-users-help'>Include every level of sub-users under the selected user.</small></span></label>
       <div className='bill-date-options'><p id='bill-date-help'>Beijing time · Up to 60 days, including both dates.</p><div className='bill-shortcuts' aria-label='Date shortcuts'><button type='button' disabled={locked} onClick={() => shortcut(1, true)}>Yesterday</button><button type='button' disabled={locked} onClick={() => shortcut(7)}>Last 7 days</button><button type='button' disabled={locked} onClick={() => shortcut(30)}>Last 30 days</button></div></div>
       <ErrorNotice>{error}</ErrorNotice>
-      <div className='bill-form-footer'><p>Includes only accounts currently assigned to the selected user.</p><button type='submit' className='button primary' disabled={locked}>{creating || running ? <LoaderCircle className='spin' aria-hidden='true' /> : <FileSpreadsheet aria-hidden='true' />}{creating ? 'Creating export…' : running ? 'Export in progress' : 'Generate export'}</button></div>
+      <div className='bill-form-footer'><p>{includeSubUsers ? 'Selected user and all sub-users.' : 'Selected user only.'}<br />Each account is counted once.</p><button type='submit' className='button primary' disabled={locked}>{creating || running ? <LoaderCircle className='spin' aria-hidden='true' /> : <FileSpreadsheet aria-hidden='true' />}{creating ? 'Creating export…' : running ? 'Export in progress' : 'Generate export'}</button></div>
     </form>
-    {recent.length > 0 && <div className='bill-recent'><Select id='bill-recent-export' label='Recent exports' value={job?.id || ''} placeholder='Choose a previous export' disabled={creating} onChange={chooseRecent} options={recent.map(item => ({ value: item.id, label: `${item.user.email} · ${item.start_date} – ${item.end_date} · ${phaseNames[item.status] || item.status}${billSourceLabel(item)}` }))} /></div>}
-    {recentError && <div className='bill-recent-error'><p className='muted small'>Recent exports could not be loaded. {recentError}</p><button type='button' className='button quiet' disabled={loading} onClick={() => setAttempt(v => v + 1)}>Try again</button></div>}
     {job ? <section className='panel bill-export-result' aria-label='Bill export'>
-      <div className='bill-result-heading'><div><div className='bill-result-title'><h2>{job.user.email}</h2><span className={`bill-job-status is-${job.status}`}>{job.status === 'completed' ? <Check aria-hidden='true' /> : job.status === 'failed' || job.status === 'expired' ? <AlertCircle aria-hidden='true' /> : <LoaderCircle className='spin' aria-hidden='true' />}{phaseNames[job.status] || job.status}</span></div><p className='muted small'>{job.start_date} – {job.end_date} · Beijing time{billSourceLabel(job)}{job.finished_at ? ` · Generated ${dateTime(job.finished_at)}` : ''}</p>{job.status === 'completed' && <p className='bill-download-expiry'>{job.expires_at ? `Available until ${dateTime(job.expires_at)}` : 'Downloads are available for 7 days.'}</p>}</div>{job.status === 'completed' && <button type='button' className='button secondary' onClick={download} disabled={downloading}>{downloading ? <LoaderCircle className='spin' aria-hidden='true' /> : <Download aria-hidden='true' />}{downloading ? 'Downloading…' : 'Download Excel'}</button>}</div>
+      <div className='bill-result-heading'><div><div className='bill-result-title'><h2>{job.user.email}</h2><span className={`bill-job-status is-${job.status}`}>{job.status === 'completed' ? <Check aria-hidden='true' /> : job.status === 'failed' || job.status === 'expired' ? <AlertCircle aria-hidden='true' /> : <LoaderCircle className='spin' aria-hidden='true' />}{phaseNames[job.status] || job.status}</span></div><p className='muted small'>{job.start_date} – {job.end_date} · Beijing time{billSourceLabel(job)}{job.finished_at ? ` · Generated ${dateTime(job.finished_at)}` : ''}</p><p className='bill-result-scope'><Network aria-hidden='true' />{job.include_sub_users ? 'Includes all sub-users' : 'Selected user only'}</p>{job.status === 'completed' && <p className='bill-download-expiry'>{job.expires_at ? `Available until ${dateTime(job.expires_at)}` : 'Downloads are available for 7 days.'}</p>}</div>{job.status === 'completed' && <button type='button' className='button secondary' onClick={download} disabled={downloading}>{downloading ? <LoaderCircle className='spin' aria-hidden='true' /> : <Download aria-hidden='true' />}{downloading ? 'Downloading…' : 'Download Excel'}</button>}</div>
+      {settingsChanged && <p className='bill-settings-changed' role='status'>Settings changed. Generate a new export to apply them.</p>}
       {downloadError && <div className='bill-result-notice'><ErrorNotice>{downloadError}</ErrorNotice></div>}
-      {running ? <div className='bill-export-progress' role='status'><ol>{['queued', 'fetching', 'filtering'].map((phase, index) => { const current = ['queued', 'fetching', 'filtering'].indexOf(job.status); return <li className={index < current ? 'is-complete' : index === current ? 'is-current' : ''} key={phase}><span>{index < current ? <Check aria-hidden='true' /> : index + 1}</span>{phaseNames[phase]}</li>; })}</ol><p>{job.status === 'queued' ? 'Your export is queued.' : job.status === 'fetching' ? 'Reading bills for the selected dates.' : 'Matching the selected user’s accounts and preparing the Excel file.'}</p><p className='muted small'>You can leave this page and find the result in Recent exports.</p>{pollError && <div className='bill-poll-error'><ErrorNotice>{pollError}</ErrorNotice><button type='button' className='button secondary' onClick={() => setPollAttempt(v => v + 1)}>Check status</button></div>}</div>
+      {running ? <div className='bill-export-progress' role='status'><ol>{['queued', 'fetching', 'filtering'].map((phase, index) => { const current = ['queued', 'fetching', 'filtering'].indexOf(job.status); return <li className={index < current ? 'is-complete' : index === current ? 'is-current' : ''} key={phase}><span>{index < current ? <Check aria-hidden='true' /> : index + 1}</span>{phaseNames[phase]}</li>; })}</ol><p>{job.status === 'queued' ? 'Your export is queued.' : job.status === 'fetching' ? 'Reading bills for the selected dates.' : 'Matching the selected accounts and preparing the Excel file.'}</p><p className='muted small'>Keep this page open until the export is ready to download.</p>{pollError && <div className='bill-poll-error'><ErrorNotice>{pollError}</ErrorNotice><button type='button' className='button secondary' onClick={() => setPollAttempt(v => v + 1)}>Check status</button></div>}</div>
         : job.status === 'failed' || job.status === 'expired' ? <div className='bill-export-failed'><AlertCircle aria-hidden='true' /><div><h3>{job.status === 'expired' ? 'This export has expired' : 'Export could not be generated'}</h3><p>{job.status === 'expired' ? 'Export files are available for 7 days. Generate a new export to download these bills again.' : job.error || 'The bills could not be retrieved. Please try again.'}</p>{job.status === 'failed' && <p className='muted small'>Review the message, then generate a new export.</p>}</div></div>
           : <>
             <div className='bill-export-metrics'><div><span>Selected accounts</span><strong>{job.account_count}</strong></div><div><span>Accounts with bills</span><strong>{job.matched_account_count}</strong></div><div><span>Bill rows</span><strong>{job.row_count}</strong></div><div className='bill-total'><span>Period total · CNY</span><strong>{billAmount(job.total_cny)}</strong></div></div>
             {!!job.review_account_count && <div className='bill-review-notice'><AlertCircle aria-hidden='true' /><p>{job.review_account_count} {job.review_account_count === 1 ? 'account needs' : 'accounts need'} review. Unmatched amounts are not included in the total.</p><button type='button' onClick={() => setView('review')}>View accounts</button></div>}
             <ExportResults key={job.id} job={job} view={view} onView={setView} />
           </>}
-    </section> : loading ? <Loading label='Loading recent exports…' /> : <div className='panel bill-export-empty'><FileSpreadsheet aria-hidden='true' /><h3>Prepare a Claude bill export</h3><p>Choose a user and dates to see account totals, bill details, and any accounts that need review.</p></div>}
+    </section> : <div className='panel bill-export-empty'><FileSpreadsheet aria-hidden='true' /><h3>Prepare a Claude bill export</h3><p>Choose a user and dates to see account totals, bill details, and any accounts that need review.</p></div>}
   </section>;
 }

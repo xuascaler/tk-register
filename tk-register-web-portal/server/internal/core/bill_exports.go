@@ -30,11 +30,13 @@ type BillExportJob struct {
 	TargetUserID uint64 `gorm:"not null;index"`
 	TargetUser   User   `gorm:"foreignKey:TargetUserID;constraint:OnDelete:RESTRICT" json:"-"`
 	UserEmail    string `gorm:"size:50;not null"`
-	VendorID     uint64 `gorm:"not null;index"`
-	Vendor       Vendor `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT" json:"-"`
-	StartDate    string `gorm:"size:10;not null"`
-	EndDate      string `gorm:"size:10;not null"`
-	Timezone     string `gorm:"size:32;not null"`
+	// Scope is frozen with the selected accounts, not recalculated by the worker.
+	IncludeSubUsers bool   `gorm:"not null;default:false"`
+	VendorID        uint64 `gorm:"not null;index"`
+	Vendor          Vendor `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT" json:"-"`
+	StartDate       string `gorm:"size:10;not null"`
+	EndDate         string `gorm:"size:10;not null"`
+	Timezone        string `gorm:"size:32;not null"`
 	// Every job created before this column existed contains a supplier (Raw) export.
 	UsageSource         string     `gorm:"size:16;not null;default:raw;index" json:"-"`
 	Status              string     `gorm:"size:24;not null;index:idx_bill_export_due,priority:1"`
@@ -69,6 +71,7 @@ type BillExportAccount struct {
 	LocalAccountID    uint64        `gorm:"not null;uniqueIndex:idx_bill_export_account"`
 	LocalAccount      SyncedAccount `gorm:"foreignKey:LocalAccountID;constraint:OnDelete:RESTRICT" json:"-"`
 	IdentityKey       string        `gorm:"size:64;not null"`
+	Username          string        `gorm:"size:50;not null;default:''"`
 	AccountEmail      string        `gorm:"size:254;not null"`
 	Plan              string        `gorm:"size:64;not null"`
 	PlatformAccountID *string       `gorm:"size:32"`
@@ -113,8 +116,9 @@ func ValidateBillExportDates(start, end string, now time.Time) error {
 	return nil
 }
 
-func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, start, end string, now time.Time) (BillExportJob, error) {
+func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, start, end string, now time.Time, includeSubUsers ...bool) (BillExportJob, error) {
 	var job BillExportJob
+	includeDescendants := len(includeSubUsers) > 0 && includeSubUsers[0]
 	if err := ValidateBillExportDates(start, end, now); err != nil {
 		return job, err
 	}
@@ -150,9 +154,21 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		// Use the newest snapshot only for the current accepted account lifetime.
 		// This is the same fallback as the Accounts screen's displayed platform ID.
 		var accounts []BillExportAccount
-		err := tx.Table("synced_accounts AS a").Select(`a.id AS local_account_id, a.identity_key, a.account AS account_email, a.plan, a.remote_id, a.supplier_record_id, a.latest_submitted_at,
+		selection := tx.Table("synced_accounts AS a").
+			Joins("JOIN users owner ON owner.id = a.user_id").
+			Select(`a.id AS local_account_id, a.identity_key, owner.email AS username, a.account AS account_email, a.plan, a.remote_id, a.supplier_record_id, a.latest_submitted_at,
    COALESCE(NULLIF(a.platform_account_id, ''), (SELECT snap.platform_account_id FROM account_snapshots snap WHERE snap.account_id = a.id AND snap.identity_key = a.identity_key ORDER BY snap.collected_at DESC, snap.id DESC LIMIT 1)) AS platform_account_id`).
-			Where("a.user_id = ? AND a.vendor_id = ? AND a.deleted_at IS NULL AND a.plan LIKE ?", userID, vendor.ID, "claude/%").Order("a.id ASC").Limit(20001).Scan(&accounts).Error
+			Where("a.vendor_id = ? AND a.deleted_at IS NULL AND a.plan LIKE ?", vendor.ID, "claude/%")
+		if includeDescendants {
+			// The closure table includes every depth. EXISTS selects each actual
+			// account once even though several ancestors can see the same account.
+			selection = selection.Where(`a.user_id = ? OR EXISTS (
+    SELECT 1 FROM user_hierarchy h WHERE h.ancestor_user_id = ? AND h.descendant_user_id = a.user_id
+)`, userID, userID)
+		} else {
+			selection = selection.Where("a.user_id = ?", userID)
+		}
+		err := selection.Order("a.id ASC").Limit(20001).Scan(&accounts).Error
 		if err != nil {
 			return err
 		}
@@ -166,7 +182,7 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 		if actor.IsSuperAdmin {
 			source = "raw"
 		}
-		job = BillExportJob{RequestedBy: actor.ID, UsageSource: source, TargetUserID: user.ID, UserEmail: user.Email, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
+		job = BillExportJob{RequestedBy: actor.ID, UsageSource: source, TargetUserID: user.ID, UserEmail: user.Email, IncludeSubUsers: includeDescendants, VendorID: vendor.ID, StartDate: start, EndDate: end, Timezone: "Asia/Shanghai", Status: "queued", AccountCount: len(accounts), Currency: "CNY", NextRunAt: now.UTC(), CreatedAt: now.UTC(), ExpiresAt: now.UTC().Add(BillExportRetention)}
 		if err := tx.Create(&job).Error; err != nil {
 			return err
 		}

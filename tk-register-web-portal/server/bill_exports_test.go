@@ -201,8 +201,8 @@ func TestBillExportWorkerProducesOnlySelectedAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.Summary[0].LatestSubmittedAt == nil || !report.Summary[0].LatestSubmittedAt.Equal(rows[0].LatestSubmittedAt) ||
-		len(report.Columns) != 9 || report.Columns[2] != "Submitted" ||
-		report.Details[0][2] != rows[0].LatestSubmittedAt.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02 15:04:05") {
+		len(report.Columns) != 10 || report.Columns[3] != "Submitted" ||
+		report.Details[0][3] != rows[0].LatestSubmittedAt.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02 15:04:05") {
 		t.Fatal("worker did not carry the frozen submission timestamp into both report views")
 	}
 	if report.UserEmail != owner.Email || len(report.Summary) != 3 || report.Summary[1].Status != "no_bills" || report.Summary[2].Status != "needs_review" {

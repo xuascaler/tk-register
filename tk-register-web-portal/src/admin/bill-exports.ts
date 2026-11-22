@@ -5,6 +5,7 @@ export type BillExportJob = {
   model_usage_source?: 'raw' | 'modified';
   status: 'queued' | 'fetching' | 'filtering' | 'completed' | 'failed' | 'expired';
   user: BillExportUser;
+  include_sub_users: boolean;
   start_date: string;
   end_date: string;
   created_at: string;
@@ -20,6 +21,7 @@ export type BillExportJob = {
   error?: string;
 };
 export type BillExportSummary = {
+  username: string;
   account: string;
   platform_account_id: string;
   latest_submitted_at?: string | null;
@@ -29,7 +31,7 @@ export type BillExportSummary = {
   status: 'matched' | 'no_bills' | 'needs_review';
   reason?: string;
 };
-export type BillExportReview = { account: string; platform_account_id: string; reason: string };
+export type BillExportReview = { username: string; account: string; platform_account_id: string; reason: string };
 export type BillExportView = 'summary' | 'details' | 'review';
 export type BillExportResults = {
   items: (BillExportSummary | BillExportReview | string[])[];
