@@ -1,6 +1,7 @@
 import { AlertCircle, Check, ChevronDown, Download, FileSpreadsheet, LoaderCircle, Network, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { APIError, errorMessage, request } from '../api';
+import Select from '../submissions/Select';
 import { dateTime, Empty } from '../submissions/shared';
 import { ErrorNotice, Loading } from '../ui';
 import { Pagination } from './shared';
@@ -120,12 +121,13 @@ function ExportResults({ job, view, onView }: { job: BillExportJob; view: BillEx
   </div>;
 }
 
-export default function BillExports() {
+export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const today = beijingDate();
   const [user, setUser] = useState<BillExportUser | null>(null);
   const [start, setStart] = useState(offsetDate(today, -6));
   const [end, setEnd] = useState(today);
   const [includeSubUsers, setIncludeSubUsers] = useState(false);
+  const [source, setSource] = useState<'raw' | 'modified'>('raw');
   const [job, setJob] = useState<BillExportJob | null>(null);
   const [creating, setCreating] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -181,7 +183,7 @@ export default function BillExports() {
     downloadingRequest.current?.abort(); setDownloading(false);
     const controller = new AbortController(); pending.current = controller;
     try {
-      const result = await request<BillExportJob>('/admin/bill-exports', { method: 'POST', body: { user_id: String(user.id), start_date: start, end_date: end, include_sub_users: includeSubUsers }, signal: controller.signal });
+      const result = await request<BillExportJob>('/admin/bill-exports', { method: 'POST', body: { user_id: String(user.id), start_date: start, end_date: end, include_sub_users: includeSubUsers, ...(isSuperAdmin ? { model_usage_source: source } : {}) }, signal: controller.signal });
       if (controller.signal.aborted) return;
       setJob(result); setView('summary'); setValidation(false); setPollError('');
     } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
@@ -207,7 +209,7 @@ export default function BillExports() {
     finally { if (mounted.current) setDownloading(false); }
   }
   const locked = creating || running;
-  const settingsChanged = !!job && (user?.id !== job.user.id || start !== job.start_date || end !== job.end_date || includeSubUsers !== !!job.include_sub_users);
+  const settingsChanged = !!job && (user?.id !== job.user.id || start !== job.start_date || end !== job.end_date || includeSubUsers !== !!job.include_sub_users || (isSuperAdmin && source !== job.model_usage_source));
   return <section className='bill-exports'>
     <div className='section-heading bill-export-heading'><div><h2>Claude bill exports</h2><p className='muted small'>Export a user’s account bills for a selected date range.</p></div><span className='bill-vendor'>TK Register 0</span></div>
     <form className='panel bill-export-form' onSubmit={generate} noValidate>
@@ -216,7 +218,10 @@ export default function BillExports() {
         <div className='bill-date-field'><label htmlFor='bill-start-date'>Start date</label><input id='bill-start-date' type='date' value={start} max={end || today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setStart(event.target.value); }} /></div>
         <div className='bill-date-field'><label htmlFor='bill-end-date'>End date</label><input id='bill-end-date' type='date' value={end} min={start || undefined} max={today} disabled={locked} aria-invalid={validation && !!exportDateError(start, end)} aria-describedby='bill-date-help' onChange={event => { changed(); setEnd(event.target.value); }} /></div>
       </div>
-      <label className='switch bill-sub-users'><input id='bill-include-sub-users' type='checkbox' role='switch' checked={includeSubUsers} disabled={locked} aria-labelledby='bill-include-sub-users-label' aria-describedby='bill-include-sub-users-help' onChange={event => { changed(); setIncludeSubUsers(event.target.checked); }} /><span><strong id='bill-include-sub-users-label'>Include all sub-users</strong><small id='bill-include-sub-users-help'>Include every level of sub-users under the selected user.</small></span></label>
+      <div className='bill-export-options'>
+        <label className='switch bill-sub-users'><input id='bill-include-sub-users' type='checkbox' role='switch' checked={includeSubUsers} disabled={locked} aria-labelledby='bill-include-sub-users-label' aria-describedby='bill-include-sub-users-help' onChange={event => { changed(); setIncludeSubUsers(event.target.checked); }} /><span><strong id='bill-include-sub-users-label'>Include all sub-users</strong><small id='bill-include-sub-users-help'>Include every level of sub-users under the selected user.</small></span></label>
+        {isSuperAdmin && <div className='bill-source-picker'><Select id='bill-export-source' label='Data source' value={source} disabled={locked} options={[{ value: 'raw', label: 'Raw data' }, { value: 'modified', label: 'Modified data' }]} onChange={value => { changed(); setSource(value === 'modified' ? 'modified' : 'raw'); }} /></div>}
+      </div>
       <div className='bill-date-options'><p id='bill-date-help'>Beijing time · Up to 60 days, including both dates.</p><div className='bill-shortcuts' aria-label='Date shortcuts'><button type='button' disabled={locked} onClick={() => shortcut(1, true)}>Yesterday</button><button type='button' disabled={locked} onClick={() => shortcut(7)}>Last 7 days</button><button type='button' disabled={locked} onClick={() => shortcut(30)}>Last 30 days</button></div></div>
       <ErrorNotice>{error}</ErrorNotice>
       <div className='bill-form-footer'><p>{includeSubUsers ? 'Selected user and all sub-users.' : 'Selected user only.'}<br />Each account is counted once.</p><button type='submit' className='button primary' disabled={locked}>{creating || running ? <LoaderCircle className='spin' aria-hidden='true' /> : <FileSpreadsheet aria-hidden='true' />}{creating ? 'Creating export…' : running ? 'Export in progress' : 'Generate export'}</button></div>

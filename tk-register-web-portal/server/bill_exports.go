@@ -98,6 +98,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 			var input struct {
 				UserID          string `json:"user_id"`
 				IncludeSubUsers bool   `json:"include_sub_users"`
+				UsageSource     string `json:"model_usage_source"`
 				StartDate       string `json:"start_date"`
 				EndDate         string `json:"end_date"`
 			}
@@ -118,7 +119,7 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 				rateFailure(w, retry)
 				return true
 			}
-			job, err := a.store.CreateBillExport(r.Context(), actor.ID, userID, input.StartDate, input.EndDate, time.Now().UTC(), input.IncludeSubUsers)
+			job, err := a.store.CreateBillExport(r.Context(), actor.ID, userID, input.StartDate, input.EndDate, time.Now().UTC(), core.BillExportOptions{IncludeSubUsers: input.IncludeSubUsers, UsageSource: input.UsageSource})
 			if core.IsValidationError(err) {
 				fail(w, 400, "INVALID_REQUEST", err.Error())
 			} else if err != nil {

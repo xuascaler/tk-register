@@ -23,7 +23,10 @@
 .bill-user-message .text-button,.bill-users-more { border: 0; color: var(--navy); background: transparent; font-size: 12px; padding: 5px; }
 .bill-users-more { width: 100%; padding: 12px; border-top: 1px solid var(--border); margin-top: 4px; }
 .bill-users-more:hover { background: #f4f7fb; }
-.bill-exports .bill-sub-users { margin-top: 18px; align-items: flex-start; max-width: 100%; }
+.bill-export-options { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 18px; }
+.bill-source-picker { flex: 0 0 220px; min-width: 0; }
+.bill-source-picker .tk-select > label { font-size: 13px; font-weight: 500; }
+.bill-exports .bill-sub-users { align-items: flex-start; max-width: 100%; }
 .bill-exports .bill-sub-users input { flex-shrink: 0; margin-top: 1px; }
 .bill-exports .bill-sub-users > span { font-family: inherit; color: #40546b; min-width: 0; }
 .bill-exports .bill-sub-users strong { display: block; font-size: 13px; font-weight: 500; }
@@ -120,6 +123,8 @@
   .bill-export-metrics .bill-total { align-items: flex-start; }
 }
 @media (max-width:700px) {
+  .bill-export-options { align-items: stretch; flex-direction: column; gap: 16px; }
+  .bill-source-picker { flex-basis: auto; width: 100%; }
   .bill-export-heading { flex-wrap: wrap; }
   .bill-export-form { padding: 20px 18px; }
   .bill-export-fields { gap: 18px 12px; }
