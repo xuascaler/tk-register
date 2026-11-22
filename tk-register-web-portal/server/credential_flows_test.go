@@ -337,9 +337,10 @@ func TestCredentialSubmissionRespectsPersonalModelVisibility(t *testing.T) {
 		for _, upstreamStatus := range []int{http.StatusOK, http.StatusBadRequest} {
 			t.Run(fmt.Sprintf("%s/%d", role, upstreamStatus), func(t *testing.T) {
 				a, _, _ := fixture(t)
-				admin, adminCookie, _ := vendorSession(t, a, "visibility-config@example.com", "admin")
+				super, superCookie, _ := vendorSession(t, a, core.InitialSuperAdminEmail, "admin")
+				_, adminCookie, _ := vendorSession(t, a, "visibility-config@example.com", "admin")
 				owner, cookie, csrf := vendorSession(t, a, "visibility-submit@example.com", role)
-				vendor := configuredVendor(t, a, admin.ID)
+				vendor := configuredVendor(t, a, super.ID)
 				storedCredentialFlow(t, a, owner, true)
 				credentialHelperFixture(t, func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
 					_ = json.NewEncoder(w).Encode(credentialReply(owner.ID, true))
@@ -383,7 +384,7 @@ func TestCredentialSubmissionRespectsPersonalModelVisibility(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, enabled := range []bool{false, true, false} {
-					if err := a.store.PatchSettings(context.Background(), map[string]string{"user_overview_model_costs_enabled": strconv.FormatBool(enabled)}, admin.ID); err != nil {
+					if err := a.store.PatchSettings(context.Background(), map[string]string{"user_overview_model_costs_enabled": strconv.FormatBool(enabled)}, super.ID); err != nil {
 						t.Fatal(err)
 					}
 					w = request(t, a, "POST", "credential-flows/submit", body, cookie, csrf)
@@ -392,24 +393,28 @@ func TestCredentialSubmissionRespectsPersonalModelVisibility(t *testing.T) {
 					if detail.Submission.ID != first.Submission.ID || detail.Submission.Status != wantStatus || pushes.Load() != 1 {
 						t.Fatal("visibility toggle changed guided submission idempotency or state")
 					}
-					if strings.Contains(w.Body.String(), marker) != enabled {
-						t.Fatal("guided submission did not apply current model visibility", enabled, w.Body.String())
+					if strings.Contains(w.Body.String(), marker) {
+						t.Fatal("guided submission exposed supplier model data", enabled)
 					}
 					if upstreamStatus == http.StatusBadRequest && (len(detail.Executions) != 1 || !strings.Contains(detail.Executions[0].ErrorBody, diagnostic)) {
 						t.Fatal("replayed guided submission lost its safe failure diagnostic", enabled)
 					}
-					if !enabled {
-						for _, execution := range detail.Executions {
-							if execution.Result != nil || upstreamStatus == http.StatusOK && execution.ErrorBody != "" || execution.RequestID == "" {
-								t.Fatal("opaque model fields leaked or request metadata was lost")
-							}
+					for _, execution := range detail.Executions {
+						if execution.Result != nil || upstreamStatus == http.StatusOK && execution.ErrorBody != "" || execution.RequestID == "" {
+							t.Fatal("opaque model fields leaked or request metadata was lost")
 						}
 					}
 				}
-				management := request(t, a, "GET", "admin/submissions/"+first.Submission.ID, nil, adminCookie, "")
+				path := "admin/submissions/" + first.Submission.ID
+				management := request(t, a, "GET", path, nil, adminCookie, "")
+				requireStatus(t, management, http.StatusOK)
+				if strings.Contains(management.Body.String(), marker) {
+					t.Fatal("regular administrator received supplier model data")
+				}
+				management = request(t, a, "GET", path, nil, superCookie, "")
 				requireStatus(t, management, http.StatusOK)
 				if !strings.Contains(management.Body.String(), marker) {
-					t.Fatal("personal projection removed stored Management details")
+					t.Fatal("super administrator lost stored supplier details")
 				}
 			})
 		}
