@@ -116,7 +116,7 @@ func TestBillExportAdminCSRFAndDownloadIsolation(t *testing.T) {
 	w = request(t, a, "GET", route, nil, superCookie, "")
 	requireStatus(t, w, 200)
 	superJobs := data(t, w)["items"].([]any)
-	if len(superJobs) != 2 || superJobs[0].(map[string]any)["model_usage_source"] != "raw" || superJobs[1].(map[string]any)["model_usage_source"] != "modified" {
+	if len(superJobs) != 2 || superJobs[0].(map[string]any)["model_usage_source"] != "raw" || superJobs[1].(map[string]any)["model_usage_source"] != "cache" {
 		t.Fatal("super admin should see both export sources")
 	}
 	requireStatus(t, request(t, a, "GET", route+"/"+rawID, nil, superCookie, ""), 200)

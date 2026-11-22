@@ -2,7 +2,7 @@ export type BillExportUser = { id: string; email: string };
 export type BillExportJob = {
   id: string;
   download_filename: string;
-  model_usage_source?: 'raw' | 'modified';
+  model_usage_source?: 'raw' | 'cache';
   status: 'queued' | 'fetching' | 'filtering' | 'completed' | 'failed' | 'expired';
   user: BillExportUser;
   include_sub_users: boolean;

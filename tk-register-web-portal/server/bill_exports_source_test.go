@@ -45,10 +45,11 @@ func TestBillExportHTTPSourceSelectionControlsReportAndWorkbook(t *testing.T) {
 	}{
 		{"ordinary default", "", "modified", admin, cookie, csrf},
 		{"ordinary forged raw", "raw", "modified", admin, cookie, csrf},
-		{"ordinary modified", "modified", "modified", admin, cookie, csrf},
+		{"ordinary cache", "cache", "modified", admin, cookie, csrf},
 		{"super default", "", "raw", super, superCookie, superCSRF},
 		{"super raw", "raw", "raw", super, superCookie, superCSRF},
-		{"super modified", "modified", "modified", super, superCookie, superCSRF},
+		{"super cache", "cache", "modified", super, superCookie, superCSRF},
+		{"super legacy source", "modified", "modified", super, superCookie, superCSRF},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := map[string]any{"user_id": fmt.Sprint(owner.ID), "start_date": "2026-01-05", "end_date": "2026-01-05", "include_sub_users": true}
@@ -59,7 +60,11 @@ func TestBillExportHTTPSourceSelectionControlsReportAndWorkbook(t *testing.T) {
 			requireStatus(t, response, 200)
 			metadata := data(t, response)
 			if test.actor.IsSuperAdmin {
-				if metadata["model_usage_source"] != test.want {
+				publicSource := "raw"
+				if test.want == "modified" {
+					publicSource = "cache"
+				}
+				if metadata["model_usage_source"] != publicSource {
 					t.Fatal("wrong selected source", metadata)
 				}
 			} else if metadata["model_usage_source"] != nil {

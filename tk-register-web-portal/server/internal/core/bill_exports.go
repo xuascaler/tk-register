@@ -145,16 +145,17 @@ func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, st
 			return err
 		}
 		// Source selection is independent of page configuration and is authorized
-		// against the current persisted role. Ordinary admins always use Modified.
+		// against the current persisted role. Cache retains the legacy stored value
+		// so existing jobs and their authorization checks keep the same source.
 		source := "modified"
 		if actor.IsSuperAdmin {
 			switch selected.UsageSource {
 			case "", "raw":
 				source = "raw"
-			case "modified":
+			case "cache", "modified":
 				source = "modified"
 			default:
-				return validationErrorf("Choose Raw or Modified bill data.")
+				return validationErrorf("Choose Raw or Cache bill data.")
 			}
 		}
 		if err := tx.First(&user, userID).Error; err != nil {
