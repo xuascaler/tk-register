@@ -233,6 +233,11 @@ try {
   assert.equal((await retryResponse).status(), 409, "Accepted accounts must still be protected against duplicates");
   assert.notEqual(captured.client_request_key, firstRequestKey, "Each deliberate retry uses a new request key");
   captured = firstPayload;
+  page.once("dialog", async dialog => {
+    assert.equal(dialog.type(), "confirm");
+    assert.equal(dialog.message(), "Discard your unsaved changes and leave this page?");
+    await dialog.accept();
+  });
   await go(`submissions/${firstAcceptedSubmissionID}`);
   await page
     .getByRole("heading", { name: "account@example.com", exact: true })
@@ -273,7 +278,8 @@ try {
   // Status can query the test vendor. The member's bill range uses local daily rows.
   detail = await data(await api(page.request, `/submissions/${id}/status`, "POST", { force: true }, member.csrf_token));
   assert.equal(detail.submission.platform_account_id, "10725");
-  assert.equal(detail.metrics.account.prompt_tokens, 1120273);
+  assert.equal(detail.metrics.account.prompt_tokens, null);
+  assert.equal(detail.metrics.account.completion_tokens, null);
   const endDate = new Date().toISOString().slice(0, 10);
   const billDates = { start_ds: endDate, end_ds: endDate };
   const vendorBillRequests = (await audit()).bills;
