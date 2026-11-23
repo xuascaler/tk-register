@@ -1,3 +1,4 @@
+import { t, translateMessage } from '../i18n';
 import { Check, Copy, Info, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -51,21 +52,21 @@ export function ErrorPopover({ label, title, message, detail, note, className = 
     if (!trigger.current?.contains(event.relatedTarget as Node) && !panel.current?.contains(event.relatedTarget as Node)) close();
   }
   async function copy() {
-    try { await navigator.clipboard.writeText([title, message, detail, note].filter(Boolean).join('\n\n')); setCopyState('Copied'); }
+    try { await navigator.clipboard.writeText([title, translateMessage(message), detail, note].filter(Boolean).join('\n\n')); setCopyState('Copied'); }
     catch { setCopyState('Could not copy. Select the text to copy it.'); }
   }
   return <>
-    <button ref={trigger} type='button' className={`account-detail-trigger ${className}`} aria-label={`${label} details`} aria-expanded={open} aria-haspopup='dialog' aria-controls={open ? id : undefined}
+    <button ref={trigger} type='button' className={`account-detail-trigger ${className}`} aria-label={t('{{label}} details', { label })} aria-expanded={open} aria-haspopup='dialog' aria-controls={open ? id : undefined}
       onMouseEnter={show} onMouseLeave={leave} onBlur={blur}
       onClick={() => { if (open && pinned.current) close(); else { pinned.current = true; show(); } }}>
       <span>{label}</span><Info aria-hidden='true' />
     </button>
     {open && createPortal(<div ref={panel} id={id} role='dialog' aria-modal='false' aria-labelledby={`${id}-title`} className='account-error-popover' style={{ top: position.top, left: position.left, visibility: position.ready ? 'visible' : 'hidden' }} onMouseEnter={cancelClose} onMouseLeave={leave} onFocus={() => { pinned.current = true; cancelClose(); }} onBlur={blur}>
-      <div className='account-error-heading'><strong id={`${id}-title`}>{title}</strong><button type='button' aria-label='Close details' onClick={() => close(true)}><X aria-hidden='true' /></button></div>
-      <p className='account-error-message'>{message}</p>
+      <div className='account-error-heading'><strong id={`${id}-title`}>{title}</strong><button type='button' aria-label={t('Close details')} onClick={() => close(true)}><X aria-hidden='true' /></button></div>
+      <p className='account-error-message'>{translateMessage(message)}</p>
       {detail && <p className='account-error-meta'>{detail}</p>}
       {note && <p className='account-error-note'>{note}</p>}
-      <div className='account-error-footer'><span role='status'>{copyState}</span><button type='button' onClick={copy}>{copyState === 'Copied' ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}Copy details</button></div>
+      <div className='account-error-footer'><span role='status'>{translateMessage(copyState)}</span><button type='button' onClick={copy}>{copyState === 'Copied' ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}{t('Copy details')}</button></div>
     </div>, document.body)}
   </>;
 }

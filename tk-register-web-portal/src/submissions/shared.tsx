@@ -1,3 +1,4 @@
+import { currentLanguage, t, translateMessage } from '../i18n';
 import { ArrowLeft, Inbox, RefreshCw } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Submission } from './types';
@@ -8,7 +9,7 @@ export function dateTime(value: string | null | undefined) {
   const date = new Date(value);
   return Number.isNaN(date.valueOf())
     ? value
-    : date.toLocaleString(undefined, {
+    : date.toLocaleString(currentLanguage(), {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -17,10 +18,12 @@ export function dateTime(value: string | null | undefined) {
       });
 }
 export function humanize(value: string | null | undefined) {
-  if (value === 'sync_failed') return 'Upstream sync failed';
+  if (value === 'sync_failed') return t('Upstream sync failed');
+  if (value === 're_login_failed' || value === 'relogin_failed') return t('Re-login failed');
+  if (value === 'auth_json') return 'Auth JSON';
   return value
-    ? value.replaceAll('_', ' ').replace(/^./, (s) => s.toUpperCase())
-    : 'Not checked';
+    ? t(value.replaceAll('_', ' ').replace(/^./, (s) => s.toUpperCase()))
+    : t('Not checked');
 }
 export function StateBadge({ value }: { value: string | null }) {
   return (
@@ -36,7 +39,7 @@ export function AccountStatus({
   submission: Submission;
   refresh?: StatusRefresh;
 }) {
-  const label = statusLabel(submission, refresh);
+  const label = t(statusLabel(submission, refresh));
   return (
     <div className='account-status' aria-live='polite'>
       {submission.status === 'accepted' && submission.remote_status ? (
@@ -46,11 +49,11 @@ export function AccountStatus({
       )}
       {refresh?.checking ? (
         <span className='account-status-note'>
-          <RefreshCw className='spin' aria-hidden='true' /> Checking…
+          <RefreshCw className='spin' aria-hidden='true' /> {t('Checking…')}
         </span>
       ) : refresh?.error ? (
         <span className='account-status-note status-update-error'>
-          Update failed. {refresh.error}
+          {t('Update failed.')} {translateMessage(refresh.error)}
         </span>
       ) : null}
       {submission.status_checked_at && (
@@ -58,7 +61,7 @@ export function AccountStatus({
           className='account-status-note'
           dateTime={submission.status_checked_at}
         >
-          Updated {dateTime(submission.status_checked_at)}
+          {t('Updated')} {dateTime(submission.status_checked_at)}
         </time>
       )}
     </div>
@@ -81,7 +84,7 @@ export function Empty({
     </div>
   );
 }
-export function Back({ onClick, label = 'Submission history' }: { onClick: () => void; label?: string }) {
+export function Back({ onClick, label = t('Submission history') }: { onClick: () => void; label?: string }) {
   return (
     <button className='back-link' type='button' onClick={onClick}>
       <ArrowLeft aria-hidden='true' />
@@ -90,5 +93,5 @@ export function Back({ onClick, label = 'Submission history' }: { onClick: () =>
   );
 }
 export function number(value: number | null | undefined) {
-  return value == null ? '—' : value.toLocaleString();
+  return value == null ? '—' : value.toLocaleString(currentLanguage());
 }

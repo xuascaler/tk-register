@@ -1,11 +1,13 @@
+import { t } from '../i18n';
 import { Check, LockKeyhole, LogOut, Mail, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MutableRefObject } from 'react';
-import { APIError, errorMessage, request, retryAfterSeconds } from '../api';
+import { APIError, displayError, localizedError, request, retryAfterSeconds, type DisplayError } from '../api';
 import { ErrorNotice, PasswordField } from '../ui';
 import { passwordWithinLimit } from '../validation';
 import './change-password.css';
 
 type Field = 'code' | 'password' | 'confirmation';
+type FieldIssue = { message: DisplayError; params?: Record<string, string | number> };
 type Delivery = { challenge_id: string; retry_after: number; expires_in: number; code_length: number };
 type Challenge = Delivery & { expiresAt: number };
 type Operation = { challenge_id: string; code: string; password: string; confirmation: string; request_id: string };
@@ -33,8 +35,8 @@ function ChangePasswordDialog({ email, deadline, onClose, onChanged }: {
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [challenge, setChallenge] = useState<Challenge | null>(null);
-  const [error, setError] = useState('');
-  const [errors, setErrors] = useState<Partial<Record<Field, string>>>({});
+  const [error, setError] = useState<DisplayError>('');
+  const [errors, setErrors] = useState<Partial<Record<Field, FieldIssue>>>({});
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [retryAt, setRetryAt] = useState(0);
@@ -94,7 +96,9 @@ function ChangePasswordDialog({ email, deadline, onClose, onChanged }: {
     setErrors(value => ({ ...value, [field]: undefined }));
     setError('');
   }
-  function invalid(field: Field, message: string) { setErrors({ [field]: message }); }
+  function invalid(field: Field, message: DisplayError, params?: FieldIssue['params']) {
+    setErrors({ [field]: { message, params } });
+  }
   function cooldown(seconds: number) {
     deadline.current = Date.now() + retryAfterSeconds(seconds) * 1000;
     setNow(Date.now());
@@ -106,9 +110,9 @@ function ChangePasswordDialog({ email, deadline, onClose, onChanged }: {
         else cooldown(cause.retryAfter);
       }
       if (submitting && cause.status > 0 && cause.status < 500 && cause.status !== 429) operation.current = null;
-      if (cause.code === 'INVALID_CODE') { invalid('code', errorMessage(cause)); return; }
-      if (cause.code === 'INVALID_PASSWORD' || cause.code === 'PASSWORD_UNCHANGED') { invalid('password', errorMessage(cause)); return; }
-      if (cause.code === 'PASSWORD_MISMATCH') { invalid('confirmation', errorMessage(cause)); return; }
+      if (cause.code === 'INVALID_CODE') { invalid('code', displayError(cause)); return; }
+      if (cause.code === 'INVALID_PASSWORD' || cause.code === 'PASSWORD_UNCHANGED') { invalid('password', displayError(cause)); return; }
+      if (cause.code === 'PASSWORD_MISMATCH') { invalid('confirmation', displayError(cause)); return; }
       if (cause.code === 'PASSWORD_CHANGE_CONFLICT') {
         operation.current = null;
         setCode(''); setChallenge(null);
@@ -116,7 +120,7 @@ function ChangePasswordDialog({ email, deadline, onClose, onChanged }: {
         return;
       }
     }
-    setError(errorMessage(cause));
+    setError(displayError(cause));
   }
   async function sendCode() {
     if (inFlight.current || remaining > 0) return;
@@ -143,7 +147,7 @@ function ChangePasswordDialog({ email, deadline, onClose, onChanged }: {
     setError(''); setErrors({});
     if (!challenge) { invalid('code', 'Send a verification code to your email first.'); return; }
     if (expired && !operation.current) { invalid('code', 'The code has expired. Send a new verification code.'); return; }
-    if (!new RegExp(`^[a-zA-Z0-9]{${codeLength}}$`).test(code.trim())) { invalid('code', `Enter the ${codeLength}-character verification code from your email.`); return; }
+    if (!new RegExp(`^[a-zA-Z0-9]{${codeLength}}$`).test(code.trim())) { invalid('code', 'Enter the {{length}}-character verification code from your email.', { length: codeLength }); return; }
     if (Array.from(password).length < 8) { invalid('password', 'Use a password with at least 8 characters.'); return; }
     if (!passwordWithinLimit(password)) { invalid('password', 'Password must be at most 72 UTF-8 bytes. Use a shorter password.'); return; }
     if (password !== confirmation) { invalid('confirmation', 'The passwords do not match.'); return; }
@@ -164,30 +168,36 @@ function ChangePasswordDialog({ email, deadline, onClose, onChanged }: {
       if (mounted.current && !controller.signal.aborted) setBusy(false);
     }
   }
-  const fieldError = (field: Field) => errors[field] && <p className='field-error' id={`change-password-${field}-error`} role='alert'>{errors[field]}</p>;
+  function fieldError(field: Field) {
+    const issue = errors[field];
+    if (!issue) return null;
+    return <p className='field-error' id={`change-password-${field}-error`} role='alert'>
+      {issue.params && typeof issue.message === 'string' ? t(issue.message, issue.params) : localizedError(issue.message)}
+    </p>;
+  }
   return <dialog ref={dialog} className='admin-create-dialog password-change-dialog' aria-labelledby='change-password-title' aria-describedby='change-password-description' onKeyDown={keepFocus} onCancel={event => { event.preventDefault(); close(); }}>
     <header className='admin-create-heading'>
-      <div><h2 id='change-password-title'>Change password</h2><p id='change-password-description'>Verify your email address to change your TK Register password.</p></div>
-      <button className='admin-dialog-close' type='button' aria-label='Close change password' disabled={disabled} onClick={close}><X aria-hidden='true' /></button>
+      <div><h2 id='change-password-title'>{t('Change password')}</h2><p id='change-password-description'>{t('Verify your email address to change your TK Register password.')}</p></div>
+      <button className='admin-dialog-close' type='button' aria-label={t('Close change password')} disabled={disabled} onClick={close}><X aria-hidden='true' /></button>
     </header>
     <form ref={form} onSubmit={submit} noValidate aria-busy={disabled}>
       <div className='admin-create-fields'>
-        <div className='field'><label htmlFor='change-password-email'>Email address</label><div className='change-password-email'><input id='change-password-email' type='email' value={email} readOnly autoComplete='username' /><LockKeyhole aria-hidden='true' /></div></div>
+        <div className='field'><label htmlFor='change-password-email'>{t('Email address')}</label><div className='change-password-email'><input id='change-password-email' type='email' value={email} readOnly autoComplete='username' /><LockKeyhole aria-hidden='true' /></div></div>
         <div className='field'>
-          <label htmlFor='change-password-code'>Verification code</label>
+          <label htmlFor='change-password-code'>{t('Verification code')}</label>
           <div className='code-row'>
-            <input ref={codeInput} id='change-password-code' name='code' autoComplete='one-time-code' autoCapitalize='none' autoCorrect='off' spellCheck={false} maxLength={codeLength} placeholder={`${codeLength} characters`} value={code} disabled={disabled} aria-invalid={!!errors.code} aria-describedby={`change-password-code-status${errors.code ? ' change-password-code-error' : ''}`} onChange={event => { setCode(event.target.value); edited('code'); }} />
-            <button className='button pale' type='button' disabled={disabled || remaining > 0} onClick={sendCode}><Mail aria-hidden='true' />{sending ? 'Sending…' : remaining ? `Resend in ${remaining}s` : challenge ? 'Resend code' : 'Send code'}</button>
+            <input ref={codeInput} id='change-password-code' name='code' autoComplete='one-time-code' autoCapitalize='none' autoCorrect='off' spellCheck={false} maxLength={codeLength} placeholder={t('{{count}} characters', { count: codeLength })} value={code} disabled={disabled} aria-invalid={!!errors.code} aria-describedby={`change-password-code-status${errors.code ? ' change-password-code-error' : ''}`} onChange={event => { setCode(event.target.value); edited('code'); }} />
+            <button className='button pale' type='button' disabled={disabled || remaining > 0} onClick={sendCode}><Mail aria-hidden='true' />{sending ? t('Sending…') : remaining ? t('Resend in {{count}}s', { count: remaining }) : challenge ? t('Resend code') : t('Send code')}</button>
           </div>
-          <p className='code-status' id='change-password-code-status' role='status'>{challenge && <><Check aria-hidden='true' />{expired ? 'The code has expired. Send a new verification code.' : `Code sent to your email. Valid for ${Math.ceil(challenge.expires_in / 60)} minutes.`}</>}</p>
+          <p className='code-status' id='change-password-code-status' role='status'>{challenge && <><Check aria-hidden='true' />{expired ? t('The code has expired. Send a new verification code.') : t('Code sent to your email. Valid for {{count}} minutes.', { count: Math.ceil(challenge.expires_in / 60) })}</>}</p>
           {fieldError('code')}
         </div>
-        <div><PasswordField label='New password' name='password' autoComplete='new-password' placeholder='At least 8 characters' value={password} disabled={disabled} aria-invalid={!!errors.password} aria-describedby={`change-password-help${errors.password ? ' change-password-password-error' : ''}`} onChange={event => { setPassword(event.target.value); edited('password'); }} /><p className='admin-create-help' id='change-password-help'>Use at least 8 characters, up to 72 UTF-8 bytes.</p>{fieldError('password')}</div>
-        <div><PasswordField label='Confirm new password' name='confirmation' autoComplete='new-password' placeholder='Re-enter your new password' value={confirmation} disabled={disabled} aria-invalid={!!errors.confirmation} aria-describedby={errors.confirmation ? 'change-password-confirmation-error' : undefined} onChange={event => { setConfirmation(event.target.value); edited('confirmation'); }} />{fieldError('confirmation')}</div>
+        <div><PasswordField label={t('New password')} name='password' autoComplete='new-password' placeholder={t('At least 8 characters')} value={password} disabled={disabled} aria-invalid={!!errors.password} aria-describedby={`change-password-help${errors.password ? ' change-password-password-error' : ''}`} onChange={event => { setPassword(event.target.value); edited('password'); }} /><p className='admin-create-help' id='change-password-help'>{t('Use at least 8 characters, up to 72 UTF-8 bytes.')}</p>{fieldError('password')}</div>
+        <div><PasswordField label={t('Confirm new password')} name='confirmation' autoComplete='new-password' placeholder={t('Re-enter your new password')} value={confirmation} disabled={disabled} aria-invalid={!!errors.confirmation} aria-describedby={errors.confirmation ? 'change-password-confirmation-error' : undefined} onChange={event => { setConfirmation(event.target.value); edited('confirmation'); }} />{fieldError('confirmation')}</div>
         <ErrorNotice>{error}</ErrorNotice>
-        <div className='admin-create-note'><LogOut aria-hidden='true' /><p>You’ll be signed out of all browser sessions after changing your password.</p></div>
+        <div className='admin-create-note'><LogOut aria-hidden='true' /><p>{t('You’ll be signed out of all browser sessions after changing your password.')}</p></div>
       </div>
-      <footer className='admin-create-actions'><button type='button' className='button secondary' disabled={disabled} onClick={close}>Cancel</button><button type='submit' className='button primary' disabled={disabled || retryRemaining > 0 || (remaining > 0 && !challenge)}>{busy ? 'Changing password…' : retryRemaining ? `Try again in ${retryRemaining}s` : 'Change password'}</button></footer>
+      <footer className='admin-create-actions'><button type='button' className='button secondary' disabled={disabled} onClick={close}>{t('Cancel')}</button><button type='submit' className='button primary' disabled={disabled || retryRemaining > 0 || (remaining > 0 && !challenge)}>{busy ? t('Changing password…') : retryRemaining ? t('Try again in {{count}}s', { count: retryRemaining }) : t('Change password')}</button></footer>
     </form>
   </dialog>;
 }
@@ -197,8 +207,8 @@ export default function ChangePassword({ email, onChanged }: { email: string; on
   const deadline = useRef(0);
   return <>
     <div className='account-row'>
-      <div className='account-label'>Password</div>
-      <div className='account-value change-password-row'><div><span aria-label='Password is set'>••••••••••</span><p className='account-help'>Verify your email to change your password.</p></div><button type='button' className='button secondary' onClick={() => setOpen(true)}>Change password</button></div>
+      <div className='account-label'>{t('Password')}</div>
+      <div className='account-value change-password-row'><div><span aria-label={t('Password is set')}>••••••••••</span><p className='account-help'>{t('Verify your email to change your password.')}</p></div><button type='button' className='button secondary' onClick={() => setOpen(true)}>{t('Change password')}</button></div>
     </div>
     {open && <ChangePasswordDialog email={email} deadline={deadline} onClose={() => setOpen(false)} onChanged={onChanged} />}
   </>;

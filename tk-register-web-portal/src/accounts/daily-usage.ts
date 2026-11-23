@@ -1,3 +1,6 @@
+import { currentLanguage } from '../i18n';
+import { formatCost } from './helpers';
+
 export type DailyMetric = 'cost_usd' | 'input_tokens' | 'output_tokens' | 'cache_read_tokens' | 'cache_write_tokens';
 export const dailyMetrics: Record<DailyMetric, string> = { cost_usd: 'Cost', input_tokens: 'Input tokens', output_tokens: 'Output tokens', cache_read_tokens: 'Cache read', cache_write_tokens: 'Cache write' };
 export type DailyRow = { date: string; model: string; input_tokens: string; output_tokens: string; cache_read_tokens: string; cache_write_tokens: string; cost_cny: string; cost_usd: number };
@@ -28,6 +31,18 @@ export function dailySeries(data: DailyData, models: ModelSelection, metric: Dai
   const filtered = filterDailyRows(data.rows || [], models);
   return data.days.map(day => ({ ...day, rows: filtered.filter(row => row.date === day.date), value: day.collected_at ? filtered.filter(row => row.date === day.date).reduce((sum, row) => sum + Number(row[metric]), 0) : null }));
 }
-export function dailyMoney(value: number) { return `${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`; }
-export function dailyTokens(value: string | bigint) { return BigInt(value).toLocaleString('en-US'); }
-export function dailyDate(date: string) { return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); }
+export function dailyMoney(value: number) { return formatCost(value, 'USD'); }
+export function dailyTokens(value: string | bigint) { return BigInt(value).toLocaleString(currentLanguage()); }
+export function dailyDate(date: string, full = false) {
+  const day = new Date(`${date}T12:00:00Z`);
+  if (!Number.isFinite(day.getTime())) return '—';
+  const locale = currentLanguage();
+  if (full && locale === 'en-US') return date;
+  return day.toLocaleDateString(locale, { year: full ? 'numeric' : undefined, month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+export function dailyDateRange(start: string, end: string) {
+  const from = new Date(`${start}T12:00:00Z`), to = new Date(`${end}T12:00:00Z`);
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from > to) return '—';
+  return new Intl.DateTimeFormat(currentLanguage(), { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }).formatRange(from, to);
+}

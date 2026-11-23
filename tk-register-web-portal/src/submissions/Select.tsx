@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { Check, ChevronDown } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
@@ -32,7 +33,7 @@ export default function Select({
   required,
   invalid,
   describedBy,
-  placeholder = "Select an option",
+  placeholder = t('Select an option'),
 }: SelectProps) {
   const trigger = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);

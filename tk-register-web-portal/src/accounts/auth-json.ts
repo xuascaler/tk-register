@@ -1,3 +1,5 @@
+import { t, translateMessage } from '../i18n';
+import { AuthFieldError, authFields } from '../submissions/validation';
 import { APIError, errorMessage, type RetryStage } from '../api';
 import type { SyncedAccount } from './types';
 
@@ -47,4 +49,19 @@ export function confirmedAuthJSONResult(value: unknown): value is AuthJSONUpdate
   if (!value || typeof value !== 'object') return false;
   const result = value as Partial<AuthJSONUpdateResult>;
   return result.updated === true && 'account' in result && (result.account === null || typeof result.account === 'object') && ['not_requested', 'pending', 'succeeded', 'failed'].includes(result.refresh_status || '');
+}
+
+// Keep source messages in component state so a language change also updates
+// existing warnings. Only interpolate known validation field names; technical
+// keys and any additional supplier explanation remain unchanged.
+export function localizeAuthJSONMessage(value: string | AuthFieldError): string {
+  if (value instanceof AuthFieldError) return value.localizedMessage;
+  const field = /^(?:The authorized ([a-z_]+) cannot be replaced\. Complete missing fields only\.|([a-z_]+) has an invalid value\.)$/.exec(value);
+  const name = field?.[1] || field?.[2];
+  if (name && (authFields as readonly string[]).includes(name)) return t(field?.[1] ? 'The authorized {{field}} cannot be replaced. Complete missing fields only.' : '{{field}} has an invalid value.', { field: name });
+  const unavailable = 'The latest page data could not be loaded. Refresh this page to try again.';
+  if (value.endsWith(unavailable) && value !== unavailable) return `${localizeAuthJSONMessage(value.slice(0, -unavailable.length).trim())} ${t(unavailable)}`;
+  const failed = 'Auth JSON updated, but account refresh failed.';
+  if (value.startsWith(`${failed} `)) return `${t(failed)} ${translateMessage(value.slice(failed.length).trim())}`;
+  return translateMessage(value);
 }

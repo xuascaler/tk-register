@@ -1,7 +1,8 @@
+import { t, translateMessage, useLanguage } from './i18n';
 import { Check, CircleDot, LockKeyhole } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
-  errorMessage,
+  displayError, type DisplayError,
   request,
   type Setting,
   type User,
@@ -52,6 +53,7 @@ export default function Config({
   initialCategory?: string;
   currentUser: User;
 }) {
+  useLanguage();
   const [settings, setSettings] = useState<Setting[] | null>(null);
   const [draft, setDraft] = useState<Record<string, SettingValue>>({});
   const groups = allGroups.filter(([key]) => currentUser.is_super_admin || (key !== 'overview' && key !== 'daily_usage'));
@@ -59,7 +61,7 @@ export default function Config({
   const rawSource = draft.model_usage_source === 'raw';
   const [vendorDirty, setVendorDirty] = useState(false);
   const [syncDirty, setSyncDirty] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<DisplayError>('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [validation, setValidation] = useState<Record<string, string>>({});
@@ -73,7 +75,7 @@ export default function Config({
         setDraft(initialDraft(result.settings));
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
+        if (!controller.signal.aborted) setError(displayError(cause));
       });
     return () => controller.abort();
   }, [attempt]);
@@ -88,11 +90,11 @@ export default function Config({
   }, [changes, vendorDirty, syncDirty, onDirty]);
   function selectCategory(value: string) {
     if (value === category) return;
-    if (category === 'account_sync' && syncDirty && !window.confirm('Discard your unsaved account sync changes?')) return;
+    if (category === 'account_sync' && syncDirty && !window.confirm(t('Discard your unsaved account sync changes?'))) return;
     if (
       category === 'vendors' &&
       vendorDirty &&
-      !window.confirm('Discard your unsaved vendor changes?')
+      !window.confirm(t('Discard your unsaved vendor changes?'))
     )
       return;
     setCategory(value);
@@ -150,7 +152,7 @@ export default function Config({
       setNotice('Changes saved.');
       setValidation({});
     } catch (cause) {
-      setError(errorMessage(cause));
+      setError(displayError(cause));
     } finally {
       setBusy(false);
     }
@@ -190,7 +192,7 @@ export default function Config({
             checked={String(value) === 'true'}
             onChange={(event) => update(setting, String(event.target.checked))}
           />
-          <span aria-hidden='true'>{setting.key === 'user_overview_model_costs_enabled' || setting.key === 'api_user_overview_model_costs_enabled' ? String(value) === 'true' ? 'Enabled' : 'Disabled' : String(value)}</span>
+          <span aria-hidden='true'>{setting.key === 'user_overview_model_costs_enabled' || setting.key === 'api_user_overview_model_costs_enabled' ? String(value) === 'true' ? t("Enabled") : t("Disabled") : String(value)}</span>
         </label>
       );
     if (setting.options?.length)
@@ -206,7 +208,7 @@ export default function Config({
           onChange={(value) => update(setting, value)}
           options={setting.options.map((option) => ({
             value: option,
-            label: setting.key === 'model_usage_source' ? option === 'raw' ? 'Raw data' : 'Modified data' : option,
+            label: setting.key === 'model_usage_source' ? option === 'raw' ? t('Raw data') : t('Modified data') : option,
           }))}
         />
       );
@@ -238,19 +240,19 @@ export default function Config({
             step={decimal ? 'any' : numeric ? 1 : undefined}
             inputMode={decimal ? 'decimal' : undefined}
             value={String(value ?? '')}
-            placeholder={secret ? 'Enter new password' : undefined}
+            placeholder={secret ? t("Enter new password") : undefined}
             onChange={(event) => update(setting, event.target.value)}
           />
           {percent && <span className='unit'>%</span>}
           {setting.key.endsWith('_seconds') && (
-            <span className='unit'>seconds</span>
+            <span className='unit'>{t("seconds")}</span>
           )}
         </div>
         {secret && (
           <p className='value-help'>
             {setting.configured
-              ? 'Saved. Leave blank to keep it.'
-              : 'No password saved.'}
+              ? t("Saved. Leave blank to keep it.")
+              : t("No password saved.")}
           </p>
         )}
         {setting.key.endsWith('_seconds') && readableDuration(value) && (
@@ -263,12 +265,12 @@ export default function Config({
     <>
       <div className='title-row'>
         <div>
-          <h1>Config</h1>
-          <p className='subtitle'>Manage system settings and user access.</p>
+          <h1>{t("Config")}</h1>
+          <p className='subtitle'>{t("Manage system settings and user access.")}</p>
         </div>
         <span className='badge'>
           <LockKeyhole aria-hidden='true' />
-          {category === 'overview' || category === 'daily_usage' ? 'Super admin only' : 'Admin only'}
+          {category === 'overview' || category === 'daily_usage' ? t("Super admin only") : t("Admin only")}
         </span>
       </div>
       {!settings ? (
@@ -279,10 +281,10 @@ export default function Config({
               className='button pale'
               onClick={() => setAttempt((value) => value + 1)}
             >
-              Try again
+              {t("Try again")}
             </button>
           ) : (
-            <Loading label='Loading configuration…' />
+            <Loading label={t("Loading configuration…")} />
           )}
         </>
       ) : (
@@ -290,7 +292,7 @@ export default function Config({
           <div
             className='tabs config-section-tabs'
             role='tablist'
-            aria-label='Configuration sections'
+            aria-label={t("Configuration sections")}
           >
             {groups.map(([key, title], index) => (
               <button
@@ -304,7 +306,7 @@ export default function Config({
                 onKeyDown={(event) => tabKey(event, index)}
                 onClick={() => selectCategory(key)}
               >
-                {title}
+                {t(title)}
                 {key !== 'vendors' && key !== 'users' && key !== 'account_sync' && key !== 'bill_exports' && (
                   <span className='tab-count' aria-hidden='true'>
                     {settings.filter((s) => s.category === key).length}
@@ -316,13 +318,13 @@ export default function Config({
           <div className='mobile-section'>
             <Select
               id='config-section'
-              label='Configuration section'
+              label={t("Configuration section")}
               hiddenLabel
               value={category}
               onChange={selectCategory}
               options={groups.map(([key, title]) => ({
                 value: key,
-                label: title,
+                label: t(title),
               }))}
             />
           </div>
@@ -349,8 +351,8 @@ export default function Config({
               >
                 <table className='config-table'>
                   <caption className='sr-only'>
-                    {groups.find(([key]) => key === category)?.[1]}{' '}
-                    configuration
+                    {t(groups.find(([key]) => key === category)?.[1] || '')}{' '}
+                    {t("configuration")}
                   </caption>
                   <colgroup>
                     <col />
@@ -359,9 +361,9 @@ export default function Config({
                   </colgroup>
                   <thead>
                     <tr>
-                      <th scope='col'>Key</th>
-                      <th scope='col'>Value</th>
-                      <th scope='col'>Description</th>
+                      <th scope='col'>{t("Key")}</th>
+                      <th scope='col'>{t("Value")}</th>
+                      <th scope='col'>{t("Description")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -394,7 +396,7 @@ export default function Config({
                                 className='field-error'
                                 id={`error-${setting.key}`}
                               >
-                                {validation[setting.key]}
+                                {translateMessage(validation[setting.key])}
                               </p>
                             )}
                           </td>
@@ -402,19 +404,17 @@ export default function Config({
                             className='cell-description'
                             id={`description-${setting.key}`}
                           >
-                            {setting.key === 'api_user_overview_model_costs_enabled' ? 'Include per-model costs in the Daily usage API. Disabled by default; account totals remain available. This API switch is independent of personal website model details and the model usage source.' : rawSource && setting.key === 'user_overview_model_costs_enabled' ? 'Personal model details are disabled when Raw data is selected. Select Modified data to enable this switch.' : setting.description}
+                            {setting.key === 'api_user_overview_model_costs_enabled' ? t("Include per-model costs in the Daily usage API. Disabled by default; account totals remain available. This API switch is independent of personal website model details and the model usage source.") : rawSource && setting.key === 'user_overview_model_costs_enabled' ? t("Personal model details are disabled when Raw data is selected. Select Modified data to enable this switch.") : t(setting.description)}
                           </td>
                         </tr>
                       ))}
                   </tbody>
                 </table>
-                {category === 'daily_usage' && <p className='fixed-rules'><LockKeyhole aria-hidden='true' />New daily bills use the saved rules. Each account day keeps its assigned Fable share on later syncs.</p>}
+                {category === 'daily_usage' && <p className='fixed-rules'><LockKeyhole aria-hidden='true' />{t("New daily bills use the saved rules. Each account day keeps its assigned Fable share on later syncs.")}</p>}
                 {category === 'access' && (
                   <p className='fixed-rules'>
                     <LockKeyhole aria-hidden='true' />
-                    Email is always the username. Registration requires email
-                    verification, and administrator sign-in requires both a
-                    password and an email code.
+                    {t("Email is always the username. Registration requires email verification, and administrator sign-in requires both a password and an email code.")}
                   </p>
                 )}
               </div>
@@ -422,7 +422,7 @@ export default function Config({
               {notice && (
                 <div className='notice success' role='status'>
                   <Check aria-hidden='true' />
-                  {notice}
+                  {t(notice)}
                 </div>
               )}
               <div className='save-footer'>
@@ -433,8 +433,8 @@ export default function Config({
                     <Check aria-hidden='true' />
                   )}
                   {changes
-                    ? `${changes} changed ${changes === 1 ? 'value' : 'values'}`
-                    : 'No unsaved changes'}
+                    ? t(changes === 1 ? '{{count}} changed value' : '{{count}} changed values', { count: changes })
+                    : t("No unsaved changes")}
                 </span>
                 <div className='footer-actions'>
                   <button
@@ -448,14 +448,14 @@ export default function Config({
                       setValidation({});
                     }}
                   >
-                    Discard
+                    {t("Discard")}
                   </button>
                   <button
                     className='button primary'
                     type='submit'
                     disabled={!changes || busy}
                   >
-                    {busy ? 'Saving…' : 'Save changes'}
+                    {busy ? t("Saving…") : t("Save changes")}
                   </button>
                 </div>
               </div>

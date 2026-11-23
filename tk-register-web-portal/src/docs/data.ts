@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 export type DocTopic = 'getting-started' | 'submit-account' | 'account-lookup' | 'daily-usage' | 'update-auth-json';
 export type DocSection = 'parameters' | 'example' | 'response' | 'errors';
 export type EndpointTopic = Exclude<DocTopic, 'getting-started'>;
@@ -193,8 +194,8 @@ export const snapshotFields = (rate: number): FieldDefinition[] => [
   { name: 'output_tokens_total', type: 'number | null', description: 'Cumulative output-token counter.' },
   { name: 'cost_total', type: 'number | null', description: 'Original cumulative spend in the accompanying currency, already normalized from supplier micro-units. Use cost_total_usd for the USD amount.' },
   { name: 'currency', type: 'string | null', description: 'Currency of the original cost_total, such as CNY.' },
-  { name: 'cost_total_usd', type: 'number | null', description: `Cumulative spend in USD: cost_total / ${rate} when currency is CNY. Null when the original amount is unavailable or its currency is not CNY; a known zero remains 0. Not rounded to two decimal places by the API.` },
-  { name: 'exchange_rate_cny_per_usd', type: 'number', description: `1 USD = ${rate} CNY. This rate applies to current and historical snapshots.` },
+  { name: 'cost_total_usd', type: 'number | null', description: t("Cumulative spend in USD: cost_total / {{rate}} when currency is CNY. Null when the original amount is unavailable or its currency is not CNY; a known zero remains 0. Not rounded to two decimal places by the API.", { rate }) },
+  { name: 'exchange_rate_cny_per_usd', type: 'number', description: t("1 USD = {{rate}} CNY. This rate applies to current and historical snapshots.", { rate }) },
   { name: 'usage_5h_percent', type: 'number | null', description: 'Five-hour window usage percentage; 15 means 15%.' },
   { name: 'reset_5h_at', type: 'string | null', description: 'Five-hour window reset time as an RFC3339 timestamp.' },
   { name: 'usage_7d_percent', type: 'number | null', description: 'Seven-day window usage percentage.' },

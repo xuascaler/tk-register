@@ -1,6 +1,7 @@
+import { t, currentLanguage } from '../i18n';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { errorMessage, request } from '../api';
+import { displayError, type DisplayError, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import { chartSegments, curvePath, hoverPoint, type ChartPoint } from './curve';
 import { formatCost, formatTime, formatTokens, type Metric } from './helpers';
@@ -16,7 +17,7 @@ function SnapshotTable({ data, endpoint, days, metric }: { data: AccountDetails;
   const [page, setPage] = useState(data.snapshot_page);
   const [result, setResult] = useState<SnapshotPage>({ items: data.snapshots, total: data.snapshot_count, page: data.snapshot_page, page_size: data.snapshot_page_size });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<DisplayError>('');
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
@@ -30,22 +31,22 @@ function SnapshotTable({ data, endpoint, days, metric }: { data: AccountDetails;
     const query = new URLSearchParams({ days, page: String(page), page_size: String(data.snapshot_page_size) });
     request<SnapshotPage>(`${endpoint}?${query}`, { signal: controller.signal })
       .then(next => { if (!controller.signal.aborted) setResult(next); })
-      .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
+      .catch(cause => { if (!controller.signal.aborted) setError(displayError(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [data, days, endpoint, page, attempt]);
   return <div className='usage-observations' aria-busy={loading}>
-    <div className='usage-data-heading'><span>Original observations</span><span>Page 1 contains the most recent records.</span></div>
+    <div className='usage-data-heading'><span>{t('Original observations')}</span><span>{t('Page 1 contains the most recent records.')}</span></div>
     <ErrorNotice>{error}</ErrorNotice>
-    {error && <button className='button pale' onClick={() => setAttempt(value => value + 1)}>Try again</button>}
-    {loading ? <Loading label='Loading observations…' /> : <div className='usage-data-scroll'><table className='usage-data-table'>
-      <caption className='sr-only'>Original collected usage values, page {result.page}</caption>
-      <thead><tr><th scope='col'>Collected at</th><th scope='col'>{metricNames[metric]}</th></tr></thead>
+    {error && <button className='button pale' onClick={() => setAttempt(value => value + 1)}>{t('Try again')}</button>}
+    {loading ? <Loading label={t('Loading observations…')} /> : <div className='usage-data-scroll'><table className='usage-data-table'>
+      <caption className='sr-only'>{t('Original collected usage values, page {{page}}', { page: result.page })}</caption>
+      <thead><tr><th scope='col'>{t('Collected at')}</th><th scope='col'>{t(metricNames[metric])}</th></tr></thead>
       <tbody>{result.items.map(row => <tr key={row.id}><td>{formatTime(row.collected_at, data.timezone)}</td><td>{valueLabel(row[metric], metric)}</td></tr>)}</tbody>
-    </table>{!result.items.length && <p className='usage-small'>No observations in this date range.</p>}</div>}
-    {result.total > 0 && <div className='usage-pagination usage-observation-pagination'><span>{result.total.toLocaleString()} observations · Page {result.page} of {Math.max(1, Math.ceil(result.total / result.page_size))}</span><div>
-      <button className='button pale' disabled={loading || result.page <= 1} onClick={() => { setPage(result.page - 1); setAttempt(value => value + 1); }}><ChevronLeft aria-hidden='true' />Newer</button>
-      <button className='button pale' disabled={loading || result.page * result.page_size >= result.total} onClick={() => { setPage(result.page + 1); setAttempt(value => value + 1); }}>Older<ChevronRight aria-hidden='true' /></button>
+    </table>{!result.items.length && <p className='usage-small'>{t('No observations in this date range.')}</p>}</div>}
+    {result.total > 0 && <div className='usage-pagination usage-observation-pagination'><span>{t('{{count}} observations · Page {{page}} of {{pages}}', { count: result.total.toLocaleString(currentLanguage()), page: result.page, pages: Math.max(1, Math.ceil(result.total / result.page_size)) })}</span><div>
+      <button className='button pale' disabled={loading || result.page <= 1} onClick={() => { setPage(result.page - 1); setAttempt(value => value + 1); }}><ChevronLeft aria-hidden='true' />{t('Newer')}</button>
+      <button className='button pale' disabled={loading || result.page * result.page_size >= result.total} onClick={() => { setPage(result.page + 1); setAttempt(value => value + 1); }}>{t('Older')}<ChevronRight aria-hidden='true' /></button>
     </div></div>}
   </div>;
 }
@@ -77,10 +78,10 @@ export function UsageTrend({ data, endpoint, days, metric }: { data: AccountDeta
   const tooltipWidth = Math.min(232, width - 16);
   const selectedLabel = selected ? `${formatTime(selected.collected_at, data.timezone)}: ${valueLabel(selected.value, metric)}` : '';
   return <div ref={target} className='usage-trend'>
-    <div className='usage-chart-unit'>{metric === 'cost_total_usd' ? 'Cumulative spend' : `Cumulative ${metric === 'input_tokens_total' ? 'input' : 'output'} tokens`}</div>
-    {!points.length ? <div className='usage-chart-empty'><h3>No usage data yet</h3><p>A trend will appear after successful collections.</p></div> : <div className='usage-chart-stage'>
+    <div className='usage-chart-unit'>{metric === 'cost_total_usd' ? t('Cumulative spend') : t(metric === 'input_tokens_total' ? 'Cumulative input tokens' : 'Cumulative output tokens')}</div>
+    {!points.length ? <div className='usage-chart-empty'><h3>{t('No usage data yet')}</h3><p>{t('A trend will appear after successful collections.')}</p></div> : <div className='usage-chart-stage'>
       <svg className='usage-chart' width={width} height={height} viewBox={`0 0 ${width} ${height}`} role='img' tabIndex={0}
-        aria-label={`${metricNames[metric]} over time. ${points.length} displayed observations. Gaps indicate unavailable data or a counter reset. Use left and right arrow keys to inspect observations.`}
+        aria-label={t('{{metric}} over time. {{count}} displayed observations. Gaps indicate unavailable data or a counter reset. Use left and right arrow keys to inspect observations.', { metric: t(metricNames[metric]), count: points.length })}
         onFocus={() => { setFocused(true); setSelected(current => current || points.at(-1)!); }}
         onBlur={() => { setFocused(false); setSelected(null); }}
         onPointerLeave={() => { if (!focused) setSelected(null); }}
@@ -100,8 +101,8 @@ export function UsageTrend({ data, endpoint, days, metric }: { data: AccountDeta
           const next = event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, index + (event.key === 'ArrowLeft' ? -1 : 1)));
           setSelected(points[next]);
         }}>
-        {[0, 1, 2, 3].map(index => { const value = low + (high - low) * index / 3, pos = y(value); return <g key={index}><line x1={left} y1={pos} x2={width - right} y2={pos} className='usage-gridline' /><text x={left - 10} y={pos + 4} textAnchor='end'>{new Intl.NumberFormat('en-US', { notation: 'compact', minimumFractionDigits: metric === 'cost_total_usd' ? 2 : 0, maximumFractionDigits: metric === 'cost_total_usd' ? 2 : 1 }).format(value)}{metric === 'cost_total_usd' ? ' $' : ''}</text></g>; })}
-        {Array.from({ length: first === last ? 1 : ticks }, (_, index) => { const time = first === last ? first : first + (last - first) * index / (ticks - 1); return <text key={index} x={x(time)} y={height - 16} textAnchor={first === last ? 'middle' : index === 0 ? 'start' : index === ticks - 1 ? 'end' : 'middle'}>{new Intl.DateTimeFormat('en-US', { ...(width >= 500 || last - first >= 86400_000 ? { month: 'short', day: 'numeric' } : {}), timeZone: data.timezone, ...(last - first < 86400_000 ? { hour: '2-digit', minute: '2-digit' } : {}) }).format(time)}</text>; })}
+        {[0, 1, 2, 3].map(index => { const value = low + (high - low) * index / 3, pos = y(value); return <g key={index}><line x1={left} y1={pos} x2={width - right} y2={pos} className='usage-gridline' /><text x={left - 10} y={pos + 4} textAnchor='end'>{new Intl.NumberFormat(currentLanguage(), { notation: 'compact', minimumFractionDigits: metric === 'cost_total_usd' ? 2 : 0, maximumFractionDigits: metric === 'cost_total_usd' ? 2 : 1 }).format(value)}{metric === 'cost_total_usd' ? ' $' : ''}</text></g>; })}
+        {Array.from({ length: first === last ? 1 : ticks }, (_, index) => { const time = first === last ? first : first + (last - first) * index / (ticks - 1); return <text key={index} x={x(time)} y={height - 16} textAnchor={first === last ? 'middle' : index === 0 ? 'start' : index === ticks - 1 ? 'end' : 'middle'}>{new Intl.DateTimeFormat(currentLanguage(), { ...(width >= 500 || last - first >= 86400_000 ? { month: 'short', day: 'numeric' } : {}), timeZone: data.timezone, ...(last - first < 86400_000 ? { hour: '2-digit', minute: '2-digit' } : {}) }).format(time)}</text>; })}
         {segments.map((segment, index) => segment.length > 1
           ? <path key={index} fill='none' className='usage-chart-line' d={curvePath(segment.map(point => ({ x: x(point.time), y: y(point.value) })))} />
           : <line key={index} className='usage-chart-line' x1={x(segment[0].time) - 2} x2={x(segment[0].time) + 2} y1={y(segment[0].value)} y2={y(segment[0].value)} />)}
@@ -110,7 +111,7 @@ export function UsageTrend({ data, endpoint, days, metric }: { data: AccountDeta
       {selected && <div className='usage-chart-tooltip' aria-hidden='true' style={{ width: tooltipWidth, left: Math.max(8, Math.min(width - tooltipWidth - 8, x(selected.time) + 12)), top: Math.max(2, Math.min(height - bottom - 70, y(selected.value) - 76)) }}><span>{formatTime(selected.collected_at, data.timezone)}</span><strong>{valueLabel(selected.value, metric)}</strong></div>}
       <span className='sr-only' role='status'>{selectedLabel}</span>
     </div>}
-    <div className='usage-chart-bottom'><span>Collection times use {data.timezone}. Gaps are not zero usage.{data.trend_reduced && ' The curve shows representative observations; original records remain available below.'}</span><button className='usage-text-button' onClick={() => setTable(value => !value)} aria-expanded={table}>{table ? 'Hide data' : 'View data'}</button></div>
+    <div className='usage-chart-bottom'><span>{t('Collection times use {{timezone}}. Gaps are not zero usage.', { timezone: data.timezone })}{data.trend_reduced && ' ' + t('The curve shows representative observations; original records remain available below.')}</span><button className='usage-text-button' onClick={() => setTable(value => !value)} aria-expanded={table}>{table ? t('Hide data') : t('View data')}</button></div>
     {table && <SnapshotTable data={data} endpoint={endpoint} days={days} metric={metric} />}
   </div>;
 }

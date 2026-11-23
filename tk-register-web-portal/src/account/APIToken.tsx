@@ -1,6 +1,7 @@
+import { currentLanguage, t, translateMessage } from '../i18n';
 import { Check, Copy, KeyRound, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { errorMessage, request } from '../api';
+import { displayError, localizedError, type DisplayError, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import './api-token.css';
 
@@ -20,11 +21,11 @@ type Action = 'generate' | 'rotate' | 'revoke';
 const tokenPath = '/account/api-token';
 
 function dateLabel(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
+  return new Intl.DateTimeFormat(currentLanguage(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
 function ConfirmTokenAction({ action, busy, error, onClose, onConfirm }: {
-  action: 'rotate' | 'revoke'; busy: boolean; error: string;
+  action: 'rotate' | 'revoke'; busy: boolean; error: DisplayError;
   onClose: () => void; onConfirm: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -45,18 +46,18 @@ function ConfirmTokenAction({ action, busy, error, onClose, onConfirm }: {
   }, []);
   return <dialog ref={dialog} className='api-token-dialog' aria-labelledby='token-dialog-title' aria-describedby='token-dialog-description' onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
     <div className='api-token-dialog-heading'>
-      <h2 id='token-dialog-title'>{revoking ? 'Revoke API token?' : 'Regenerate API token?'}</h2>
-      <button type='button' className='api-token-icon-button' aria-label='Close dialog' disabled={busy} onClick={onClose}><X aria-hidden='true' /></button>
+      <h2 id='token-dialog-title'>{revoking ? t('Revoke API token?') : t('Regenerate API token?')}</h2>
+      <button type='button' className='api-token-icon-button' aria-label={t('Close dialog')} disabled={busy} onClick={onClose}><X aria-hidden='true' /></button>
     </div>
     <p id='token-dialog-description'>{revoking
-      ? 'This token will stop working immediately. You can generate a new token when you need API access again.'
-      : 'Your current token will stop working immediately. Copy the new token and update any scripts that use it.'}</p>
+      ? t('This token will stop working immediately. You can generate a new token when you need API access again.')
+      : t('Your current token will stop working immediately. Copy the new token and update any scripts that use it.')}</p>
     <ErrorNotice>{error}</ErrorNotice>
     <div className='api-token-dialog-actions'>
-      <button ref={cancel} type='button' className='button secondary' disabled={busy} onClick={onClose}>Cancel</button>
+      <button ref={cancel} type='button' className='button secondary' disabled={busy} onClick={onClose}>{t('Cancel')}</button>
       <button type='button' className={`button secondary ${revoking ? 'api-token-danger' : ''}`} disabled={busy} onClick={onConfirm}>
         {busy ? <RefreshCw className='spin' aria-hidden='true' /> : revoking ? <Trash2 aria-hidden='true' /> : <RefreshCw aria-hidden='true' />}
-        {busy ? 'Saving…' : revoking ? 'Revoke token' : 'Regenerate'}
+        {busy ? t('Saving…') : revoking ? t('Revoke token') : t('Regenerate')}
       </button>
     </div>
   </dialog>;
@@ -67,7 +68,7 @@ export default function APIToken() {
   const [plaintext, setPlaintext] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<DisplayError>('');
   const [notice, setNotice] = useState('');
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState('');
@@ -91,7 +92,7 @@ export default function APIToken() {
     setError('');
     request<TokenResponse>(tokenPath, { signal: controller.signal })
       .then(result => { if (!controller.signal.aborted) setData({ token: result.token }); })
-      .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
+      .catch(cause => { if (!controller.signal.aborted) setError(displayError(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [attempt]);
@@ -144,16 +145,13 @@ export default function APIToken() {
       // A connection failure can happen after the server has already changed the token.
       // Read current metadata instead of automatically repeating a destructive mutation.
       setPlaintext('');
-      setError(errorMessage(cause));
+      setError(displayError(cause));
       setConfirmation(null);
       try {
         const current = await request<TokenResponse>(tokenPath);
         if (mounted.current) setData({ token: current.token });
       } catch {
-        if (mounted.current) {
-          setData(null);
-          setError(`${errorMessage(cause)} Reload the token status before trying again.`);
-        }
+        if (mounted.current) setData(null);
       }
     } finally {
       submitting.current = false;
@@ -167,40 +165,42 @@ export default function APIToken() {
   }
 
   return <section className='account-section api-token-section' aria-labelledby='api-token-title'>
-    <h2 id='api-token-title'>API token</h2>
+    <h2 id='api-token-title'>{t('API token')}</h2>
     <div className='account-row'>
-      <div className='account-label'>Personal access</div>
+      <div className='account-label'>{t('Personal access')}</div>
       <div className='account-value api-token-content' aria-busy={busy || loading}>
-        <p className='api-token-description'>Submit accounts, read saved status and daily usage, and update Auth JSON for your own accounts. API submissions appear in your submission history.</p>
-        {loading ? <Loading label='Loading token…' /> : data ? <>
+        <p className='api-token-description'>{t('Submit accounts, read saved status and daily usage, and update Auth JSON for your own accounts. API submissions appear in your submission history.')}</p>
+        {loading ? <Loading label={t('Loading token…')} /> : data ? <>
           <div className={`api-token-card ${plaintext && active ? 'has-plaintext' : ''}`}>
             <div className='api-token-card-heading'>
               <span className='api-token-key'><KeyRound aria-hidden='true' /></span>
-              <div><h3>{active ? 'Your API token' : token?.revoked_at ? 'Token revoked' : expired ? 'Token expired' : 'No API token yet'}</h3><p>{active ? canUpdateAuthJSON ? 'Submission, account lookup, daily usage, and Auth JSON updates' : 'Submission, account lookup, and daily usage access' : 'Generate a token to access your accounts through the API.'}</p></div>
-              {active && <span className='verified'><ShieldCheck aria-hidden='true' />Active</span>}
+              <div><h3>{active ? t('Your API token') : token?.revoked_at ? t('Token revoked') : expired ? t('Token expired') : t('No API token yet')}</h3><p>{active ? canUpdateAuthJSON ? t('Submission, account lookup, daily usage, and Auth JSON updates') : t('Submission, account lookup, and daily usage access') : t('Generate a token to access your accounts through the API.')}</p></div>
+              {active && <span className='verified'><ShieldCheck aria-hidden='true' />{t('Active')}</span>}
             </div>
             {active && token && <>
               <div className='api-token-value-row'>
-                <input ref={tokenInput} className='api-token-value' aria-label={plaintext ? 'New API token' : 'Masked API token'} value={plaintext || `${token.prefix}••••••••••••${token.last_four}`} readOnly autoComplete='off' spellCheck={false} />
-                {plaintext && <button type='button' className='api-token-icon-button' onClick={() => void copy(plaintext)} aria-label={copied ? 'Token copied' : 'Copy API token'} title={copied ? 'Copied' : 'Copy token'}>{copied ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}</button>}
+                <input ref={tokenInput} className='api-token-value' aria-label={plaintext ? t('New API token') : t('Masked API token')} value={plaintext || `${token.prefix}••••••••••••${token.last_four}`} readOnly autoComplete='off' spellCheck={false} />
+                {plaintext && <button type='button' className='api-token-icon-button' onClick={() => void copy(plaintext)} aria-label={copied ? t('Token copied') : t('Copy API token')} title={copied ? t('Copied') : t('Copy token')}>{copied ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}</button>}
               </div>
-              <p className='account-help api-token-secret-help'>{plaintext ? 'Copy and save this token securely. Leaving this page hides it.' : 'For security, only the beginning and end are shown. Regenerate if you need a new token.'}</p>
-              {token.scopes && !canUpdateAuthJSON && <p className='account-help'>Auth JSON update access is unavailable for this token. Ask an administrator to check its permissions.</p>}
-              <dl className='api-token-metadata'><div><dt>Created</dt><dd>{dateLabel(token.created_at)}</dd></div><div><dt>Last used</dt><dd>{token.last_used_at ? dateLabel(token.last_used_at) : 'Not used yet'}</dd></div>{token.expires_at && <div><dt>Expires</dt><dd>{dateLabel(token.expires_at)}</dd></div>}</dl>
+              <p className='account-help api-token-secret-help'>{plaintext ? t('Copy and save this token securely. Leaving this page hides it.') : t('For security, only the beginning and end are shown. Regenerate if you need a new token.')}</p>
+              {token.scopes && !canUpdateAuthJSON && <p className='account-help'>{t('Auth JSON update access is unavailable for this token. Ask an administrator to check its permissions.')}</p>}
+              <dl className='api-token-metadata'><div><dt>{t('Created')}</dt><dd>{dateLabel(token.created_at)}</dd></div><div><dt>{t('Last used')}</dt><dd>{token.last_used_at ? dateLabel(token.last_used_at) : t('Not used yet')}</dd></div>{token.expires_at && <div><dt>{t('Expires')}</dt><dd>{dateLabel(token.expires_at)}</dd></div>}</dl>
             </>}
             <div className='api-token-actions'>
               {active ? <>
-                <button className='button secondary' disabled={busy} onClick={() => confirm('rotate')}><RefreshCw aria-hidden='true' />Regenerate</button>
-                <button className='button secondary api-token-danger' disabled={busy} onClick={() => confirm('revoke')}><Trash2 aria-hidden='true' />Revoke token</button>
-              </> : <button className='button secondary' disabled={busy} onClick={() => void mutate('generate')}>{busy ? <RefreshCw className='spin' aria-hidden='true' /> : <KeyRound aria-hidden='true' />}{busy ? 'Generating…' : 'Generate token'}</button>}
+                <button className='button secondary' disabled={busy} onClick={() => confirm('rotate')}><RefreshCw aria-hidden='true' />{t('Regenerate')}</button>
+                <button className='button secondary api-token-danger' disabled={busy} onClick={() => confirm('revoke')}><Trash2 aria-hidden='true' />{t('Revoke token')}</button>
+              </> : <button className='button secondary' disabled={busy} onClick={() => void mutate('generate')}>{busy ? <RefreshCw className='spin' aria-hidden='true' /> : <KeyRound aria-hidden='true' />}{busy ? t('Generating…') : t('Generate token')}</button>}
             </div>
           </div>
         </> : null}
-        {notice && <p className='api-token-notice' role='status'><Check aria-hidden='true' />{notice}</p>}
-        <span className='sr-only' role='status'>{copied ? 'Copied to clipboard.' : ''}</span>
-        {copyError && <p className='account-help' role='status'>{copyError}</p>}
-        {!confirmation && <ErrorNotice>{error}</ErrorNotice>}
-        {!loading && !data && <button className='button secondary' disabled={busy} onClick={() => setAttempt(value => value + 1)}><RefreshCw aria-hidden='true' />Reload token status</button>}
+        {notice && <p className='api-token-notice' role='status'><Check aria-hidden='true' />{translateMessage(notice)}</p>}
+        <span className='sr-only' role='status'>{copied ? t('Copied to clipboard.') : ''}</span>
+        {copyError && <p className='account-help' role='status'>{translateMessage(copyError)}</p>}
+        {!confirmation && <ErrorNotice>{error && !loading && !data
+          ? <>{localizedError(error)} {t('Reload the token status before trying again.')}</>
+          : error}</ErrorNotice>}
+        {!loading && !data && <button className='button secondary' disabled={busy} onClick={() => setAttempt(value => value + 1)}><RefreshCw aria-hidden='true' />{t('Reload token status')}</button>}
       </div>
     </div>
     {confirmation && <ConfirmTokenAction action={confirmation} busy={busy} error={error} onClose={() => { if (!submitting.current) setConfirmation(null); }} onConfirm={() => void mutate(confirmation)} />}

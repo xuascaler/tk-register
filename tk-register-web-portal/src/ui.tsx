@@ -1,4 +1,6 @@
 import { Eye, EyeOff, LoaderCircle } from 'lucide-react';
+import { t, translateMessage } from './i18n';
+import { APIError, localizedError } from './api';
 import {
   useId,
   useState,
@@ -6,10 +8,10 @@ import {
   type ReactNode,
 } from 'react';
 
-export function ErrorNotice({ children }: { children: ReactNode }) {
+export function ErrorNotice({ children }: { children: ReactNode | APIError }) {
   return children ? (
     <div className='notice error' role='alert'>
-      {children}
+      {typeof children === 'string' || children instanceof APIError ? localizedError(children) : children}
     </div>
   ) : null;
 }
@@ -17,7 +19,7 @@ export function Loading({ label = 'Loading…' }: { label?: string }) {
   return (
     <div className='loading' role='status'>
       <LoaderCircle className='spin' aria-hidden='true' />
-      {label}
+      {translateMessage(label)}
     </div>
   );
 }
@@ -29,13 +31,13 @@ export function PasswordField({
   const id = useId();
   return (
     <div className='field'>
-      <label htmlFor={id}>{label}</label>
+      <label htmlFor={id}>{translateMessage(label)}</label>
       <div className='password-field'>
         <input {...props} id={id} type={visible ? 'text' : 'password'} />
         <button
           className='eye-button'
           type='button'
-          aria-label={`${visible ? 'Hide' : 'Show'} ${label.toLowerCase()}`}
+          aria-label={t(visible ? 'Hide {{label}}' : 'Show {{label}}', { label: translateMessage(label).toLowerCase() })}
           aria-pressed={visible}
           onClick={() => setVisible(!visible)}
         >

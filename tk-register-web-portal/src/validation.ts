@@ -1,4 +1,5 @@
 import type { Setting, SettingValue } from './api';
+import { currentLanguage } from './i18n';
 
 export function validEmail(email: string) {
   return email.length <= 50 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -18,7 +19,7 @@ export function readableDuration(value: SettingValue) {
     ['minute', 60],
   ] as const) {
     if (seconds % factor === 0)
-      return `${seconds / factor} ${unit}${seconds / factor === 1 ? '' : 's'}`;
+      return new Intl.NumberFormat(currentLanguage(), { style: 'unit', unit, unitDisplay: 'long', useGrouping: false }).format(seconds / factor);
   }
   return '';
 }

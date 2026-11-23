@@ -92,6 +92,16 @@ try {
     await f.page.getByRole('tab', { name: 'Upload Auth JSON', exact: true }).click();
     await f.page.getByLabel('Account', { exact: true }).fill('manual-draft@example.com');
     await f.page.getByRole('tab', { name: 'Authorize & submit', exact: true }).click();
+    await f.panel.getByLabel('Account email').fill('authorized@example.com');
+    const requestCount = f.calls.length;
+    await f.page.getByRole('combobox', { name: 'Language', exact: true }).click();
+    await f.page.getByRole('option', { name: '简体中文', exact: true }).click();
+    await expect(f.page.getByRole('tab', { name: '授权并提交', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(f.panel.getByLabel('账号邮箱')).toHaveValue('authorized@example.com');
+    await f.page.getByRole('combobox', { name: '语言', exact: true }).click();
+    await f.page.getByRole('option', { name: 'English', exact: true }).click();
+    await expect(f.panel.getByLabel('Account email')).toHaveValue('authorized@example.com');
+    assert.equal(f.calls.length, requestCount, 'Switching language must not start or repeat any requests');
     await expect(f.panel.locator('.authorize-settings')).not.toHaveAttribute('open');
     await generate(f);
     await f.panel.locator('.authorize-settings > summary').click();

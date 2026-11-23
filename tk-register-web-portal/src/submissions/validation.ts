@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 export const MAX_AUTH_BYTES = 2 * 1024 * 1024;
 export const plans = [
   'claude/cc-max-20x',
@@ -87,6 +89,14 @@ function validTimestamp(value: string) {
     Number.isFinite(Date.parse(value))
   );
 }
+export class AuthFieldError extends Error {
+  constructor(readonly key: string, readonly params: Record<string, string>) {
+    super(key.replace(/{{(\w+)}}/g, (placeholder, name: string) => params[name] ?? placeholder));
+  }
+
+  get localizedMessage() { return t(this.key, this.params); }
+}
+
 export function parseAuthJSON(value: string): Record<string, unknown> {
   if (new TextEncoder().encode(value).length > MAX_AUTH_BYTES)
     throw new Error('Auth JSON must be 2 MB or smaller.');
@@ -101,7 +111,7 @@ export function parseAuthJSON(value: string): Record<string, unknown> {
     throw new Error('Auth JSON must contain an object.');
   const auth = parsed as Record<string, unknown>;
   const missing = authFields.filter((key) => !(key in auth));
-  if (missing.length) throw new Error(`Missing fields: ${missing.join(', ')}.`);
+  if (missing.length) throw new AuthFieldError('Missing fields: {{fields}}.', { fields: missing.join(', ') });
   for (const key of authFields) {
     if (key === 'claude_device_ids') {
       if (
@@ -116,15 +126,13 @@ export function parseAuthJSON(value: string): Record<string, unknown> {
       typeof auth[key] !== 'string' ||
       (key !== 'id_token' && !(auth[key] as string).trim())
     )
-      throw new Error(
-        `${key} must be ${key === 'id_token' ? 'a string (it may be empty)' : 'a non-empty string'}.`,
-      );
+      throw new AuthFieldError(key === 'id_token'
+        ? '{{field}} must be a string (it may be empty).'
+        : '{{field}} must be a non-empty string.', { field: key });
   }
   for (const key of ['last_refresh', 'expired'])
     if (!validTimestamp(auth[key] as string))
-      throw new Error(
-        `${key} must be an RFC 3339 timestamp, including its timezone.`,
-      );
+      throw new AuthFieldError('{{field}} must be an RFC 3339 timestamp, including its timezone.', { field: key });
   if (!/^(https?|socks5h?):\/\//.test(auth.proxy_url as string))
     throw new Error(
       'proxy_url must start with http://, https://, socks5:// or socks5h://.',
@@ -132,7 +140,7 @@ export function parseAuthJSON(value: string): Record<string, unknown> {
   return auth;
 }
 export function validateDraft(draft: AccountDraft) {
-  const errors: Partial<Record<keyof AccountDraft, string>> = {};
+  const errors: Partial<Record<keyof AccountDraft, string | AuthFieldError>> = {};
   if (!draft.account || /\s/.test(draft.account))
     errors.account = 'Enter the account login without spaces.';
   if (!draft.password) errors.password = 'Enter the account password.';
@@ -147,7 +155,7 @@ export function validateDraft(draft: AccountDraft) {
   try {
     parseAuthJSON(draft.auth_json);
   } catch (error) {
-    errors.auth_json = (error as Error).message;
+    errors.auth_json = error instanceof AuthFieldError ? error : (error as Error).message;
   }
   for (const key of [
     'register_time',

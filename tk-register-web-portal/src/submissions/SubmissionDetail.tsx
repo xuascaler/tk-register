@@ -1,3 +1,4 @@
+import { t, translateMessage } from '../i18n';
 import { Check, Copy, RefreshCw } from 'lucide-react';
 import {
   useEffect,
@@ -30,7 +31,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 }
 function display(value: unknown): string {
   if (value === null || value === undefined || value === '')
-    return 'Not provided';
+    return t('Not provided');
   return Array.isArray(value) ? value.map(String).join(', ') : String(value);
 }
 function publicParameters(parameters: Record<string, unknown>) {
@@ -173,7 +174,7 @@ export default function SubmissionDetails({
     <div className='detail-page'>
       <Back onClick={onBack} label={backLabel} />
       {busy === 'load' ? (
-        <Loading label='Loading account details…' />
+        <Loading label={t('Loading account details…')} />
       ) : !detail || !submission ? (
         <>
           <ErrorNotice>{error}</ErrorNotice>
@@ -181,22 +182,22 @@ export default function SubmissionDetails({
             className='button secondary'
             onClick={() => setAttempt((n) => n + 1)}
           >
-            Try again
+            {t('Try again')}
           </button>
         </>
       ) : (
         <>
           <div className='detail-heading'>
             <div>
-              <p className='eyebrow'>Submitted account</p>
+              <p className='eyebrow'>{t('Submitted account')}</p>
               <h1>{submission.account}</h1>
               <p className='subtitle'>{submission.plan}</p>
             </div>
             {endpointPrefix === '/admin/submissions' ? <div className='admin-detail-status'>
-              <span className='admin-cell-note'>Current account{detail.current_submission ? ` · Submission #${detail.current_submission.id}` : ''}</span>
+              <span className='admin-cell-note'>{t('Current account')}{detail.current_submission ? ` · ${t('Submission #{{id}}', { id: detail.current_submission.id })}` : ''}</span>
               <CurrentAccountStatus current={detail.current_submission || null} latest={submission} refresh={currentRefresh} />
               {submission.can_manage !== false && detail.current_submission && <button className='button secondary' disabled={Boolean(busy) || !vendor?.enabled || !vendor.configured} onClick={() => void refreshCurrentStatus()}>
-                <RefreshCw className={currentRefresh.checking ? 'spin' : ''} aria-hidden='true' />{currentRefresh.checking ? 'Checking…' : 'Refresh account status'}
+                <RefreshCw className={currentRefresh.checking ? 'spin' : ''} aria-hidden='true' />{currentRefresh.checking ? t('Checking…') : t('Refresh account status')}
               </button>}
             </div> : <AccountStatus
               submission={submission}
@@ -204,44 +205,43 @@ export default function SubmissionDetails({
           </div>
           <div className='detail-summary'>
             <span>{submission.vendor_name}</span>
-            {submission.account_source && <span>Source {submission.account_source.label}</span>}
-            {detail.user && <span className='admin-email'>Submitted by {detail.user.email}</span>}
-            {endpointPrefix === '/admin/submissions' && <span>Submission #{submission.id}</span>}
-            <span>Submitted {dateTime(submission.created_at)}</span>
-            <span>{submission.submit_mode === 'restore_update' ? 'Restore by update' : submission.submit_mode === 'create_fallback' ? 'Create after upstream lookup' : 'Create account'}</span>
+            {submission.account_source && <span>{t('Source')} {submission.account_source.label === 'myself' ? t('myself') : submission.account_source.label}</span>}
+            {detail.user && <span className='admin-email'>{t('Submitted by')} {detail.user.email}</span>}
+            {endpointPrefix === '/admin/submissions' && <span>{t('Submission #{{id}}', { id: submission.id })}</span>}
+            <span>{t('Submitted')} {dateTime(submission.created_at)}</span>
+            <span>{submission.submit_mode === 'restore_update' ? t('Restore by update') : submission.submit_mode === 'create_fallback' ? t('Create after upstream lookup') : t('Create account')}</span>
             <span>
-              Submission <StateBadge value={submission.status} />
+              {t('Submission')} <StateBadge value={submission.status} />
             </span>
           </div>
           {submission.status === 'unknown' && (
             <div className='notice'>
               {submission.submit_mode === 'restore_update' || submission.submit_mode === 'create_fallback'
-                ? 'The supplier result is unconfirmed. Do not resubmit. Contact an administrator to verify the previous attempt.'
-                : 'The platform result is unconfirmed. You may submit this account again; each attempt is saved separately. The earlier attempt may already have created the account.'}
+                ? t('The supplier result is unconfirmed. Do not resubmit. Contact an administrator to verify the previous attempt.')
+                : t('The platform result is unconfirmed. You may submit this account again; each attempt is saved separately. The earlier attempt may already have created the account.')}
             </div>
           )}
           {submission.status === 'running' && (
             <div className='notice'>
-              This submission is being processed.{' '}
+              {t('This submission is being processed.')}{' '}
               <button
                 className='text-link'
                 onClick={() => setAttempt((n) => n + 1)}
               >
-                Refresh details
+                {t('Refresh details')}
               </button>{' '}
-              to check the latest result.
+              {t('to check the latest result.')}
             </div>
           )}
           {submission.status === 'failed' && (
             <div className='notice error'>
-              The platform did not accept this submission. See the request
-              history below for details.
+              {t('The platform did not accept this submission. See the request history below for details.')}
             </div>
           )}
           <div
             className='detail-tabs'
             role='tablist'
-            aria-label='Account information'
+            aria-label={t('Account information')}
           >
             {tabs.map((value, index) => (
               <button
@@ -256,7 +256,7 @@ export default function SubmissionDetails({
                 key={value}
               >
                 {value === 'parameters'
-                  ? 'Submitted parameters'
+                  ? t('Submitted parameters')
                   : humanize(value)}
               </button>
             ))}
@@ -271,50 +271,50 @@ export default function SubmissionDetails({
               <>
                 <section className='panel details-section'>
                   <div className='section-heading'>
-                    <h2>Account information</h2>
+                    <h2>{t('Account information')}</h2>
                   </div>
                   <dl className='facts-grid'>
-                    <Fact label='Account'>{submission.account}</Fact>
-                    <Fact label='Platform account ID'>
-                      {submission.platform_account_id || 'Not returned'}
+                    <Fact label={t('Account')}>{submission.account}</Fact>
+                    <Fact label={t('Platform account ID')}>
+                      {submission.platform_account_id || t('Not returned')}
                     </Fact>
-                    <Fact label='Remote account ID'>
+                    <Fact label={t('Remote account ID')}>
                       {submission.remote_id ? (
                         <span className='inline-copy'>
                           {submission.remote_id}
                           <button
                             className='copy-button'
-                            aria-label='Copy remote account ID'
+                            aria-label={t('Copy remote account ID')}
                             onClick={copyID}
                           >
                             {copied ? <Check /> : <Copy />}
                           </button>
                         </span>
                       ) : (
-                        'Not assigned'
+                        t('Not assigned')
                       )}
                     </Fact>
-                    <Fact label='Plan'>{submission.plan}</Fact>
-                    <Fact label='Registration date'>
+                    <Fact label={t('Plan')}>{submission.plan}</Fact>
+                    <Fact label={t('Registration date')}>
                       {display(submission.parameters.register_time)}
                     </Fact>
-                    <Fact label='Registration location'>
+                    <Fact label={t('Registration location')}>
                       {display(submission.parameters.register_location)}
                     </Fact>
-                    <Fact label='Plan start date'>
+                    <Fact label={t('Plan start date')}>
                       {display(submission.parameters.plan_start_time)}
                     </Fact>
-                    <Fact label='Plan end date'>
+                    <Fact label={t('Plan end date')}>
                       {display(submission.parameters.plan_end_time)}
                     </Fact>
-                    <Fact label='Registration device'>
+                    <Fact label={t('Registration device')}>
                       {display(submission.parameters.register_device)}
                     </Fact>
-                    <Fact label='Recharge date'>
+                    <Fact label={t('Recharge date')}>
                       {display(submission.parameters.recharge_time)}
                     </Fact>
-                    <Fact label='Password'>Hidden</Fact>
-                    <Fact label='Auth JSON'>Hidden</Fact>
+                    <Fact label={t('Password')}>{t('Hidden')}</Fact>
+                    <Fact label='Auth JSON'>{t('Hidden')}</Fact>
                   </dl>
                 </section>
               </>
@@ -323,10 +323,9 @@ export default function SubmissionDetails({
               <section className='panel details-section'>
                 <div className='section-heading'>
                   <div>
-                    <h2>Submitted parameters</h2>
+                    <h2>{t('Submitted parameters')}</h2>
                     <p className='field-help'>
-                      A snapshot of the original submission. Credentials stay
-                      hidden.
+                      {t('A snapshot of the original submission. Credentials stay hidden.')}
                     </p>
                   </div>
                   <button
@@ -334,7 +333,7 @@ export default function SubmissionDetails({
                     aria-pressed={json}
                     onClick={() => setJSON(!json)}
                   >
-                    {json ? 'Show fields' : 'View JSON'}
+                    {json ? t('Show fields') : t('View JSON')}
                   </button>
                 </div>
                 {json ? (
@@ -351,7 +350,7 @@ export default function SubmissionDetails({
                       publicParameters(submission.parameters),
                     ).map(([key, value]) => (
                       <Fact label={humanize(key)} key={key}>
-                        {display(value)}
+                        {key === 'password' || key === 'auth_json' ? t('[hidden]') : display(value)}
                       </Fact>
                     ))}
                   </dl>
@@ -361,8 +360,8 @@ export default function SubmissionDetails({
           </div>
           <section className='panel execution-section'>
             <div className='section-heading'>
-              <h2>Request history</h2>
-              <span className='small muted'>Submission {submission.id}</span>
+              <h2>{t('Request history')}</h2>
+              <span className='small muted'>{t('Submission')} {submission.id}</span>
             </div>
             {detail.executions.length ? (
               <ul className='execution-list'>
@@ -383,26 +382,26 @@ export default function SubmissionDetails({
                         `· HTTP ${execution.http_status}`}
                     </p>
                     {execution.message && (
-                      <p className='execution-message'>{execution.message}</p>
+                      <p className='execution-message'>{translateMessage(execution.message)}</p>
                     )}
                     <details>
-                      <summary>Request details</summary>
+                      <summary>{t('Request details')}</summary>
                       <dl>
-                        <Fact label='Execution ID'>{execution.id}</Fact>
-                        <Fact label='Request ID'>{execution.request_id}</Fact>
+                        <Fact label={t('Execution ID')}>{execution.id}</Fact>
+                        <Fact label={t('Request ID')}>{execution.request_id}</Fact>
                         {execution.error_code && (
-                          <Fact label='Error code'>{execution.error_code}</Fact>
+                          <Fact label={t('Error code')}>{execution.error_code}</Fact>
                         )}
                       </dl>
-                      {execution.error_body && <div className='execution-error-body'><strong>Upstream error</strong><pre>{execution.error_body}</pre></div>}
-                      {(execution.error_body_truncated || execution.error_body_incomplete) && <p className='muted small'>The error response was truncated or incomplete.</p>}
-                      {execution.error_body_omitted_reason && !execution.error_body && <p className='muted small'>No safe error details are available for display.</p>}
+                      {execution.error_body && <div className='execution-error-body'><strong>{t('Upstream error')}</strong><pre>{execution.error_body}</pre></div>}
+                      {(execution.error_body_truncated || execution.error_body_incomplete) && <p className='muted small'>{t('The error response was truncated or incomplete.')}</p>}
+                      {execution.error_body_omitted_reason && !execution.error_body && <p className='muted small'>{t('No safe error details are available for display.')}</p>}
                     </details>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className='muted'>No requests recorded yet.</p>
+              <p className='muted'>{t('No requests recorded yet.')}</p>
             )}
           </section>
         </>

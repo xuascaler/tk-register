@@ -1,19 +1,20 @@
+import { t, currentLanguage, useLanguage, translateMessage } from '../i18n';
 import { ArrowLeft, ArrowUpRight, Clock3, RefreshCw, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { APIError, errorMessage, request, retryAfterSeconds, retryStage, type RetryStage } from '../api';
+import { APIError, displayError, type DisplayError, errorMessage, request, retryAfterSeconds, retryStage, type RetryStage } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import SourceFilter from '../members/SourceFilter';
 import { useMemberScope } from '../members/MemberScope';
 import Select from '../submissions/Select';
 import { AdminBadge } from '../admin/shared';
-import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statusLabel, statusTone, type Metric } from './helpers';
+import { formatCost, formatPercent, formatTime, formatTokens, knownNumber, statusLabel, statusTone, supplierStatusDetail, type Metric } from './helpers';
 import type { AccountDetails, AccountPage, SyncedAccount } from './types';
 import { ErrorPopover } from './ErrorPopover';
 import { UsageTrend } from './UsageTrend';
 import { DailyUsage } from './DailyUsage';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
 import DeactivateAccount from './DeactivateAccount';
-import { authJSONResultMessage, type AuthJSONUpdateResult } from './auth-json';
+import { authJSONResultMessage, localizeAuthJSONMessage, type AuthJSONUpdateResult } from './auth-json';
 import { loadAccountPage, mergeSyncedAccount, syncAccountRow, syncRetryLabel, type AccountRowSyncResult } from './row-sync';
 import { deletionInProgress } from './account-state';
 import { useAccountListNavigation } from './list-navigation';
@@ -24,10 +25,10 @@ function Status({ account }: { account: SyncedAccount }) {
   const label = statusLabel(snapshot?.account_status);
   const className = `usage-status ${statusTone(snapshot?.account_status)}`;
   if (!snapshot || !snapshot.account_status || snapshot.account_status === 'active') return <span className={className}>{label}</span>;
-  return <ErrorPopover label={label} title={`Supplier status · ${label}`} className={className}
-    message={snapshot.upstream_error_message?.trim() || (snapshot.upstream_error_message == null ? 'No supplier error details have been collected yet.' : 'The supplier did not provide an additional reason.')}
-    detail={snapshot.upstream_status_raw ? `Supplier status: ${snapshot.upstream_status_raw}` : undefined}
-    note={snapshot.upstream_error_message?.trim() ? 'Last reported supplier reason. Manual Sync checks for an updated reason when available.' : 'This is the supplier account status, separate from whether TK Register collected the data successfully.'} />;
+  return <ErrorPopover label={label} title={t('Supplier status · {{label}}', { label })} className={className}
+    message={snapshot.upstream_error_message?.trim() || (snapshot.upstream_error_message == null ? t('No supplier error details have been collected yet.') : t('The supplier did not provide an additional reason.'))}
+    detail={snapshot.upstream_status_raw ? supplierStatusDetail(snapshot.upstream_status_raw) : undefined}
+    note={snapshot.upstream_error_message?.trim() ? t('Last reported supplier reason. Manual Sync checks for an updated reason when available.') : t('This is the supplier account status, separate from whether TK Register collected the data successfully.')} />;
 }
 
 function UsageWindow({ value, label }: { value: number | null | undefined; label: string }) {
@@ -41,8 +42,8 @@ function SubmittedTime({ value }: { value: string | null | undefined }) {
   if (!value || !Number.isFinite(Date.parse(value))) return <span className='usage-date'>—</span>;
   const date = new Date(value);
   return <time className='usage-submitted-time' dateTime={value} title={formatTime(value)}>
-    {new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date)}
-    <span>{new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit' }).format(date)}</span>
+    {new Intl.DateTimeFormat(currentLanguage(), { month: 'short', day: 'numeric', year: 'numeric' }).format(date)}
+    <span>{new Intl.DateTimeFormat(currentLanguage(), { hour: '2-digit', minute: '2-digit' }).format(date)}</span>
   </time>;
 }
 
@@ -50,6 +51,7 @@ export function MemberAccounts({ userID, onOpen, admin = false, embedded = false
   const memberScope = useMemberScope();
   const navigation = useAccountListNavigation(userID, admin, memberScope.selection, raw);
   const { page, search: query, status, sources } = navigation.filters;
+  useLanguage();
   const actionEndpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const endpoint = raw ? '/admin/raw-accounts' : actionEndpoint;
   const [data, setData] = useState<AccountPage | null>(null);
@@ -60,7 +62,7 @@ export function MemberAccounts({ userID, onOpen, admin = false, embedded = false
   const [rowResults, setRowResults] = useState<Record<string, AccountRowSyncResult & { retryAt?: number }>>({});
   const [now, setNow] = useState(Date.now);
   const [loadedScope, setLoadedScope] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState<DisplayError>('');
   const pending = useRef<{ id: string; controller: AbortController } | null>(null);
   const revision = useRef(0);
   const scope = `${endpoint}:${page}:${query}:${status}:${sources}:${attempt}`;
@@ -83,7 +85,7 @@ export function MemberAccounts({ userID, onOpen, admin = false, embedded = false
         if (page > lastPage) { navigation.change({ page: lastPage }, { replace: true, keepScroll: true }); return; }
         setData(result); setLoadedScope(scope);
       } })
-      .catch(cause => { if (!controller.signal.aborted && version === revision.current) setError(errorMessage(cause)); })
+      .catch(cause => { if (!controller.signal.aborted && version === revision.current) setError(displayError(cause)); })
       .finally(() => { if (!controller.signal.aborted && version === revision.current) setLoading(false); });
     return () => {
       controller.abort();
@@ -126,18 +128,18 @@ export function MemberAccounts({ userID, onOpen, admin = false, embedded = false
     }
   }
   return <section className='usage-accounts'>
-    {!embedded && <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>Account pool</p>}<h1>Accounts</h1><p className='subtitle'>Saved account status, usage, and cumulative spend.</p></div>{admin && <AdminBadge />}</div>}
+    {!embedded && <div className='title-row'><div>{admin && <p className='eyebrow admin-breadcrumb'>{t('Account pool')}</p>}<h1>{t('Accounts')}</h1><p className='subtitle'>{t('Saved account status, usage, and cumulative spend.')}</p></div>{admin && <AdminBadge />}</div>}
     <div className={`usage-toolbar ${admin ? '' : 'member-accounts-toolbar'}`}>
-      <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>Search accounts</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder={admin ? 'Search account or user email' : 'Search by account email'} maxLength={254} /></label>
+      <label className='usage-search'><Search aria-hidden='true' /><span className='sr-only'>{t('Search accounts')}</span><input value={search} onChange={event => setSearch(event.target.value)} type='search' placeholder={admin ? t('Search account or user email') : t('Search by account email')} maxLength={254} /></label>
       {!admin && <SourceFilter id='account-source' onChange={sources => navigation.change({ sources, page: 1 })} />}
-      <Select id='usage-account-status' label='Account status' hiddenLabel={admin} value={status} onChange={value => navigation.change({ status: value, page: 1 })} options={[{ value: '', label: 'All account statuses' }, { value: 'active', label: 'Active' }, { value: 'offline', label: 'Offline' }, { value: 'banned', label: 'Banned' }, { value: 'sync_failed', label: 'Sync error' }, { value: 'login_failed', label: 'Login failed' }, { value: 're_login_failed', label: 'Re-login failed' }, { value: 'bound_failed', label: 'Binding failed' }, { value: 'cooking_failed', label: 'Setup failed' }, { value: 'pending', label: 'Pending' }, { value: 'unknown', label: 'Unknown' }]} />
+      <Select id='usage-account-status' label={t('Account status')} hiddenLabel={admin} value={status} onChange={value => navigation.change({ status: value, page: 1 })} options={[{ value: '', label: t('All account statuses') }, { value: 'active', label: t('Active') }, { value: 'offline', label: t('Offline') }, { value: 'banned', label: t('Banned') }, { value: 'sync_failed', label: t('Sync error') }, { value: 'login_failed', label: t('Login failed') }, { value: 're_login_failed', label: t('Re-login failed') }, { value: 'bound_failed', label: t('Binding failed') }, { value: 'cooking_failed', label: t('Setup failed') }, { value: 'pending', label: t('Pending') }, { value: 'unknown', label: t('Unknown') }]} />
     </div>
     <ErrorNotice>{error}</ErrorNotice>
-    {error && <button className='button pale usage-load-retry' disabled={loading} onClick={() => setAttempt(value => value + 1)}>Try again</button>}
-    {!data ? (loading ? <Loading label='Loading accounts…' /> : null) : <div className={`usage-list-shell ${loading ? 'usage-list-loading' : ''}`} aria-busy={loading}>
+    {error && <button className='button pale usage-load-retry' disabled={loading} onClick={() => setAttempt(value => value + 1)}>{t('Try again')}</button>}
+    {!data ? (loading ? <Loading label={t('Loading accounts…')} /> : null) : <div className={`usage-list-shell ${loading ? 'usage-list-loading' : ''}`} aria-busy={loading}>
       <div className='usage-table-scroll'><table className={`usage-accounts-table ${admin ? 'usage-admin-table' : 'member-accounts-table'}`}>
-        <caption className='sr-only'>{admin ? 'Accounts across all users and their latest successfully collected data' : 'Your accounts and their latest successfully collected data'}</caption>
-        <thead><tr><th scope='col'>Account / plan</th><th scope='col'>{admin ? 'User' : 'Source'}</th><th scope='col'>Status</th><th scope='col'>Usage windows</th><th scope='col' className='usage-total-cell'>Total spent</th><th scope='col' title='Most recent submission time'>Submitted</th><th scope='col'>Last updated</th><th scope='col' className='usage-sync-heading'>Sync</th></tr></thead>
+        <caption className='sr-only'>{admin ? t('Accounts across all users and their latest successfully collected data') : t('Your accounts and their latest successfully collected data')}</caption>
+        <thead><tr><th scope='col'>{t('Account / plan')}</th><th scope='col'>{admin ? t('User') : t('Source')}</th><th scope='col'>{t('Status')}</th><th scope='col'>{t('Usage windows')}</th><th scope='col' className='usage-total-cell'>{t('Total spent')}</th><th scope='col' title={t('Most recent submission time')}>{t('Submitted')}</th><th scope='col'>{t('Last updated')}</th><th scope='col' className='usage-sync-heading'>{t('Sync')}</th></tr></thead>
         <tbody>{data?.items.map(account => {
           const refresh = rowResults[account.id];
           const busy = syncingID === account.id;
@@ -146,30 +148,31 @@ export function MemberAccounts({ userID, onOpen, admin = false, embedded = false
           const failure = refresh?.status === 'failed' ? refresh.message : refresh?.status === 'updated' ? '' : account.last_error;
           const stale = Boolean(failure || refresh?.status === 'skipped');
           const retryIn = Math.max(0, Math.ceil(((refresh?.retryAt || 0) - now) / 1000));
-          const rateLimited = /rate.limit|limiting requests|too many requests|http 429/i.test(failure || '');
+          const rateLimited = !!refresh?.retryAfter || /rate.limit|limiting requests|too many requests|http 429/i.test(failure || '');
           return <tr key={account.id} aria-busy={busy || deleting}>
-          <td className='usage-account-cell'><button className='usage-email' onClick={() => { navigation.remember(account.id); onOpen(account.id); }}>{account.account}<ArrowUpRight aria-hidden='true' /></button><span className='usage-secondary'>{account.plan}</span><span className='usage-small'>Account ID {account.platform_account_id || account.remote_id || '—'}</span></td>
-          <td data-label={admin ? 'User' : 'Source'} className='usage-owner-cell'><span className='usage-owner-email'>{admin ? account.user_email || '—' : account.account_source?.label || 'myself'}</span></td>
-          <td data-label='Status'><Status account={account} />{stale && account.snapshot && <span className='usage-small'>Last known</span>}</td>
-          <td data-label='Usage windows'><UsageWindow label='5 hours' value={account.snapshot?.usage_5h_percent} /><UsageWindow label='7 days' value={account.snapshot?.usage_7d_percent} /></td>
-          <td data-label='Total spent' className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total_usd, 'USD')}</strong>{stale && account.snapshot && <span className='usage-small'>Last known total</span>}</td>
-          <td data-label='Submitted'><SubmittedTime value={account.latest_submitted_at} /></td>
-          <td data-label='Last updated'><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>
-            <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>Updating account…</span> : !eligible ? <span className='usage-small'>Awaiting acceptance</span> : failure ? <ErrorPopover label={rateLimited ? 'Rate limited' : 'Sync failed'} title='Account synchronization failed' className='usage-sync-error' message={failure} note={account.snapshot ? 'Showing the last successful data.' : 'No data has been collected yet.'} detail={account.last_attempt_at ? `Last saved attempt: ${formatTime(account.last_attempt_at)}` : undefined} /> : refresh?.status === 'skipped' ? <ErrorPopover label='Not updated' title='Account was not updated' className='usage-sync-error' message={refresh.message || 'Another sync is in progress. Try again shortly.'} /> : refresh?.status === 'updated' ? refresh.message ? <ErrorPopover label='Details unavailable' title='Account updated' className='usage-sync-error' message={refresh.message} /> : <span className='usage-row-success'>Updated</span> : !account.snapshot ? <span className='usage-small'>No data collected</span> : null}</div>
+          <td className='usage-account-cell'><button className='usage-email' onClick={() => { navigation.remember(account.id); onOpen(account.id); }}>{account.account}<ArrowUpRight aria-hidden='true' /></button><span className='usage-secondary'>{account.plan}</span><span className='usage-small'>{t('Account ID')} {account.platform_account_id || account.remote_id || '—'}</span></td>
+          <td data-label={admin ? t('User') : t('Source')} className='usage-owner-cell'><span className='usage-owner-email'>{admin ? account.user_email || '—' : account.account_source?.label && account.account_source.id !== 'myself' ? account.account_source.label : t('myself')}</span></td>
+          <td data-label={t('Status')}><Status account={account} />{stale && account.snapshot && <span className='usage-small'>{t('Last known')}</span>}</td>
+          <td data-label={t('Usage windows')}><UsageWindow label={t('5 hours')} value={account.snapshot?.usage_5h_percent} /><UsageWindow label={t('7 days')} value={account.snapshot?.usage_7d_percent} /></td>
+          <td data-label={t('Total spent')} className='usage-total-cell'><strong className='usage-money'>{formatCost(account.snapshot?.cost_total_usd, 'USD')}</strong>{stale && account.snapshot && <span className='usage-small'>{t('Last known total')}</span>}</td>
+          <td data-label={t('Submitted')}><SubmittedTime value={account.latest_submitted_at} /></td>
+          <td data-label={t('Last updated')}><span className='usage-date'>{formatTime(account.last_success_at, undefined, true)}</span>
+            <div className='usage-row-feedback' aria-live='polite'>{busy ? <span className='usage-row-sync'>{t('Updating account…')}</span> : !eligible ? <span className='usage-small'>{t('Awaiting acceptance')}</span> : failure ? <ErrorPopover label={rateLimited ? t('Rate limited') : t('Sync failed')} title={t('Account synchronization failed')} className='usage-sync-error' message={failure} note={account.snapshot ? t('Showing the last successful data.') : t('No data has been collected yet.')} detail={account.last_attempt_at ? t('Last saved attempt: {{time}}', { time: formatTime(account.last_attempt_at) }) : undefined} /> : refresh?.status === 'skipped' ? <ErrorPopover label={t('Not updated')} title={t('Account was not updated')} className='usage-sync-error' message={refresh.message || t('Another sync is in progress. Try again shortly.')} /> : refresh?.status === 'updated' ? refresh.message ? <ErrorPopover label={t('Details unavailable')} title={t('Account updated')} className='usage-sync-error' message={refresh.message} /> : <span className='usage-row-success'>{t('Updated')}</span> : !account.snapshot ? <span className='usage-small'>{t('No data collected')}</span> : null}</div>
           </td>
-          <td className='usage-sync-cell'><button className='button pale usage-sync-button' type='button' aria-label={`Sync ${account.account}`} disabled={loading || loadedScope !== scope || syncingID !== null || deleting || !eligible || retryIn > 0} onClick={() => void sync(account)}><RefreshCw className={busy ? 'usage-spinning' : ''} aria-hidden='true' />{busy ? 'Syncing' : 'Sync'}</button>{retryIn > 0 && !deleting && <span className='usage-sync-cooldown'>{syncRetryLabel(retryIn, refresh?.retryStage)}</span>}</td>
+          <td className='usage-sync-cell'><button className='button pale usage-sync-button' type='button' aria-label={t('Sync {{account}}', { account: account.account })} disabled={loading || loadedScope !== scope || syncingID !== null || deleting || !eligible || retryIn > 0} onClick={() => void sync(account)}><RefreshCw className={busy ? 'usage-spinning' : ''} aria-hidden='true' />{busy ? t('Syncing') : t('Sync')}</button>{retryIn > 0 && !deleting && <span className='usage-sync-cooldown'>{syncRetryLabel(retryIn, refresh?.retryStage)}</span>}</td>
         </tr>; })}</tbody>
       </table></div>
-      {!data?.items.length && <div className='usage-empty'><h2>{query || status ? 'No matching accounts' : 'No accounts yet'}</h2><p>{query || status ? 'Try another email or account status.' : admin ? 'Submitted accounts from all users will appear here with their latest available data.' : 'Your submitted accounts will appear here with their latest available data.'}</p></div>}
+      {!data?.items.length && <div className='usage-empty'><h2>{query || status ? t('No matching accounts') : t('No accounts yet')}</h2><p>{query || status ? t('Try another email or account status.') : admin ? t('Submitted accounts from all users will appear here with their latest available data.') : t('Your submitted accounts will appear here with their latest available data.')}</p></div>}
       {data && data.total > 0 && <AccountPagination page={data.page} total={data.total} pageSize={data.page_size} loading={loading || loadedScope !== scope} scope={loadedScope} onPage={page => navigation.change({ page })} />}
     </div>}
-    <p className='usage-footnote'><Clock3 aria-hidden='true' />Use Sync to update an individual account. Automatic collection follows the configured schedule. Failed updates retain the last successful data.</p>
+    <p className='usage-footnote'><Clock3 aria-hidden='true' />{t('Use Sync to update an individual account. Automatic collection follows the configured schedule. Failed updates retain the last successful data.')}</p>
   </section>;
 }
 
 const metricNames: Record<Metric, string> = { cost_total_usd: 'Total spent', input_tokens_total: 'Input tokens', output_tokens_total: 'Output tokens' };
 
 export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, raw = false }: { id: string; onBack: () => void; onSubmission: (id: string) => void; admin?: boolean; raw?: boolean }) {
+  useLanguage();
   const actionEndpoint = admin ? '/admin/synced-accounts' : '/accounts';
   const endpoint = raw ? '/admin/raw-accounts' : actionEndpoint;
   const [data, setData] = useState<AccountDetails | null>(null);
@@ -185,7 +188,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
   const [syncRetry, setSyncRetry] = useState<{ until: number; stage?: RetryStage } | null>(null);
   const [syncNow, setSyncNow] = useState(Date.now);
   const syncRetryIn = Math.max(0, Math.ceil(((syncRetry?.until || 0) - syncNow) / 1000));
-  const [error, setError] = useState('');
+  const [error, setError] = useState<DisplayError>('');
   const [notice, setNotice] = useState('');
   const [attempt, setAttempt] = useState(0);
   const pending = useRef<AbortController | null>(null);
@@ -197,7 +200,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
     const controller = new AbortController(); setLoading(true); setError('');
     request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal })
       .then(result => { if (!controller.signal.aborted) setData(result); })
-      .catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); })
+      .catch(cause => { if (!controller.signal.aborted) setError(displayError(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [id, days, attempt, endpoint]);
@@ -226,7 +229,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
       }
     } catch (cause) {
       if (!controller.signal.aborted) {
-        setError(errorMessage(cause));
+        setError(displayError(cause));
         if (cause instanceof APIError && retryAfterSeconds(cause.retryAfter)) {
           setSyncRetry({ until: Date.now() + cause.retryAfter * 1000, stage: cause.retryStage });
         }
@@ -234,7 +237,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
     }
     finally {
       if (!controller.signal.aborted) {
-        try { const result = await request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal }); if (!controller.signal.aborted) setData(result); } catch (cause) { if (!controller.signal.aborted) setError(errorMessage(cause)); }
+        try { const result = await request<AccountDetails>(`${endpoint}/${encodeURIComponent(id)}?days=${days}`, { signal: controller.signal }); if (!controller.signal.aborted) setData(result); } catch (cause) { if (!controller.signal.aborted) setError(displayError(cause)); }
         if (!controller.signal.aborted) setSyncing(false);
       }
     }
@@ -265,29 +268,29 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
   }
   const account = data?.account, snapshot = account?.snapshot;
   return <section className='usage-detail'>
-    <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />{raw ? 'Account pool / Raw account' : admin ? 'Account pool / Accounts' : 'Accounts'}</button>
-    {!account || !data ? <><ErrorNotice>{error}</ErrorNotice>{loading ? <Loading label='Loading account…' /> : <button className='button pale' onClick={() => setAttempt(v => v + 1)}>Try again</button>}</> : <>
-      <div className='title-row usage-detail-title'><div><h1>{account.account}</h1><p className='subtitle'>{account.plan} <span aria-hidden='true'>·</span> {account.vendor_name}</p></div><div className='usage-detail-actions'><Status account={account} /><button className='button pale' disabled={syncing || loading || deletionInProgress(account) || syncRetryIn > 0 || !account.current_submission_id} onClick={sync}><RefreshCw className={syncing ? 'usage-spinning' : ''} aria-hidden='true' />{syncing ? 'Updating…' : 'Sync now'}</button></div></div>
-      <div className='usage-meta'>{!admin && account.account_source && <span>Source <strong>{account.account_source.label}</strong></span>}{admin && <span className='usage-owner-meta'>User <strong>{account.user_email || '—'}</strong></span>}<span>Account ID <strong>{account.platform_account_id || account.remote_id || '—'}</strong></span><span>Last updated <strong>{formatTime(account.last_success_at, data.timezone)}</strong></span>{account.latest_submission_id && <button className='usage-text-button' onClick={() => onSubmission(account.current_submission_id || account.latest_submission_id)}>View submission<ArrowUpRight aria-hidden='true' /></button>}</div>
+    <button className='usage-back' onClick={onBack}><ArrowLeft aria-hidden='true' />{raw ? t('Account pool / Raw account') : admin ? t('Account pool / Accounts') : t('Accounts')}</button>
+    {!account || !data ? <><ErrorNotice>{error}</ErrorNotice>{loading ? <Loading label={t('Loading account…')} /> : <button className='button pale' onClick={() => setAttempt(v => v + 1)}>{t('Try again')}</button>}</> : <>
+      <div className='title-row usage-detail-title'><div><h1>{account.account}</h1><p className='subtitle'>{account.plan} <span aria-hidden='true'>·</span> {account.vendor_name}</p></div><div className='usage-detail-actions'><Status account={account} /><button className='button pale' disabled={syncing || loading || deletionInProgress(account) || syncRetryIn > 0 || !account.current_submission_id} onClick={sync}><RefreshCw className={syncing ? 'usage-spinning' : ''} aria-hidden='true' />{syncing ? t('Updating…') : t('Sync now')}</button></div></div>
+      <div className='usage-meta'>{!admin && account.account_source && <span>{t('Source')} <strong>{account.account_source.id === 'myself' ? t('myself') : account.account_source.label}</strong></span>}{admin && <span className='usage-owner-meta'>{t('User')} <strong>{account.user_email || '—'}</strong></span>}<span>{t('Account ID')} <strong>{account.platform_account_id || account.remote_id || '—'}</strong></span><span>{t('Last updated')} <strong>{formatTime(account.last_success_at, data.timezone)}</strong></span>{account.latest_submission_id && <button className='usage-text-button' onClick={() => onSubmission(account.current_submission_id || account.latest_submission_id)}>{t('View submission')}<ArrowUpRight aria-hidden='true' /></button>}</div>
       <ErrorNotice>{error}</ErrorNotice>
-      {deletionInProgress(account) && <p className='notice' role='status'>Deletion is processing. Submission and usage history will be retained.</p>}
-      {notice && <p className='notice success' role='status'>{notice}</p>}
-      {refreshWarning && <p className='notice account-auth-refresh-warning' role='status'>{refreshWarning}</p>}
-      {syncRetryIn > 0 && <p className='usage-small' role='status'>{syncRetryLabel(syncRetryIn, syncRetry?.stage)}. Saved account data is retained.</p>}
-      {account.last_error && <div className='usage-stale-notice' role='status'><strong>Latest update failed</strong><p>{snapshot ? `Showing the last successful data from ${formatTime(account.last_success_at, data.timezone)}.` : 'No data has been collected for this account yet.'}</p><ErrorPopover label='Sync failed' title='Account synchronization failed' className='usage-sync-error' message={account.last_error} detail={`Last saved attempt: ${formatTime(account.last_attempt_at, data.timezone)}`} /></div>}
-      <div className='member-settings-tabs account-usage-tabs' role='tablist' aria-label='Account information'>{(['overview', 'daily'] as const).map(value => <button key={value} role='tab' id={`usage-tab-${value}`} aria-selected={tab === value} aria-controls={`usage-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => changeTab(value)} onKeyDown={e => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'overview' : e.key === 'End' ? 'daily' : tab === 'daily' ? 'overview' : 'daily'; changeTab(next); requestAnimationFrame(() => document.getElementById(`usage-tab-${next}`)?.focus()); } }}>{value === 'overview' ? 'Overview' : 'Daily usage'}</button>)}</div>
+      {deletionInProgress(account) && <p className='notice' role='status'>{t('Deletion is processing. Submission and usage history will be retained.')}</p>}
+      {notice && <p className='notice success' role='status'>{localizeAuthJSONMessage(notice)}</p>}
+      {refreshWarning && <p className='notice account-auth-refresh-warning' role='status'>{localizeAuthJSONMessage(refreshWarning)}</p>}
+      {syncRetryIn > 0 && <p className='usage-small' role='status'>{syncRetryLabel(syncRetryIn, syncRetry?.stage)}. {t('Saved account data is retained.')}</p>}
+      {account.last_error && <div className='usage-stale-notice' role='status'><strong>{t('Latest update failed')}</strong><p>{snapshot ? t('Showing the last successful data from {{time}}.', {time: formatTime(account.last_success_at, data.timezone) }) : t('No data has been collected for this account yet.')}</p><ErrorPopover label={t('Sync failed')} title={t('Account synchronization failed')} className='usage-sync-error' message={account.last_error} detail={t('Last saved attempt: {{time}}', { time: formatTime(account.last_attempt_at, data.timezone) })} /></div>}
+      <div className='member-settings-tabs account-usage-tabs' role='tablist' aria-label={t('Account information')}>{(['overview', 'daily'] as const).map(value => <button key={value} role='tab' id={`usage-tab-${value}`} aria-selected={tab === value} aria-controls={`usage-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => changeTab(value)} onKeyDown={e => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'overview' : e.key === 'End' ? 'daily' : tab === 'daily' ? 'overview' : 'daily'; changeTab(next); requestAnimationFrame(() => document.getElementById(`usage-tab-${next}`)?.focus()); } }}>{value === 'overview' ? t('Overview') : t('Daily usage')}</button>)}</div>
       <div role='tabpanel' id={`usage-panel-${tab}`} aria-labelledby={`usage-tab-${tab}`}>
       {tab === 'overview' && <>
       {(admin || account.can_manage !== false) && <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} onDeactivate={() => setDeactivateOpen(true)} />}
       <div className='usage-metrics'>
-        <div><span>Total spent</span><strong>{formatCost(snapshot?.cost_total_usd, 'USD')}</strong><small>{account.last_error && snapshot ? 'Last known cumulative total' : 'Cumulative total'}</small></div>
-        <div><span>Input tokens</span><strong>{formatTokens(snapshot?.input_tokens_total, true)}</strong><small>{formatTokens(snapshot?.input_tokens_total)} tokens</small></div>
-        <div><span>Output tokens</span><strong>{formatTokens(snapshot?.output_tokens_total, true)}</strong><small>{formatTokens(snapshot?.output_tokens_total)} tokens</small></div>
+        <div><span>{t('Total spent')}</span><strong>{formatCost(snapshot?.cost_total_usd, 'USD')}</strong><small>{account.last_error && snapshot ? t('Last known cumulative total') : t('Cumulative total')}</small></div>
+        <div><span>{t('Input tokens')}</span><strong>{formatTokens(snapshot?.input_tokens_total, true)}</strong><small>{formatTokens(snapshot?.input_tokens_total)} {t('tokens')}</small></div>
+        <div><span>{t('Output tokens')}</span><strong>{formatTokens(snapshot?.output_tokens_total, true)}</strong><small>{formatTokens(snapshot?.output_tokens_total)} {t('tokens')}</small></div>
       </div>
-      <div className='usage-windows-panel'><div><UsageWindow label='5-hour usage' value={snapshot?.usage_5h_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_5h_at, data.timezone)}</span></div><div><UsageWindow label='7-day usage' value={snapshot?.usage_7d_percent} /><span className='usage-small'>Resets {formatTime(snapshot?.reset_7d_at, data.timezone)}</span></div></div>
-      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>Cumulative usage</h2><p className='usage-small'>Saved observations, collected every {data.interval_seconds.toLocaleString()} seconds when enabled.</p></div><Select id='usage-date-range' label='Date range' hiddenLabel value={days} onChange={setDays} disabled={syncing || loading} options={[{ value: '7', label: 'Last 7 days' }, { value: '30', label: 'Last 30 days' }, { value: '90', label: 'Last 90 days' }]} /></div>
-        <div className='usage-metric-tabs' role='group' aria-label='Trend metric'>{(Object.keys(metricNames) as Metric[]).map(key => <button key={key} aria-pressed={metric === key} onClick={() => setMetric(key)}>{metricNames[key]}</button>)}</div>
-        {loading ? <Loading label='Loading usage history…' /> : <UsageTrend key={`${id}:${days}`} data={data} endpoint={`${endpoint}/${encodeURIComponent(id)}/snapshots`} days={days} metric={metric} />}
+      <div className='usage-windows-panel'><div><UsageWindow label={t('5-hour usage')} value={snapshot?.usage_5h_percent} /><span className='usage-small'>{t('Resets')} {formatTime(snapshot?.reset_5h_at, data.timezone)}</span></div><div><UsageWindow label={t('7-day usage')} value={snapshot?.usage_7d_percent} /><span className='usage-small'>{t('Resets')} {formatTime(snapshot?.reset_7d_at, data.timezone)}</span></div></div>
+      <section className='usage-trend-panel' aria-labelledby='usage-trend-title'><div className='usage-trend-heading'><div><h2 id='usage-trend-title'>{t('Cumulative usage')}</h2><p className='usage-small'>{t('Saved observations, collected every {{seconds}} seconds when enabled.', { seconds: data.interval_seconds.toLocaleString(currentLanguage()) })}</p></div><Select id='usage-date-range' label={t('Date range')} hiddenLabel value={days} onChange={setDays} disabled={syncing || loading} options={[{ value: '7', label: t('Last 7 days') }, { value: '30', label: t('Last 30 days') }, { value: '90', label: t('Last 90 days') }]} /></div>
+        <div className='usage-metric-tabs' role='group' aria-label={t('Trend metric')}>{(Object.keys(metricNames) as Metric[]).map(key => <button key={key} aria-pressed={metric === key} onClick={() => setMetric(key)}>{t(metricNames[key])}</button>)}</div>
+        {loading ? <Loading label={t('Loading usage history…')} /> : <UsageTrend key={`${id}:${days}`} data={data} endpoint={`${endpoint}/${encodeURIComponent(id)}/snapshots`} days={days} metric={metric} />}
       </section>
       </>}
       <DailyUsage key={`${endpoint}:${id}`} endpoint={`${endpoint}/${encodeURIComponent(id)}`} compact={tab === 'overview'} onOpen={() => changeTab('daily')} />

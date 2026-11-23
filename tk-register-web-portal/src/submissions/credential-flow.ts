@@ -1,4 +1,5 @@
-import { authFields, emptyDraft, MAX_AUTH_BYTES, parseAuthJSON, vendorTimestamp, type AccountDraft } from './validation';
+import { t } from '../i18n';
+import { AuthFieldError, authFields, emptyDraft, MAX_AUTH_BYTES, parseAuthJSON, vendorTimestamp, type AccountDraft } from './validation';
 import { APIError } from '../api';
 
 export type CredentialMethod = 'oauth' | 'setup' | 'json' | 'cookie' | 'token';
@@ -91,7 +92,7 @@ export function importAccountOptions(text: string) {
   const items = Array.isArray(accounts) ? accounts : [];
   return items.map((item, index) => {
     const account = item && typeof item === 'object' ? item as Record<string, unknown> : {};
-    const label = typeof account.email === 'string' ? account.email : typeof account.account === 'string' ? account.account : typeof account.name === 'string' ? account.name : `Account ${index + 1}`;
+    const label = typeof account.email === 'string' ? account.email : typeof account.account === 'string' ? account.account : typeof account.name === 'string' ? account.name : t('Account {{index}}', { index: index + 1 });
     return { value: String(index), label: `${index + 1} · ${label}` };
   });
 }
@@ -112,7 +113,7 @@ export function completionPatch(original: Record<string, unknown>, text: string,
     auth = parsed as Record<string, unknown>;
     for (const key of authFields) {
       if (auth[key] === undefined) continue;
-      if (key === 'claude_device_ids' ? !Array.isArray(auth[key]) || (auth[key] as unknown[]).some(value => typeof value !== 'string') : typeof auth[key] !== 'string') throw new Error(`${key} has an invalid value.`);
+      if (key === 'claude_device_ids' ? !Array.isArray(auth[key]) || (auth[key] as unknown[]).some(value => typeof value !== 'string') : typeof auth[key] !== 'string') throw new AuthFieldError('{{field}} has an invalid value.', { field: key });
     }
   }
   const patch: Record<string, unknown> = {};
@@ -122,7 +123,7 @@ export function completionPatch(original: Record<string, unknown>, text: string,
     if (auth[key] === undefined && (original[key] === undefined || original[key] === null || original[key] === '')) continue;
     if (key === 'proxy_url' || key === 'verification_status') throw new Error('Proxy verification is managed by the server. Generate a new flow to change the proxy.');
     const existing = original[key];
-    if (existing !== undefined && existing !== null && existing !== '' && !(Array.isArray(existing) && !existing.length)) throw new Error(`The authorized ${key} cannot be replaced. Complete missing fields only.`);
+    if (existing !== undefined && existing !== null && existing !== '' && !(Array.isArray(existing) && !existing.length)) throw new AuthFieldError('The authorized {{field}} cannot be replaced. Complete missing fields only.', { field: key });
     patch[key] = auth[key];
   }
   return { auth, patch };

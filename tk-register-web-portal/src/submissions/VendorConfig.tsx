@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { Check, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { errorMessage, request } from "../api";
@@ -117,17 +118,17 @@ export default function VendorConfig({
     <div className="vendor-config">
       <ErrorNotice>{error}</ErrorNotice>
       {loading ? (
-        <Loading label="Loading vendor configuration…" />
+        <Loading label={t("Loading vendor configuration…")} />
       ) : !vendors || !vendor ? (
         <>
           {!error ? (
-            <p className="muted">No vendors have been configured.</p>
+            <p className="muted">{t('No vendors have been configured.')}</p>
           ) : (
             <button
               className="button secondary"
               onClick={() => setAttempt((n) => n + 1)}
             >
-              Try again
+              {t('Try again')}
             </button>
           )}
         </>
@@ -137,7 +138,7 @@ export default function VendorConfig({
             <div className="field">
               <VendorSelect
                 id="config-vendor"
-                label="Vendor"
+                label={t("Vendor")}
                 value={selected}
                 disabled={busy}
                 options={vendors.map((item) => ({
@@ -147,7 +148,7 @@ export default function VendorConfig({
                 onChange={(value) => {
                   if (
                     dirty &&
-                    !window.confirm("Discard your unsaved vendor changes?")
+                    !window.confirm(t("Discard your unsaved vendor changes?"))
                   )
                     return;
                   setSelected(value);
@@ -164,17 +165,17 @@ export default function VendorConfig({
                 <LockKeyhole aria-hidden="true" />
               )}
               {vendor.configured
-                ? "Credential configured"
-                : "Credential required"}
+                ? t("Credential configured")
+                : t("Credential required")}
             </span>
           </div>
           <form onSubmit={save} noValidate autoComplete="off">
             <table className="config-table vendor-table">
               <thead>
                 <tr>
-                  <th scope="col">Key</th>
-                  <th scope="col">Value</th>
-                  <th scope="col">Description</th>
+                  <th scope="col">{t('Key')}</th>
+                  <th scope="col">{t('Value')}</th>
+                  <th scope="col">{t('Description')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -187,7 +188,7 @@ export default function VendorConfig({
                       type="button"
                       role="switch"
                       aria-checked={enabled}
-                      aria-label="Enable vendor submissions"
+                      aria-label={t("Enable vendor submissions")}
                       className={`switch ${enabled ? "on" : ""}`}
                       disabled={busy}
                       onClick={() => setEnabled(!enabled)}
@@ -195,12 +196,12 @@ export default function VendorConfig({
                       <span />
                     </button>
                     <span className="switch-label">
-                      {enabled ? "Enabled" : "Disabled"}
+                      {enabled ? t("Enabled") : t("Disabled")}
                     </span>
                   </td>
                   <td>
                     <p>
-                      Allow account submissions and queries for this vendor.
+                      {t('Allow account submissions and queries for this vendor.')}
                     </p>
                   </td>
                 </tr>
@@ -209,12 +210,12 @@ export default function VendorConfig({
                     <code>access_token</code>
                     <span className="secret-label">
                       <LockKeyhole aria-hidden="true" />
-                      Secret
+                      {t('Secret')}
                     </span>
                   </td>
                   <td>
                     <label className="sr-only" htmlFor="vendor-token">
-                      Vendor access token
+                      {t('Vendor access token')}
                     </label>
                     <input
                       id="vendor-token"
@@ -226,24 +227,23 @@ export default function VendorConfig({
                       onChange={(e) => setToken(e.target.value)}
                       placeholder={
                         vendor.configured
-                          ? "Enter a replacement token"
-                          : "Enter platform Bearer token"
+                          ? t("Enter a replacement token")
+                          : t("Enter platform Bearer token")
                       }
                     />
                     <p className="field-help">
                       {vendor.configured
-                        ? "Leave blank to keep the existing token."
-                        : "Provided by the platform administrator."}
+                        ? t("Leave blank to keep the existing token.")
+                        : t("Provided by the platform administrator.")}
                     </p>
                   </td>
                   <td>
                     <p>
-                      Shared by this vendor’s protocols. Encrypted in storage;
-                      the saved value cannot be viewed.
+                      {t('Shared by this vendor’s protocols. Encrypted in storage; the saved value cannot be viewed.')}
                     </p>
                     {vendor.credential_updated_at && (
                       <p className="field-help">
-                        Updated {dateTime(vendor.credential_updated_at)}
+                        {t('Updated')} {dateTime(vendor.credential_updated_at)}
                       </p>
                     )}
                   </td>
@@ -254,7 +254,7 @@ export default function VendorConfig({
                   </td>
                   <td>
                     <label className="sr-only" htmlFor="vendor-timezone">
-                      Vendor timezone
+                      {t('Vendor timezone')}
                     </label>
                     <input
                       id="vendor-timezone"
@@ -268,20 +268,20 @@ export default function VendorConfig({
                   </td>
                   <td>
                     <p>
-                      Timezone used for platform activity and billing queries.
+                      {t('Timezone used for platform activity and billing queries.')}
                     </p>
                   </td>
                 </tr>
               </tbody>
             </table>
             <div className="vendor-protocols">
-              <h2>Protocols</h2>
+              <h2>{t('Protocols')}</h2>
               <ul>
                 {vendor.protocols.map((protocol) => (
                   <li key={protocol.version_id}>
                     <span>{protocol.name}</span>
                     <span className="muted small">
-                      {protocol.operation === "push" ? "Submit" : "Query"} · v
+                      {protocol.operation === "push" ? t("Submit") : t("Query")} · v
                       {protocol.version}
                     </span>
                   </li>
@@ -291,12 +291,12 @@ export default function VendorConfig({
             {notice && (
               <div className="notice success" role="status">
                 <Check aria-hidden="true" />
-                {notice}
+                {t(notice)}
               </div>
             )}
             <div className="save-footer">
               <span className="save-state">
-                {dirty ? "Unsaved vendor changes" : "No unsaved changes"}
+                {dirty ? t("Unsaved vendor changes") : t("No unsaved changes")}
               </span>
               <div className="save-actions">
                 <button
@@ -310,14 +310,14 @@ export default function VendorConfig({
                     setError("");
                   }}
                 >
-                  Discard
+                  {t('Discard')}
                 </button>
                 <button
                   className="button primary"
                   type="submit"
                   disabled={!dirty || busy}
                 >
-                  {busy ? "Saving…" : "Save changes"}
+                  {busy ? t("Saving…") : t("Save changes")}
                 </button>
               </div>
             </div>
