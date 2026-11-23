@@ -62,6 +62,13 @@ try {
     await page.goto(`${base}/tk-register/#/${route}`);
     await page.locator(".workspace").waitFor();
     await page.locator("#main-content h1").waitFor();
+    if (route === "submit") {
+      const methods = page.getByRole("tablist", { name: "Submission method" });
+      const firstTab = methods.getByRole("tab").first();
+      assert.equal(await firstTab.textContent(), "Authorize & submit");
+      assert.equal(await firstTab.getAttribute("aria-selected"), "true");
+      await methods.getByRole("tab", { name: "Upload Auth JSON", exact: true }).click();
+    }
   };
   const screenshot = async (name, width) => {
     await page.setViewportSize({ width, height: 1000 });
