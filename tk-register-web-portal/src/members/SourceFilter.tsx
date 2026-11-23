@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { ChevronDown, Search } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -16,7 +17,7 @@ export default function SourceFilter({ id, onChange, searchable = false }: { id:
   const selected = selectedSources(scope.selection, scope.sources);
   const all = scope.sources.length > 0 && selected.length === scope.sources.length;
   const title = sourceSummary(scope.selection, scope.sources);
-  const visibleSources = scope.sources.filter(source => !searchable || source.label.toLowerCase().includes(search.trim().toLowerCase()));
+  const visibleSources = scope.sources.filter(source => !searchable || (source.id === 'myself' ? t('myself') : source.label).toLowerCase().includes(search.trim().toLowerCase()));
   function close(restore = false) { setOpen(false); setSearch(''); if (restore) trigger.current?.focus(); }
   function update(ids: string[]) {
     const selection = ids.length === scope.sources.length ? 'all' : ids.length ? ids.join(',') : 'none';
@@ -53,14 +54,14 @@ export default function SourceFilter({ id, onChange, searchable = false }: { id:
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('focusin', focus); document.removeEventListener('keydown', escape); };
   }, [open]);
   return <div className='member-source-filter tk-select'>
-    <label id={`${id}-label`} htmlFor={id}>Source</label>
-    <button ref={trigger} id={id} className='tk-select-trigger' type='button' aria-haspopup='dialog' aria-expanded={open} aria-controls={open ? `${id}-choices` : undefined} disabled={scope.loading || !!scope.error} onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); } }}><span>{scope.loading ? 'Loading sources…' : title}</span><ChevronDown aria-hidden='true' /></button>
-    {scope.error && <button type='button' className='text-button member-source-retry' onClick={scope.reload}>Retry loading sources</button>}
+    <label id={`${id}-label`} htmlFor={id}>{t("Source")}</label>
+    <button ref={trigger} id={id} className='tk-select-trigger' type='button' aria-haspopup='dialog' aria-expanded={open} aria-controls={open ? `${id}-choices` : undefined} disabled={scope.loading || !!scope.error} onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); } }}><span>{scope.loading ? t("Loading sources…") : title}</span><ChevronDown aria-hidden='true' /></button>
+    {scope.error && <button type='button' className='text-button member-source-retry' onClick={scope.reload}>{t("Retry loading sources")}</button>}
     {open && position && createPortal(<div ref={menu} id={`${id}-choices`} className='member-source-menu' style={position} role='dialog' aria-labelledby={`${id}-label`}>
-      {searchable && <div className='member-source-search'><Search aria-hidden='true' /><input ref={searchInput} type='search' aria-label='Search users' placeholder='Search user email' value={search} onChange={event => setSearch(event.target.value)} /></div>}
-      <label className='member-source-choice member-source-all'><input ref={allBox} type='checkbox' checked={all} onChange={() => update(all ? [] : scope.sources.map(source => source.id))} /><span>Select all</span></label>
-      <div className='member-source-options'>{visibleSources.map(source => <label className={`member-source-choice ${selected.includes(source.id) ? 'is-selected' : ''}`} key={source.id}><input type='checkbox' checked={selected.includes(source.id)} onChange={() => update(selected.includes(source.id) ? selected.filter(id => id !== source.id) : [...selected, source.id])} /><span>{source.label}</span></label>)}{!visibleSources.length && <p className='member-source-empty' role='status'>No matching users.</p>}</div>
-      <footer><button type='button' className='button pale' onClick={() => close(true)}>Done</button></footer>
+      {searchable && <div className='member-source-search'><Search aria-hidden='true' /><input ref={searchInput} type='search' aria-label={t("Search users")} placeholder={t("Search user email")} value={search} onChange={event => setSearch(event.target.value)} /></div>}
+      <label className='member-source-choice member-source-all'><input ref={allBox} type='checkbox' checked={all} onChange={() => update(all ? [] : scope.sources.map(source => source.id))} /><span>{t("Select all")}</span></label>
+      <div className='member-source-options'>{visibleSources.map(source => <label className={`member-source-choice ${selected.includes(source.id) ? 'is-selected' : ''}`} key={source.id}><input type='checkbox' checked={selected.includes(source.id)} onChange={() => update(selected.includes(source.id) ? selected.filter(id => id !== source.id) : [...selected, source.id])} /><span>{source.id === 'myself' ? t('myself') : source.label}</span></label>)}{!visibleSources.length && <p className='member-source-empty' role='status'>{t("No matching users.")}</p>}</div>
+      <footer><button type='button' className='button pale' onClick={() => close(true)}>{t("Done")}</button></footer>
     </div>, document.body)}
   </div>;
 }

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { Check, Link2, Mail, ShieldCheck, UsersRound, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type MutableRefObject } from 'react';
 import { APIError, errorMessage, request, type CodeDelivery } from '../api';
@@ -96,36 +97,36 @@ export default function AddSubAccountsDialog({ currentEmail, directEmails, deadl
 
   return <dialog ref={dialog} className='admin-create-dialog member-link-dialog' aria-labelledby='member-link-title' aria-describedby='member-link-description' onCancel={event => { event.preventDefault(); close(); }}>
     <header className='admin-create-heading'>
-      <div><h2 id='member-link-title'>Add sub accounts</h2><p id='member-link-description'>Connect an existing TK Register user as your direct member.</p></div>
-      <button type='button' className='admin-dialog-close' aria-label='Close add sub accounts' disabled={busy} onClick={close}><X aria-hidden='true' /></button>
+      <div><h2 id='member-link-title'>{t("Add sub accounts")}</h2><p id='member-link-description'>{t("Connect an existing TK Register user as your direct member.")}</p></div>
+      <button type='button' className='admin-dialog-close' aria-label={t("Close add sub accounts")} disabled={busy} onClick={close}><X aria-hidden='true' /></button>
     </header>
     <form onSubmit={link} noValidate aria-busy={busy}>
       <div className='admin-create-fields member-link-fields'>
           <div className='field'>
-            <label htmlFor='member-link-email'>User email</label>
-            <input ref={emailInput} id='member-link-email' type='email' autoComplete='off' autoCapitalize='none' spellCheck={false} maxLength={50} required disabled={busy} value={email} placeholder='Existing user’s email address' aria-invalid={!!emailError} aria-describedby={`member-link-email-help${emailError ? ' member-link-email-error' : ''}`} onChange={event => { setEmail(event.target.value); setEmailError(''); setCodeError(''); setCode(''); setSent(null); setError(''); }} />
-            <p className='admin-create-help' id='member-link-email-help'>Use the email address they already use to sign in.</p>
-            {emailError && <p className='field-error' id='member-link-email-error' role='alert'>{emailError}</p>}
+            <label htmlFor='member-link-email'>{t("User email")}</label>
+            <input ref={emailInput} id='member-link-email' type='email' autoComplete='off' autoCapitalize='none' spellCheck={false} maxLength={50} required disabled={busy} value={email} placeholder={t("Existing user’s email address")} aria-invalid={!!emailError} aria-describedby={`member-link-email-help${emailError ? ' member-link-email-error' : ''}`} onChange={event => { setEmail(event.target.value); setEmailError(''); setCodeError(''); setCode(''); setSent(null); setError(''); }} />
+            <p className='admin-create-help' id='member-link-email-help'>{t("Use the email address they already use to sign in.")}</p>
+            {emailError && <p className='field-error' id='member-link-email-error' role='alert'>{t(emailError)}</p>}
           </div>
           <div className='field'>
-            <label htmlFor='member-link-code'>Verification code</label>
+            <label htmlFor='member-link-code'>{t("Verification code")}</label>
             <div className='code-row'>
-              <input ref={codeInput} id='member-link-code' type='text' autoComplete='off' autoCapitalize='none' autoCorrect='off' spellCheck={false} disabled={busy} maxLength={32} value={code} placeholder='Enter code' aria-invalid={!!codeError} aria-describedby={`member-link-code-help${codeError ? ' member-link-code-error' : ''}`} onChange={event => { setCode(event.target.value); setCodeError(''); }} />
-              <button type='button' className='button pale' disabled={busy || !normalizedEmail || remaining > 0} onClick={sendCode}><Mail aria-hidden='true' />{sending ? 'Sending…' : remaining > 0 ? `Resend in ${remaining}s` : 'Send code'}</button>
+              <input ref={codeInput} id='member-link-code' type='text' autoComplete='off' autoCapitalize='none' autoCorrect='off' spellCheck={false} disabled={busy} maxLength={32} value={code} placeholder={t("Enter code")} aria-invalid={!!codeError} aria-describedby={`member-link-code-help${codeError ? ' member-link-code-error' : ''}`} onChange={event => { setCode(event.target.value); setCodeError(''); }} />
+              <button type='button' className='button pale' disabled={busy || !normalizedEmail || remaining > 0} onClick={sendCode}><Mail aria-hidden='true' />{sending ? t("Sending…") : remaining > 0 ? t('Resend in {{seconds}}s', { seconds: remaining }) : t("Send code")}</button>
             </div>
-            <p className='admin-create-help' id='member-link-code-help'>The verification code goes to this user’s email address.</p>
-            {sent?.email === normalizedEmail && <p className='admin-create-help' role='status'>{now < sent.expiresAt ? <><Check aria-hidden='true' size={14} /> Code sent. Ask the user to confirm the connection and share the code.</> : 'This code has expired. Request a new code.'}</p>}
-            {codeError && <p className='field-error' id='member-link-code-error' role='alert'>{codeError}</p>}
+            <p className='admin-create-help' id='member-link-code-help'>{t("The verification code goes to this user’s email address.")}</p>
+            {sent?.email === normalizedEmail && <p className='admin-create-help' role='status'>{now < sent.expiresAt ? <><Check aria-hidden='true' size={14} /> {t("Code sent. Ask the user to confirm the connection and share the code.")}</> : t("This code has expired. Request a new code.")}</p>}
+            {codeError && <p className='field-error' id='member-link-code-error' role='alert'>{t(codeError)}</p>}
           </div>
           <div className='member-link-details'>
-            <div><UsersRound aria-hidden='true' /><p>You’ll be able to view accounts available through this user, including their members’ accounts.</p></div>
-            <div><ShieldCheck aria-hidden='true' /><p>Users with an existing parent cannot be added here. Their sign-in details and account ownership stay unchanged.</p></div>
+            <div><UsersRound aria-hidden='true' /><p>{t("You’ll be able to view accounts available through this user, including their members’ accounts.")}</p></div>
+            <div><ShieldCheck aria-hidden='true' /><p>{t("Users with an existing parent cannot be added here. Their sign-in details and account ownership stay unchanged.")}</p></div>
           </div>
         <ErrorNotice>{error}</ErrorNotice>
       </div>
       <footer className='admin-create-actions'>
-        <button type='button' className='button secondary' disabled={busy} onClick={close}>Cancel</button>
-        <button type='submit' className='button primary' disabled={busy || !normalizedEmail || !code.trim()}><Link2 aria-hidden='true' />{saving ? 'Adding…' : 'Add sub account'}</button>
+        <button type='button' className='button secondary' disabled={busy} onClick={close}>{t("Cancel")}</button>
+        <button type='submit' className='button primary' disabled={busy || !normalizedEmail || !code.trim()}><Link2 aria-hidden='true' />{saving ? t("Adding…") : t("Add sub account")}</button>
       </footer>
     </form>
   </dialog>;

@@ -1,7 +1,8 @@
+import { t, translateMessage } from '../i18n';
 import { Check, FilePenLine, LoaderCircle, LockKeyhole, RefreshCw, Upload, UserRound, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { APIError, errorMessage, request } from '../api';
-import { MAX_AUTH_BYTES, parseAuthJSON } from '../submissions/validation';
+import { AuthFieldError, MAX_AUTH_BYTES, parseAuthJSON } from '../submissions/validation';
 import { ErrorNotice, Loading } from '../ui';
 import { authJSONUpdateError, type AuthJSONEligibility, type AuthJSONUpdateResult } from './auth-json';
 import { formatTime } from './helpers';
@@ -12,12 +13,12 @@ import './auth-json.css';
 export function AuthenticationCard({ account, disabled, onEdit, timezone }: {
   account: SyncedAccount; disabled: boolean; onEdit: () => void; timezone: string;
 }) {
-  return <section className='account-authentication' aria-label='Authentication'>
-    <div className='account-auth-copy'><h2>Authentication</h2><p>Update this account’s Auth JSON when its credentials change.</p>
-      {account.auth_json_updated_at && <span className='account-auth-updated'>Last updated {formatTime(account.auth_json_updated_at, timezone)}</span>}
-      {deletionInProgress(account) ? <span className='account-auth-updated'>Unavailable while this account is being deleted.</span> : !account.current_submission_id && <span className='account-auth-updated'>Available after the account submission is accepted.</span>}
+  return <section className='account-authentication' aria-label={t('Authentication')}>
+    <div className='account-auth-copy'><h2>{t('Authentication')}</h2><p>{t('Update this account’s Auth JSON when its credentials change.')}</p>
+      {account.auth_json_updated_at && <span className='account-auth-updated'>{t('Last updated')} {formatTime(account.auth_json_updated_at, timezone)}</span>}
+      {deletionInProgress(account) ? <span className='account-auth-updated'>{t('Unavailable while this account is being deleted.')}</span> : !account.current_submission_id && <span className='account-auth-updated'>{t('Available after the account submission is accepted.')}</span>}
     </div>
-    <button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />Update Auth JSON</button>
+    <button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />{t('Update Auth JSON')}</button>
   </section>;
 }
 
@@ -39,7 +40,7 @@ export function AuthJSONEditor({ account, endpoint, onClose, onSaved }: {
   const [fileName, setFileName] = useState('');
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string | AuthFieldError>('');
   const [uncertain, setUncertain] = useState(false);
   const [validFormat, setValidFormat] = useState(false);
   const inputID = useId(), headingID = useId(), descriptionID = useId(), errorID = useId(), helpID = useId();
@@ -70,7 +71,7 @@ export function AuthJSONEditor({ account, endpoint, onClose, onSaved }: {
     request<AuthJSONEligibility>(path, { signal: controller.signal })
       .then(result => {
         if (controller.signal.aborted || !mounted.current) return;
-        if (!result || typeof result.editable !== 'boolean') throw new Error('Could not check whether this account can be updated. Please try again.');
+        if (!result || typeof result.editable !== 'boolean') throw new Error(t('Could not check whether this account can be updated. Please try again.'));
         setEligibility(result);
       })
       .catch(cause => { if (!controller.signal.aborted && mounted.current) setCheckError(errorMessage(cause)); })
@@ -88,14 +89,14 @@ export function AuthJSONEditor({ account, endpoint, onClose, onSaved }: {
 
   function close() {
     if (submitting.current) return;
-    if (raw.trim() && !window.confirm('Discard this Auth JSON and close the editor?')) return;
+    if (raw.trim() && !window.confirm(t('Discard this Auth JSON and close the editor?'))) return;
     setRaw(''); setFileName(''); setError('');
     onClose();
   }
   function checkFormat(value: string) {
     if (!value.trim()) { setValidFormat(false); return; }
     try { parseAuthJSON(value); setValidFormat(true); setError(''); }
-    catch (cause) { setValidFormat(false); setError(errorMessage(cause)); }
+    catch (cause) { setValidFormat(false); setError(cause instanceof AuthFieldError ? cause : errorMessage(cause)); }
   }
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -118,14 +119,14 @@ export function AuthJSONEditor({ account, endpoint, onClose, onSaved }: {
     if (submitting.current || checking || uploading || !eligibility?.editable) return;
     let auth: Record<string, unknown>;
     try { auth = parseAuthJSON(raw); }
-    catch (cause) { setError(errorMessage(cause)); setUncertain(false); textarea.current?.focus(); return; }
+    catch (cause) { setError(cause instanceof AuthFieldError ? cause : errorMessage(cause)); setUncertain(false); textarea.current?.focus(); return; }
     const controller = new AbortController();
     pending.current = controller;
     submitting.current = true; setBusy(true); setError(''); setUncertain(false);
     try {
       const result = await request<AuthJSONUpdateResult>(path, { method: 'POST', body: { auth_json: auth }, signal: controller.signal });
       if (!result || result.updated !== true || !('account' in result) || (result.account !== null && typeof result.account !== 'object') || !['pending', 'succeeded', 'failed'].includes(result.refresh_status)) {
-        throw new APIError('The update result could not be confirmed.', 200, 'AUTH_JSON_UPDATE_UNCONFIRMED');
+        throw new APIError(t('The update result could not be confirmed.'), 200, 'AUTH_JSON_UPDATE_UNCONFIRMED');
       }
       if (!controller.signal.aborted && mounted.current) {
         setRaw(''); setFileName('');
@@ -146,19 +147,19 @@ export function AuthJSONEditor({ account, endpoint, onClose, onSaved }: {
   }
   const editable = !!eligibility?.editable && !checking && !checkError;
   return <dialog ref={dialog} className='account-auth-dialog' aria-labelledby={headingID} aria-describedby={descriptionID} onCancel={event => { event.preventDefault(); close(); }}>
-    <div className='account-auth-dialog-heading'><div><h2 id={headingID}>Update Auth JSON</h2><p id={descriptionID}>Replace the credentials for this account.</p></div><button type='button' className='account-auth-close' aria-label='Close dialog' disabled={busy} onClick={close}><X aria-hidden='true' /></button></div>
+    <div className='account-auth-dialog-heading'><div><h2 id={headingID}>{t('Update Auth JSON')}</h2><p id={descriptionID}>{t('Replace the credentials for this account.')}</p></div><button type='button' className='account-auth-close' aria-label={t('Close dialog')} disabled={busy} onClick={close}><X aria-hidden='true' /></button></div>
     <form onSubmit={save} noValidate aria-busy={busy}>
       <div className='account-auth-dialog-body'>
         <div className='account-auth-identity'><span className='account-auth-identity-icon'><UserRound aria-hidden='true' /></span><div><strong>{account.account}</strong><span>{eligibility?.plan || account.plan} · {account.vendor_name}</span></div></div>
-        {checking ? <Loading label='Checking the latest account information…' /> : checkError ? <div className='account-auth-check'><ErrorNotice>{checkError}</ErrorNotice><button type='button' className='button pale' onClick={() => setCheckAttempt(v => v + 1)}><RefreshCw aria-hidden='true' />Try again</button></div> : !eligibility?.editable ? <div className='account-auth-unavailable' role='status'><LockKeyhole aria-hidden='true' /><p>{eligibility?.reason || 'The vendor does not allow Auth JSON updates for this account right now.'}</p><button type='button' className='usage-text-button' onClick={() => setCheckAttempt(v => v + 1)}>Check again</button></div> : null}
-        <div className='account-auth-field-heading'><label htmlFor={inputID}>New Auth JSON <span aria-hidden='true'>*</span></label><button type='button' className='button secondary account-auth-upload' disabled={!editable || busy || uploading} onClick={() => fileInput.current?.click()}><Upload aria-hidden='true' />{uploading ? 'Reading…' : 'Upload JSON'}</button><input ref={fileInput} type='file' accept='.json,application/json' hidden onChange={upload} /></div>
-        <textarea ref={textarea} id={inputID} value={raw} disabled={!editable || busy || uploading} spellCheck={false} autoComplete='off' autoCapitalize='none' placeholder='Paste the complete authentication JSON here…' aria-invalid={!!error && !uncertain} aria-describedby={`${helpID} ${errorID}`} onChange={event => { setRaw(event.target.value); setFileName(''); setValidFormat(false); if (!uncertain) setError(''); }} onBlur={() => { if (!busy && !uncertain) checkFormat(raw); }} />
-        <div className='account-auth-field-help' id={helpID}><span>{fileName || 'Paste a JSON object or upload a .json file, up to 2 MB.'}</span>{validFormat && <span className='account-auth-valid'><Check aria-hidden='true' />Valid format</span>}</div>
-        <div id={errorID}>{error && <div className={`notice ${uncertain ? 'account-auth-uncertain' : 'error'}`} role='alert'>{error}</div>}</div>
-        <p className='account-auth-private'><LockKeyhole aria-hidden='true' />Existing credentials are never shown. Your password and other account details stay unchanged.</p>
-        {busy && <p className='account-auth-progress' role='status'><LoaderCircle className='spin' aria-hidden='true' />Updating credentials…</p>}
+        {checking ? <Loading label={t('Checking the latest account information…')} /> : checkError ? <div className='account-auth-check'><ErrorNotice>{checkError}</ErrorNotice><button type='button' className='button pale' onClick={() => setCheckAttempt(v => v + 1)}><RefreshCw aria-hidden='true' />{t('Try again')}</button></div> : !eligibility?.editable ? <div className='account-auth-unavailable' role='status'><LockKeyhole aria-hidden='true' /><p>{eligibility?.reason ? translateMessage(eligibility.reason) : t('The vendor does not allow Auth JSON updates for this account right now.')}</p><button type='button' className='usage-text-button' onClick={() => setCheckAttempt(v => v + 1)}>{t('Check again')}</button></div> : null}
+        <div className='account-auth-field-heading'><label htmlFor={inputID}>{t('New Auth JSON')} <span aria-hidden='true'>*</span></label><button type='button' className='button secondary account-auth-upload' disabled={!editable || busy || uploading} onClick={() => fileInput.current?.click()}><Upload aria-hidden='true' />{uploading ? t('Reading…') : t('Upload JSON')}</button><input ref={fileInput} type='file' accept='.json,application/json' hidden onChange={upload} /></div>
+        <textarea ref={textarea} id={inputID} value={raw} disabled={!editable || busy || uploading} spellCheck={false} autoComplete='off' autoCapitalize='none' placeholder={t('Paste the complete authentication JSON here…')} aria-invalid={!!error && !uncertain} aria-describedby={`${helpID} ${errorID}`} onChange={event => { setRaw(event.target.value); setFileName(''); setValidFormat(false); if (!uncertain) setError(''); }} onBlur={() => { if (!busy && !uncertain) checkFormat(raw); }} />
+        <div className='account-auth-field-help' id={helpID}><span>{fileName || t('Paste a JSON object or upload a .json file, up to 2 MB.')}</span>{validFormat && <span className='account-auth-valid'><Check aria-hidden='true' />{t('Valid format')}</span>}</div>
+        <div id={errorID}>{error && <div className={`notice ${uncertain ? 'account-auth-uncertain' : 'error'}`} role='alert'>{error instanceof AuthFieldError ? error.localizedMessage : translateMessage(error)}</div>}</div>
+        <p className='account-auth-private'><LockKeyhole aria-hidden='true' />{t('Existing credentials are never shown. Your password and other account details stay unchanged.')}</p>
+        {busy && <p className='account-auth-progress' role='status'><LoaderCircle className='spin' aria-hidden='true' />{t('Updating credentials…')}</p>}
       </div>
-      <div className='account-auth-dialog-footer'><button type='button' className='button secondary' disabled={busy} onClick={close}>Cancel</button><button type='submit' className='button primary' disabled={busy || uploading || !editable || !raw.trim()}>{busy ? <><LoaderCircle className='spin' aria-hidden='true' />Updating…</> : 'Update Auth JSON'}</button></div>
+      <div className='account-auth-dialog-footer'><button type='button' className='button secondary' disabled={busy} onClick={close}>{t('Cancel')}</button><button type='submit' className='button primary' disabled={busy || uploading || !editable || !raw.trim()}>{busy ? <><LoaderCircle className='spin' aria-hidden='true' />{t('Updating…')}</> : t('Update Auth JSON')}</button></div>
     </form>
   </dialog>;
 }

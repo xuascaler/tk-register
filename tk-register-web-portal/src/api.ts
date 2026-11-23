@@ -1,3 +1,5 @@
+import { currentLanguage, t, translateMessage } from './i18n';
+
 export type User = {
   id: number;
   email: string;
@@ -130,8 +132,49 @@ export async function request<T>(
   return payload.data as T;
 }
 
+// Only map codes with a single meaning. Other responses may contain a more specific explanation.
+const errorLabels: Record<string, string> = {
+  CHALLENGE_EXPIRED: 'Your sign-in attempt has expired. Enter your password again.',
+  CSRF_REJECTED: 'Refresh the page before trying again.',
+  EMAIL_ALREADY_REGISTERED: 'This email is already registered. An existing user cannot be created again.',
+  EMAIL_NOT_VERIFIED: 'A verified email address is required.',
+  EMAIL_UNAVAILABLE: 'We could not send the code. Please try again shortly.',
+  INVALID_CODE: 'The verification code is invalid or expired.',
+  METHOD_DISABLED: 'This sign-in method is currently unavailable.',
+  PASSWORD_CHANGE_CONFLICT: 'This password change has expired or your account changed. Request a new code.',
+  PASSWORD_MISMATCH: 'The passwords do not match.',
+  PASSWORD_UNCHANGED: 'Choose a password different from your current password.',
+  RATE_LIMITED: 'Please wait before trying again.',
+  REGISTRATION_DISABLED: 'Registration is currently unavailable.',
+  UNAVAILABLE: 'This service is temporarily unavailable. Please try again.',
+};
+
 export function errorMessage(error: unknown) {
   return error instanceof Error
     ? error.message
     : 'Something went wrong. Please try again.';
+}
+
+export type DisplayError = string | APIError;
+
+export function displayError(cause: unknown): DisplayError {
+  return cause instanceof APIError ? cause : errorMessage(cause);
+}
+
+export function localizedError(value: DisplayError): string {
+  if (typeof value === 'string') return translateMessage(value);
+  if (currentLanguage() === 'en-US') return value.message;
+  if (value.code === 'SUPPLIER_RATE_LIMITED' && value.retryAfter > 0) {
+    const reason = {
+      login: 'Supplier sign-in is temporarily rate limited.',
+      accounts: 'Supplier account queries are temporarily rate limited.',
+      login_lock: 'A supplier sign-in is in progress.',
+    };
+    return t('{{reason}} Try again in {{seconds}} seconds. Previously collected data is retained.', {
+      reason: t(value.retryStage ? reason[value.retryStage] : 'The supplier website is limiting requests.'),
+      seconds: value.retryAfter,
+    });
+  }
+  if (Object.hasOwn(errorLabels, value.code)) return t(errorLabels[value.code]);
+  return translateMessage(value.message);
 }

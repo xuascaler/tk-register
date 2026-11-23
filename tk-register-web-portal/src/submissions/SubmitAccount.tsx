@@ -1,3 +1,4 @@
+import { t, translateMessage } from '../i18n';
 import {
   ArrowRight,
   Check,
@@ -12,6 +13,7 @@ import { ErrorNotice, Loading, PasswordField } from '../ui';
 import type { SubmissionDetail, Vendor } from './types';
 import Select from './Select';
 import {
+  AuthFieldError,
   emptyDraft,
   MAX_AUTH_BYTES,
   parseAuthJSON,
@@ -41,7 +43,7 @@ export default function SubmitAccount({
   const [protocolID, setProtocolID] = useState('');
   const [draft, setDraft] = useState(emptyDraft);
   const [errors, setErrors] = useState<
-    Partial<Record<keyof AccountDraft, string>>
+    Partial<Record<keyof AccountDraft, string | AuthFieldError>>
   >({});
   const [error, setError] = useState('');
   const [loadingError, setLoadingError] = useState('');
@@ -116,7 +118,7 @@ export default function SubmitAccount({
       update('auth_json', value);
       setFileName(file.name);
     } catch (cause) {
-      setErrors((old) => ({ ...old, auth_json: errorMessage(cause) }));
+      setErrors((old) => ({ ...old, auth_json: cause instanceof AuthFieldError ? cause : errorMessage(cause) }));
     }
     if (uploadRef.current) uploadRef.current.value = '';
   }
@@ -200,12 +202,14 @@ export default function SubmitAccount({
       if (alive.current) setBusy(false);
     }
   }
-  const fieldError = (key: keyof AccountDraft) =>
-    errors[key] ? (
+  const fieldError = (key: keyof AccountDraft) => {
+    const issue = errors[key];
+    return issue ? (
       <p className='field-error' id={`error-${key}`}>
-        {errors[key]}
+        {issue instanceof AuthFieldError ? issue.localizedMessage : translateMessage(issue)}
       </p>
     ) : null;
+  };
   const attrs = (key: keyof AccountDraft) => ({
     name: key,
     id: `submit-${key}`,
@@ -232,8 +236,8 @@ export default function SubmitAccount({
     <div className='submission-page'>
       <div className='title-row'>
         <div>
-          <h1>Submit account</h1>
-          <p className='subtitle'>Add an account to your selected platform.</p>
+          <h1>{t('Submit account')}</h1>
+          <p className='subtitle'>{t('Add an account to your selected platform.')}</p>
         </div>
       </div>
       {loadingError ? (
@@ -243,14 +247,14 @@ export default function SubmitAccount({
             className='button secondary'
             onClick={() => setAttempt((n) => n + 1)}
           >
-            Try again
+            {t('Try again')}
           </button>
         </>
       ) : !vendors ? (
-        <Loading label='Loading platforms…' />
+        <Loading label={t('Loading platforms…')} />
       ) : !vendors.length ? (
         <div className='notice'>
-          No platforms are available yet. Please contact your administrator.
+          {t('No platforms are available yet. Please contact your administrator.')}
         </div>
       ) : (
         <>
@@ -260,17 +264,17 @@ export default function SubmitAccount({
               <div>
                 <strong>
                   {vendor?.enabled === false
-                    ? 'This platform is currently unavailable.'
-                    : 'This platform is not ready for submissions.'}
+                    ? t('This platform is currently unavailable.')
+                    : t('This platform is not ready for submissions.')}
                 </strong>
                 <p>
                   {user.role === 'admin'
-                    ? 'Configure the platform credential and enable it in Config to accept submissions.'
-                    : 'Your administrator needs to finish setting up this platform.'}
+                    ? t('Configure the platform credential and enable it in Config to accept submissions.')
+                    : t('Your administrator needs to finish setting up this platform.')}
                 </p>
                 {user.role === 'admin' && (
                   <button className='text-link' onClick={onConfig}>
-                    Open vendor configuration <ArrowRight aria-hidden='true' />
+                    {t('Open vendor configuration')} <ArrowRight aria-hidden='true' />
                   </button>
                 )}
               </div>
@@ -285,19 +289,19 @@ export default function SubmitAccount({
           >
             <section className='form-section'>
               <div className='section-heading'>
-                <h2>Platform</h2>
+                <h2>{t('Platform')}</h2>
               </div>
               <div className='form-grid'>
                 <Select
                   id='submission-vendor'
-                  label='Vendor'
+                  label={t('Vendor')}
                   disabled={locked}
                   value={vendorID}
                   options={vendors.map((vendor) => ({
                     value: vendor.id,
                     label: vendor.name,
                   }))}
-                  placeholder='No vendors available'
+                  placeholder={t('No vendors available')}
                   onChange={(value) => {
                     setVendorID(value);
                     setProtocolID(
@@ -313,14 +317,14 @@ export default function SubmitAccount({
                 />
                 <Select
                   id='submission-protocol'
-                  label='Protocol'
+                  label={t('Protocol')}
                   disabled={locked || !pushes.length}
                   value={protocolID}
                   options={pushes.map((protocol) => ({
                     value: protocol.version_id,
                     label: `${protocol.name} · v${protocol.version}`,
                   }))}
-                  placeholder='No submission protocol'
+                  placeholder={t('No submission protocol')}
                   onChange={(value) => {
                     setProtocolID(value);
                     setUncertain(false);
@@ -330,15 +334,15 @@ export default function SubmitAccount({
             </section>
             <section className='form-section'>
               <div className='section-heading'>
-                <h2>Account details</h2>
-                <span className='muted small'>All fields required</span>
+                <h2>{t('Account details')}</h2>
+                <span className='muted small'>{t('All fields required')}</span>
               </div>
               <div className='form-grid'>
                 <div className='field'>
-                  <label htmlFor='submit-account'>Account</label>
+                  <label htmlFor='submit-account'>{t('Account')}</label>
                   <input
                     {...attrs('account')}
-                    placeholder='Account email or login'
+                    placeholder={t('Account email or login')}
                     autoCapitalize='none'
                     spellCheck={false}
                   />
@@ -347,7 +351,7 @@ export default function SubmitAccount({
                 <div>
                   <PasswordField
                     {...attrs('password')}
-                    label='Account password'
+                    label={t('Account password')}
                     autoComplete='new-password'
                   />
                   {fieldError('password')}
@@ -355,7 +359,7 @@ export default function SubmitAccount({
                 <div className='field'>
                   <Select
                     {...selectAttrs('plan')}
-                    label='Plan'
+                    label={t('Plan')}
                     required
                     options={plans.map((plan) => ({ value: plan, label: plan }))}
                   />
@@ -364,9 +368,9 @@ export default function SubmitAccount({
                 <div className='field'>
                   <Select
                     {...selectAttrs('register_location')}
-                    label='Registration location'
+                    label={t('Registration location')}
                     required
-                    options={registrationLocations}
+                    options={registrationLocations.map(({ value, label }) => ({ value, label: t(label) }))}
                   />
                   {fieldError('register_location')}
                 </div>
@@ -380,7 +384,7 @@ export default function SubmitAccount({
                       onClick={() => uploadRef.current?.click()}
                     >
                       <Upload aria-hidden='true' />
-                      Upload JSON
+                      {t('Upload JSON')}
                     </button>
                   </div>
                   <input
@@ -390,11 +394,11 @@ export default function SubmitAccount({
                     className='sr-only'
                     tabIndex={-1}
                     onChange={(e) => void readFile(e.target.files?.[0])}
-                    aria-label='Upload authentication JSON file'
+                    aria-label={t('Upload authentication JSON file')}
                   />
                   <textarea
                     {...attrs('auth_json')}
-                    placeholder='Paste your account authentication JSON here'
+                    placeholder={t('Paste your account authentication JSON here')}
                     spellCheck={false}
                     autoCapitalize='none'
                     aria-describedby={
@@ -412,13 +416,12 @@ export default function SubmitAccount({
                         className='text-link'
                         onClick={() => update('auth_json', '')}
                       >
-                        Remove
+                        {t('Remove')}
                       </button>
                     </p>
                   ) : (
                     <p id='auth-json-help' className='field-help'>
-                      Paste an object or upload a JSON file up to 2 MB.
-                      Credentials are hidden from submission history.
+                      {t('Paste an object or upload a JSON file up to 2 MB. Credentials are hidden from submission history.')}
                     </p>
                   )}
                 </div>
@@ -426,9 +429,9 @@ export default function SubmitAccount({
               <div className='form-grid date-grid'>
                 {(
                   [
-                    ['register_time', 'Registration date'],
-                    ['plan_start_time', 'Plan start date'],
-                    ['plan_end_time', 'Plan end date'],
+                    ['register_time', t('Registration date')],
+                    ['plan_start_time', t('Plan start date')],
+                    ['plan_end_time', t('Plan end date')],
                   ] as const
                 ).map(([key, label]) => (
                   <div className='field' key={key}>
@@ -446,8 +449,8 @@ export default function SubmitAccount({
             >
               <summary>
                 <span>
-                  Additional details{' '}
-                  <span className='muted small'>Optional</span>
+                  {t('Additional details')}{' '}
+                  <span className='muted small'>{t('Optional')}</span>
                 </span>
                 <ChevronDown aria-hidden='true' />
               </summary>
@@ -455,18 +458,18 @@ export default function SubmitAccount({
                 <div className='field'>
                   <Select
                     {...selectAttrs('payment_method')}
-                    label='Payment method'
+                    label={t('Payment method')}
                     options={[
-                      { value: '', label: 'Not specified' },
+                      { value: '', label: t('Not specified') },
                       ...paymentMethods.map((method) => ({
                         value: method,
                         label: {
-                          physical_credit_card: 'Physical credit card',
-                          virtual_credit_card: 'Virtual credit card',
+                          physical_credit_card: t('Physical credit card'),
+                          virtual_credit_card: t('Virtual credit card'),
                           paypal: 'PayPal',
                           apple_pay: 'Apple Pay',
                           google_pay: 'Google Pay',
-                          third_party_payment: 'Third-party payment',
+                          third_party_payment: t('Third-party payment'),
                         }[method],
                       })),
                     ]}
@@ -476,9 +479,9 @@ export default function SubmitAccount({
                 <div className='field'>
                   <Select
                     {...selectAttrs('register_device')}
-                    label='Registration device'
+                    label={t('Registration device')}
                     options={[
-                      { value: '', label: 'Not specified' },
+                      { value: '', label: t('Not specified') },
                       ...['Mac', 'Windows', 'Linux'].map((device) => ({
                         value: device,
                         label: device,
@@ -488,7 +491,7 @@ export default function SubmitAccount({
                   {fieldError('register_device')}
                 </div>
                 <div className='field'>
-                  <label htmlFor='submit-balance'>Remaining balance (%)</label>
+                  <label htmlFor='submit-balance'>{t('Remaining balance (%)')}</label>
                   <div className='suffix-field'>
                     <input
                       {...attrs('balance')}
@@ -499,23 +502,23 @@ export default function SubmitAccount({
                   </div>
                   {fieldError('balance')}
                   <p className='field-help'>
-                    Account balance percentage, not a currency amount.
+                    {t('Account balance percentage, not a currency amount.')}
                   </p>
                 </div>
                 <div className='field'>
-                  <label htmlFor='submit-recharge_time'>Recharge date</label>
+                  <label htmlFor='submit-recharge_time'>{t('Recharge date')}</label>
                   <input {...attrs('recharge_time')} type='date' />
                   {fieldError('recharge_time')}
                 </div>
                 <div className='field'>
                   <Select
                     {...selectAttrs('warranty_period')}
-                    label='Warranty period'
+                    label={t('Warranty period')}
                     options={[
-                      { value: '', label: 'Not specified' },
+                      { value: '', label: t('Not specified') },
                       ...['1', '7', '30'].map((day) => ({
                         value: day,
-                        label: `${day} ${day === '1' ? 'day' : 'days'}`,
+                        label: t(day === '1' ? '{{count}} day' : '{{count}} days', { count: Number(day) }),
                       })),
                     ]}
                   />
@@ -524,9 +527,9 @@ export default function SubmitAccount({
                 <div className='field'>
                   <Select
                     {...selectAttrs('tags')}
-                    label='Tag'
+                    label={t('Tag')}
                     options={[
-                      { value: '', label: 'Not specified' },
+                      { value: '', label: t('Not specified') },
                       { value: '速刷', label: '速刷' },
                       { value: '慢蒸', label: '慢蒸' },
                     ]}
@@ -534,11 +537,11 @@ export default function SubmitAccount({
                   {fieldError('tags')}
                 </div>
                 <div className='field full-width'>
-                  <label htmlFor='submit-remark'>Remark</label>
+                  <label htmlFor='submit-remark'>{t('Remark')}</label>
                   <textarea
                     {...attrs('remark')}
                     rows={3}
-                    placeholder='Optional notes about this account'
+                    placeholder={t('Optional notes about this account')}
                   />
                 </div>
               </div>
@@ -546,7 +549,7 @@ export default function SubmitAccount({
             <ErrorNotice>{error}</ErrorNotice>
             <footer className='form-footer'>
               <button className='text-link' type='button' onClick={onHistory}>
-                View submission history
+                {t('View submission history')}
               </button>
               <button
                 className='button primary'
@@ -554,13 +557,13 @@ export default function SubmitAccount({
                 disabled={busy || !ready}
               >
                 {busy ? (
-                  <Loading label='Submitting…' />
+                  <Loading label={t('Submitting…')} />
                 ) : uncertain ? (
-                  'Submit again'
+                  t('Submit again')
                 ) : (
                   <>
                     <FileJson aria-hidden='true' />
-                    Submit account
+                    {t('Submit account')}
                   </>
                 )}
               </button>

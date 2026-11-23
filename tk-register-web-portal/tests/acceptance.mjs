@@ -143,9 +143,12 @@ try {
       description: "Administrator session lifetime.",
     },
   ];
-  await page.route("**/tk-register/api/**", async (route) => {
+  await page.route("**/*", async (route) => {
     const req = route.request();
-    const path = new URL(req.url()).pathname.replace("/tk-register/api", "");
+    const url = new URL(req.url());
+    if (url.origin !== `http://127.0.0.1:${port}`) throw new Error(`Unexpected external request ${url.origin}`);
+    if (!url.pathname.startsWith("/tk-register/api/")) return route.continue();
+    const path = url.pathname.slice("/tk-register/api".length);
     const body = req.postDataJSON();
     const ok = (data) =>
       route.fulfill({
@@ -159,6 +162,11 @@ try {
         contentType: "application/json",
         body: JSON.stringify({ success: false, message }),
       });
+    if (path === "/members/sources") {
+      assert.ok(user);
+      assert.equal(req.method(), "GET");
+      return ok({ sources: [{ id: "myself", label: "myself" }] });
+    }
     if (path === "/vendors") return ok({ vendors: [] });
     if (path === "/auth/status") return ok(status);
     if (path === "/auth/me")
@@ -228,6 +236,18 @@ try {
   });
   await page.goto(`http://127.0.0.1:${port}/tk-register/`);
   await page.getByRole("heading", { name: "Sign in", exact: true }).waitFor();
+  await page.getByLabel("Email address", { exact: true }).fill("draft@example.com");
+  await page.getByLabel("Password", { exact: true }).fill("draft-only");
+  await page.getByRole("combobox", { name: "Language", exact: true }).click();
+  await page.getByRole("option", { name: "简体中文", exact: true }).click();
+  await page.getByRole("heading", { name: "登录", exact: true }).waitFor();
+  assert.equal(await page.getByLabel("邮箱地址", { exact: true }).inputValue(), "draft@example.com");
+  assert.equal(await page.getByLabel("密码", { exact: true }).inputValue(), "draft-only");
+  await page.reload();
+  await page.getByRole("heading", { name: "登录", exact: true }).waitFor();
+  assert.equal(await page.locator("html").getAttribute("lang"), "zh-CN");
+  await page.getByRole("combobox", { name: "语言", exact: true }).click();
+  await page.getByRole("option", { name: "English", exact: true }).click();
   assert.equal(
     await page.getByRole("button", { name: "Create account", exact: true }).count(),
     0,
@@ -325,9 +345,8 @@ try {
   await page.getByRole("button", { name: "Discard", exact: true }).click();
   await capture("config");
   await page.setViewportSize({ width: 390, height: 1000 });
-  await page
-    .getByLabel("Configuration section", { exact: true })
-    .selectOption("sessions");
+  await page.getByRole("combobox", { name: "Configuration section", exact: true }).click();
+  await page.getByRole("option", { name: "Sessions", exact: true }).click();
   await page.getByText("8 hours", { exact: true }).waitFor();
   await page.setViewportSize({ width: 1280, height: 1000 });
   sessionExpired = true;
@@ -356,7 +375,7 @@ try {
       { exact: true },
     )
     .waitFor();
-  assert.deepEqual(await page.evaluate(() => Object.keys(localStorage)), []);
+  assert.deepEqual(await page.evaluate(() => ({ ...localStorage })), { "tk-register.language": "en-US" });
   assert.deepEqual(pageErrors, []);
   console.log(
     "Passed member email-code sign-in, member access, administrator two-step sign-in, settings saves, secret handling, validation, responsive layouts, and session expiry. No real APIs or emails were used.",

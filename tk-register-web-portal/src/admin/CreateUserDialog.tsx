@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { Check, Mail, UserRound, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type MutableRefObject } from 'react';
 import { APIError, errorMessage, request, type AuthStatus, type CodeDelivery } from '../api';
@@ -14,7 +15,7 @@ export default function CreateUserDialog({ deadlines, onClose, onSaved, memberMo
   onSaved: (user: AdminUser) => void;
 }) {
   const endpoint = memberMode ? '/members' : '/admin/users';
-  const title = memberMode ? 'Create user' : 'Create account';
+  const title = t(memberMode ? 'Create user' : 'Create account');
   const dialog = useRef<HTMLDialogElement>(null);
   const form = useRef<HTMLFormElement>(null);
   const emailInput = useRef<HTMLInputElement>(null);
@@ -160,44 +161,44 @@ export default function CreateUserDialog({ deadlines, onClose, onSaved, memberMo
       if (mounted.current) setBusy(false);
     }
   }
-  const inputError = (field: Field) => fieldError[field] && <p className='field-error' id={`create-user-${field}-error`} role='alert'>{fieldError[field]}</p>;
+  const inputError = (field: Field) => fieldError[field] && <p className='field-error' id={`create-user-${field}-error`} role='alert'>{t(fieldError[field] || '')}</p>;
   return <dialog ref={dialog} className='admin-create-dialog' aria-labelledby='create-user-title' aria-describedby='create-user-description' onCancel={event => { event.preventDefault(); close(); }}>
     <header className='admin-create-heading'>
-      <div><h2 id='create-user-title'>{title}</h2><p id='create-user-description'>{memberMode ? 'Create a member with their own email and sign-in.' : 'Register a new member with email verification.'}</p></div>
-      <button className='admin-dialog-close' type='button' aria-label={`Close ${title.toLowerCase()}`} disabled={busy || sending} onClick={close}><X aria-hidden='true' /></button>
+      <div><h2 id='create-user-title'>{title}</h2><p id='create-user-description'>{memberMode ? t("Create a member with their own email and sign-in.") : t("Register a new member with email verification.")}</p></div>
+      <button className='admin-dialog-close' type='button' aria-label={t('Close {{name}}', { name: title.toLowerCase() })} disabled={busy || sending} onClick={close}><X aria-hidden='true' /></button>
     </header>
     <form ref={form} onSubmit={create} noValidate aria-busy={busy || sending}>
       <div className='admin-create-fields'>
-        {statusLoading && <Loading label='Loading registration settings…' />}
-        {statusError && <div><ErrorNotice>{statusError}</ErrorNotice><button type='button' className='text-button' onClick={() => setAttempt(value => value + 1)}>Try again</button></div>}
-        {registrationClosed && <div className='notice information' role='status'>{memberMode ? 'New user registration is currently disabled. Contact an administrator.' : 'Registration is currently disabled. Enable it in Config → Access to create an account.'}</div>}
+        {statusLoading && <Loading label={t("Loading registration settings…")} />}
+        {statusError && <div><ErrorNotice>{statusError}</ErrorNotice><button type='button' className='text-button' onClick={() => setAttempt(value => value + 1)}>{t("Try again")}</button></div>}
+        {registrationClosed && <div className='notice information' role='status'>{memberMode ? t("New user registration is currently disabled. Contact an administrator.") : t("Registration is currently disabled. Enable it in Config → Access to create an account.")}</div>}
         <div className='field'>
-          <label htmlFor='create-user-email'>Email address</label>
+          <label htmlFor='create-user-email'>{t("Email address")}</label>
           <input ref={emailInput} id='create-user-email' name='email' type='email' autoComplete='off' autoCapitalize='none' spellCheck={false} maxLength={50} required value={email} disabled={disabled} placeholder='name@example.com' aria-invalid={!!fieldError.email} aria-describedby={`create-user-email-help${fieldError.email ? ' create-user-email-error' : ''}`} onChange={event => { setEmail(event.target.value); setCode(''); setSent(null); clearError('email'); clearError('code'); }} />
-          <p className='admin-create-help' id='create-user-email-help'>This email address will be the username.</p>
+          <p className='admin-create-help' id='create-user-email-help'>{t("This email address will be the username.")}</p>
           {inputError('email')}
         </div>
         <div>
-          <PasswordField label='Password' name='password' required autoComplete='new-password' value={password} disabled={disabled} placeholder='At least 8 characters' aria-invalid={!!fieldError.password} aria-describedby={fieldError.password ? 'create-user-password-error' : undefined} onChange={event => { setPassword(event.target.value); clearError('password'); }} />
+          <PasswordField label={t("Password")} name='password' required autoComplete='new-password' value={password} disabled={disabled} placeholder={t("At least 8 characters")} aria-invalid={!!fieldError.password} aria-describedby={fieldError.password ? 'create-user-password-error' : undefined} onChange={event => { setPassword(event.target.value); clearError('password'); }} />
           {inputError('password')}
         </div>
         <div>
-          <PasswordField label='Confirm password' name='confirmation' required autoComplete='new-password' value={confirmation} disabled={disabled} placeholder='Re-enter password' aria-invalid={!!fieldError.confirmation} aria-describedby={fieldError.confirmation ? 'create-user-confirmation-error' : undefined} onChange={event => { setConfirmation(event.target.value); clearError('confirmation'); }} />
+          <PasswordField label={t("Confirm password")} name='confirmation' required autoComplete='new-password' value={confirmation} disabled={disabled} placeholder={t("Re-enter password")} aria-invalid={!!fieldError.confirmation} aria-describedby={fieldError.confirmation ? 'create-user-confirmation-error' : undefined} onChange={event => { setConfirmation(event.target.value); clearError('confirmation'); }} />
           {inputError('confirmation')}
         </div>
         <div className='field'>
-          <label htmlFor='create-user-code'>Verification code</label>
+          <label htmlFor='create-user-code'>{t("Verification code")}</label>
           <div className='code-row'>
-            <input ref={codeInput} id='create-user-code' name='code' type='text' autoComplete='one-time-code' autoCapitalize='none' autoCorrect='off' spellCheck={false} required value={code} disabled={disabled} placeholder='Enter code' aria-invalid={!!fieldError.code} aria-describedby={fieldError.code ? 'create-user-code-error' : undefined} onChange={event => { setCode(event.target.value); clearError('code'); }} />
-            <button className='button pale' type='button' disabled={disabled || remaining > 0 || !validEmail(normalizedEmail)} onClick={sendCode}><Mail aria-hidden='true' />{sending ? 'Sending…' : remaining ? `Resend in ${remaining}s` : sent?.email === normalizedEmail ? 'Resend code' : 'Send code'}</button>
+            <input ref={codeInput} id='create-user-code' name='code' type='text' autoComplete='one-time-code' autoCapitalize='none' autoCorrect='off' spellCheck={false} required value={code} disabled={disabled} placeholder={t("Enter code")} aria-invalid={!!fieldError.code} aria-describedby={fieldError.code ? 'create-user-code-error' : undefined} onChange={event => { setCode(event.target.value); clearError('code'); }} />
+            <button className='button pale' type='button' disabled={disabled || remaining > 0 || !validEmail(normalizedEmail)} onClick={sendCode}><Mail aria-hidden='true' />{sending ? t("Sending…") : remaining ? t('Resend in {{seconds}}s', { seconds: remaining }) : sent?.email === normalizedEmail ? t("Resend code") : t("Send code")}</button>
           </div>
-          {sent?.email === normalizedEmail && <p className='code-status' role='status'><Check aria-hidden='true' />{now >= sent.expiresAt ? 'The code has expired. Request a new code.' : `Code sent to this email. Valid for ${Math.ceil(sent.expiresIn / 60)} minutes.`}</p>}
+          {sent?.email === normalizedEmail && <p className='code-status' role='status'><Check aria-hidden='true' />{now >= sent.expiresAt ? t("The code has expired. Request a new code.") : t('Code sent to this email. Valid for {{minutes}} minutes.', { minutes: Math.ceil(sent.expiresIn / 60) })}</p>}
           {inputError('code')}
         </div>
         <ErrorNotice>{error}</ErrorNotice>
-        <div className='admin-create-note'><UserRound aria-hidden='true' /><p>{memberMode ? 'Added as your direct member. You’ll be able to view the accounts available to them.' : <>New accounts are created as members.<br />Your administrator session stays signed in.</>}</p></div>
+        <div className='admin-create-note'><UserRound aria-hidden='true' /><p>{memberMode ? t("Added as your direct member. You’ll be able to view the accounts available to them.") : <>{t("New accounts are created as members.")}<br />{t("Your administrator session stays signed in.")}</>}</p></div>
       </div>
-      <footer className='admin-create-actions'><button type='button' className='button secondary' disabled={busy || sending} onClick={close}>Cancel</button><button type='submit' className='button primary' disabled={disabled}>{busy ? 'Creating…' : title}</button></footer>
+      <footer className='admin-create-actions'><button type='button' className='button secondary' disabled={busy || sending} onClick={close}>{t("Cancel")}</button><button type='submit' className='button primary' disabled={disabled}>{busy ? t("Creating…") : title}</button></footer>
     </form>
   </dialog>;
 }

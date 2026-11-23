@@ -4,6 +4,7 @@ import {
   ChartNoAxesCombined,
   ClipboardList,
   ChevronDown,
+  Globe,
   Layers,
   LogOut,
   Menu,
@@ -15,7 +16,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   APIError,
-  errorMessage,
+  displayError, type DisplayError,
   request,
   setCSRFToken,
   type AuthStatus,
@@ -23,6 +24,8 @@ import {
   type User,
 } from './api';
 import Auth from './Auth';
+import { setLanguage, t, useLanguage } from './i18n';
+import Select from './submissions/Select';
 import Members from './members/Members';
 import { MemberScopeProvider } from './members/MemberScope';
 import Config from './Config';
@@ -43,53 +46,51 @@ function Account({ user, status, tab, onTab, onViewAccounts, onPasswordChanged }
     <>
       <div className='title-row'>
         <div>
-          <h1>Account settings</h1>
-          <p className='subtitle'>Your profile, sign-in details, and members.</p>
+          <h1>{t('Account settings')}</h1>
+          <p className='subtitle'>{t('Your profile, sign-in details, and members.')}</p>
         </div>
       </div>
-      <div className='member-settings-tabs' role='tablist' aria-label='Account settings'>
-        {(['general', 'members'] as const).map(value => <button key={value} role='tab' id={`account-tab-${value}`} aria-selected={tab === value} aria-controls={`account-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => onTab(value)} onKeyDown={event => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'general' : event.key === 'End' ? 'members' : tab === 'general' ? 'members' : 'general'; onTab(next); requestAnimationFrame(() => document.getElementById(`account-tab-${next}`)?.focus()); } }}>{value === 'general' ? 'General' : 'Members'}</button>)}
+      <div className='member-settings-tabs' role='tablist' aria-label={t('Account settings')}>
+        {(['general', 'members'] as const).map(value => <button key={value} role='tab' id={`account-tab-${value}`} aria-selected={tab === value} aria-controls={`account-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => onTab(value)} onKeyDown={event => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'general' : event.key === 'End' ? 'members' : tab === 'general' ? 'members' : 'general'; onTab(next); requestAnimationFrame(() => document.getElementById(`account-tab-${next}`)?.focus()); } }}>{value === 'general' ? t('General') : t('Members')}</button>)}
       </div>
       <div role='tabpanel' id={`account-panel-${tab}`} aria-labelledby={`account-tab-${tab}`}>
       {tab === 'members' ? <Members currentEmail={user.email} onViewAccounts={onViewAccounts} /> : <>
       <section className='account-section' aria-labelledby='profile-title'>
-        <h2 id='profile-title'>Profile</h2>
+        <h2 id='profile-title'>{t('Profile')}</h2>
         <div className='account-row'>
-          <div className='account-label'>Email address</div>
+          <div className='account-label'>{t('Email address')}</div>
           <div className='account-value'>
             <div className='value-line'>
               <span className='account-email'>{user.email}</span>
               <span className='verified'>
-                <Check aria-hidden='true' />
-                Verified
-              </span>
+                <Check aria-hidden='true' />{t('Verified')}</span>
             </div>
-            <p className='account-help'>Your email address is your username.</p>
+            <p className='account-help'>{t('Your email address is your username.')}</p>
           </div>
         </div>
         <div className='account-row'>
-          <div className='account-label'>Account role</div>
+          <div className='account-label'>{t('Account role')}</div>
           <div className='account-value'>
-            {user.is_super_admin ? 'Super administrator' : user.role === 'admin' ? 'Administrator' : 'Member'}
+            {user.is_super_admin ? t('Super administrator') : user.role === 'admin' ? t('Administrator') : t('Member')}
           </div>
         </div>
       </section>
       <section className='account-section' aria-labelledby='signin-title'>
-        <h2 id='signin-title'>Sign-in</h2>
+        <h2 id='signin-title'>{t('Sign-in')}</h2>
         <div className='account-row'>
-          <div className='account-label'>Authentication</div>
+          <div className='account-label'>{t('Authentication')}</div>
           <div className='account-value'>
             {user.role === 'admin'
-              ? 'Password + email code'
+              ? t('Password + email code')
               : status.password_login_enabled && status.email_code_login_enabled
-                ? 'Password or email code'
+                ? t('Password or email code')
                 : status.email_code_login_enabled
-                  ? 'Email code'
-                  : 'Password'}
+                  ? t('Email code')
+                  : t('Password')}
             <p className='account-help'>
               {user.role === 'admin'
-                ? 'Email verification is required for every administrator sign-in.'
-                : 'Sign in securely with your email address.'}
+                ? t('Email verification is required for every administrator sign-in.')
+                : t('Sign in securely with your email address.')}
             </p>
           </div>
         </div>
@@ -154,10 +155,11 @@ function routeHash(route: Route) {
 }
 
 export default function App() {
+  const language = useLanguage();
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<DisplayError>('');
   const [message, setMessage] = useState('');
   const [route, setRoute] = useState<Route>(readRoute);
   const page = route.page;
@@ -201,7 +203,7 @@ export default function App() {
         }
       })
       .catch((cause) => {
-        if (!controller.signal.aborted) setError(errorMessage(cause));
+        if (!controller.signal.aborted) setError(displayError(cause));
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -225,7 +227,7 @@ export default function App() {
   const canLeave = () =>
     !dirty ||
     window.confirm(
-      'Leave this page? Unsaved changes and account credentials will be discarded. If a submission is pending, check its history before submitting again.',
+      t('Leave this page? Unsaved changes and account credentials will be discarded. If a submission is pending, check its history before submitting again.'),
     );
   function navigate(next: Route, confirmed = false, restoredList?: AccountListReturn) {
     const hash = restoredList?.hash || routeHash(next);
@@ -264,7 +266,7 @@ export default function App() {
     const followHistory = () => {
       if (
         dirty &&
-        !window.confirm('Discard your unsaved changes and leave this page?')
+        !window.confirm(t('Discard your unsaved changes and leave this page?'))
       ) {
         window.history.replaceState(null, '', routeHash(route));
         return;
@@ -347,7 +349,7 @@ export default function App() {
       setMessage('');
       setAttempt((value) => value + 1);
     } catch (cause) {
-      setError(errorMessage(cause));
+      setError(displayError(cause));
     } finally {
       setSigningOut(false);
     }
@@ -366,15 +368,13 @@ export default function App() {
   }
   return (
     <div id='tk-app'>
-      <a href='#main-content' className='skip-link'>
-        Skip to content
-      </a>
+      <a href='#main-content' className='skip-link'>{t('Skip to content')}</a>
       <header className='header'>
         {user && (
           <button
             ref={menuButton}
             className='menu-button'
-            aria-label='Open navigation'
+            aria-label={t('Open navigation')}
             aria-expanded={menuOpen}
             aria-controls='workspace-navigation'
             onClick={() => setMenuOpen(true)}
@@ -385,17 +385,23 @@ export default function App() {
         <a
           href='/tk-register'
           className='brand'
-          aria-label='TK Register home'
+          aria-label={t('TK Register home')}
           onClick={(event) => {
             if (!canLeave()) event.preventDefault();
           }}
         >
           <span className='brand-word'>tk-register</span>
         </a>
+        <div className='language-picker'>
+          <Globe aria-hidden='true' />
+          <Select id='site-language' label={t('Language')} hiddenLabel value={language}
+            options={[{ value: 'en-US', label: 'English' }, { value: 'zh-CN', label: '简体中文' }]}
+            onChange={value => setLanguage(value === 'zh-CN' ? 'zh-CN' : 'en-US')} />
+        </div>
         {user && (
           <button
             className='identity'
-            aria-label={`Open account for ${user.email}`}
+            aria-label={t('Open account for {{email}}', { email: user.email })}
             title={user.email}
             onClick={() => navigate({ page: 'account' })}
           >
@@ -405,18 +411,16 @@ export default function App() {
       </header>
       {loading ? (
         <main id='main-content' className='status-page'>
-          <Loading label='Loading your account…' />
+          <Loading label={t('Loading your account…')} />
         </main>
       ) : !status ? (
         <main id='main-content' className='status-page'>
-          <h1>Unable to load TK Register</h1>
+          <h1>{t('Unable to load TK Register')}</h1>
           <ErrorNotice>{error}</ErrorNotice>
           <button
             className='button primary'
             onClick={() => setAttempt((value) => value + 1)}
-          >
-            Try again
-          </button>
+          >{t('Try again')}</button>
         </main>
       ) : !user ? (
         <div id='main-content'>
@@ -434,7 +438,7 @@ export default function App() {
             ref={sidebar}
             id='workspace-navigation'
             className={`sidebar ${menuOpen ? 'is-open' : ''}`}
-            aria-label='Workspace navigation'
+            aria-label={t('Workspace navigation')}
             role={menuOpen ? 'dialog' : undefined}
             aria-modal={menuOpen ? true : undefined}
           >
@@ -442,7 +446,7 @@ export default function App() {
               <strong>TK Register</strong>
               <button
                 className='menu-button'
-                aria-label='Close navigation'
+                aria-label={t('Close navigation')}
                 onClick={() => {
                   setMenuOpen(false);
                   menuButton.current?.focus();
@@ -451,17 +455,15 @@ export default function App() {
                 <X aria-hidden='true' />
               </button>
             </div>
-            <nav className='nav-group' aria-label='My account'>
-              <p className='eyebrow'>My account</p>
+            <nav className='nav-group' aria-label={t('My account')}>
+              <p className='eyebrow'>{t('My account')}</p>
               <button
                 className={`nav-item ${page === 'submit' ? 'current' : ''}`}
                 aria-current={page === 'submit' ? 'page' : undefined}
                 onClick={() => navigate({ page: 'submit' })}
               >
-                <Plus aria-hidden='true' />
-                Submit account
-              </button>
-              <button className={`nav-item ${isAccountsPage ? 'current' : ''}`} aria-current={isAccountsPage ? 'page' : undefined} onClick={() => navigate({ page: 'accounts' })}><ChartNoAxesCombined aria-hidden='true' />Accounts</button>
+                <Plus aria-hidden='true' />{t('Submit account')}</button>
+              <button className={`nav-item ${isAccountsPage ? 'current' : ''}`} aria-current={isAccountsPage ? 'page' : undefined} onClick={() => navigate({ page: 'accounts' })}><ChartNoAxesCombined aria-hidden='true' />{language === 'zh-CN' ? t('Account list') : t('Accounts')}</button>
               <button
                 className={`nav-item ${isHistoryPage ? 'current' : ''}`}
                 aria-current={
@@ -469,37 +471,31 @@ export default function App() {
                 }
                 onClick={() => navigate({ page: 'history' })}
               >
-                <ClipboardList aria-hidden='true' />
-                Submission history
-              </button>
+                <ClipboardList aria-hidden='true' />{t('Submission history')}</button>
               <button
                 className={`nav-item ${page === 'docs' ? 'current' : ''}`}
                 aria-current={page === 'docs' ? 'page' : undefined}
                 onClick={() => navigate({ page: 'docs' })}
               >
-                <BookOpen aria-hidden='true' />
-                API documentation
-              </button>
+                <BookOpen aria-hidden='true' />{t('API documentation')}</button>
               <button
                 className={`nav-item ${page === 'account' ? 'current' : ''}`}
                 aria-current={page === 'account' ? 'page' : undefined}
                 onClick={() => navigate({ page: 'account' })}
               >
-                <UserRound aria-hidden='true' />
-                Account settings
-              </button>
+                <UserRound aria-hidden='true' />{t('Account settings')}</button>
             </nav>
             {user.role === 'admin' && (
-              <nav className='nav-group' aria-label='Management'>
-                <p className='eyebrow'>Management</p>
+              <nav className='nav-group' aria-label={t('Management')}>
+                <p className='eyebrow'>{t('Management')}</p>
                 <div className='admin-nav-branch'>
                   <button className={`nav-item admin-pool-toggle ${isPoolPage ? 'active-branch' : ''}`} aria-expanded={poolOpen} aria-controls='account-pool-nav' onClick={() => setPoolOpen(value => !value)}>
-                    <Layers aria-hidden='true' />Account pool<ChevronDown className={poolOpen ? 'is-expanded' : ''} aria-hidden='true' />
+                    <Layers aria-hidden='true' />{t('Account pool')}<ChevronDown className={poolOpen ? 'is-expanded' : ''} aria-hidden='true' />
                   </button>
                   {poolOpen && <div className='admin-subnav' id='account-pool-nav'>
-                    <button className={`nav-item ${poolAccountsActive && !route.raw ? 'current' : ''}`} aria-current={poolAccountsActive && !route.raw ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts' })}>Accounts</button>
-                    {user.is_super_admin && <button className={`nav-item ${poolAccountsActive && route.raw ? 'current' : ''}`} aria-current={poolAccountsActive && route.raw ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts', raw: true })}>Raw account</button>}
-                    <button className={`nav-item ${page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'current' : ''}`} aria-current={page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'page' : undefined} onClick={() => navigate({ page: 'pool-history' })}>Submission history</button>
+                    <button className={`nav-item ${poolAccountsActive && !route.raw ? 'current' : ''}`} aria-current={poolAccountsActive && !route.raw ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts' })}>{language === 'zh-CN' ? t('Account list') : t('Accounts')}</button>
+                    {user.is_super_admin && <button className={`nav-item ${poolAccountsActive && route.raw ? 'current' : ''}`} aria-current={poolAccountsActive && route.raw ? 'page' : undefined} onClick={() => navigate({ page: 'pool-accounts', raw: true })}>{t('Raw account')}</button>}
+                    <button className={`nav-item ${page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'current' : ''}`} aria-current={page === 'pool-history' || (page === 'pool-submission' && !route.backAccount) ? 'page' : undefined} onClick={() => navigate({ page: 'pool-history' })}>{t('Submission history')}</button>
                   </div>}
                 </div>
                 <button
@@ -507,9 +503,7 @@ export default function App() {
                   aria-current={page === 'config' ? 'page' : undefined}
                   onClick={() => navigate({ page: 'config' })}
                 >
-                  <Settings2 aria-hidden='true' />
-                  Config
-                </button>
+                  <Settings2 aria-hidden='true' />{t('Config')}</button>
               </nav>
             )}
             <div className='signout'>
@@ -519,7 +513,7 @@ export default function App() {
                 onClick={logout}
               >
                 <LogOut aria-hidden='true' />
-                <span>{signingOut ? 'Signing out…' : 'Sign out'}</span>
+                <span>{signingOut ? t('Signing out…') : t('Sign out')}</span>
               </button>
             </div>
           </aside>
@@ -531,9 +525,9 @@ export default function App() {
           >
             <ErrorNotice>{error}</ErrorNotice>
             {(page === 'config' || isPoolPage) && user.role !== 'admin' ? (
-              <><h1>Admin access required</h1><p className='subtitle'>This page is available to administrators.</p><button className='button secondary' onClick={() => navigate({ page: 'history' })}>Your submission history</button></>
+              <><h1>{t('Admin access required')}</h1><p className='subtitle'>{t('This page is available to administrators.')}</p><button className='button secondary' onClick={() => navigate({ page: 'history' })}>{t('Your submission history')}</button></>
             ) : route.raw && !user.is_super_admin ? (
-              <><h1>Super admin access required</h1><button className='button secondary' onClick={() => navigate({ page: 'pool-accounts' })}>Back to Accounts</button></>
+              <><h1>{t('Super admin access required')}</h1><button className='button secondary' onClick={() => navigate({ page: 'pool-accounts' })}>{t('Back to Accounts')}</button></>
             ) : page === 'pool-accounts' ? (
               <AccountsWorkspace key={route.raw ? 'raw-accounts' : 'admin-accounts'} raw={route.raw} userID={user.id} admin tab={route.accountsTab || 'overview'} onTab={accountsTab => navigate({ page: 'pool-accounts', raw: route.raw, accountsTab })} onOpen={id => navigate({ page: 'pool-account-usage', raw: route.raw, id })} />
             ) : page === 'pool-account-usage' && route.id ? (
@@ -543,7 +537,7 @@ export default function App() {
             ) : page === 'pool-history' ? (
               <AdminHistory onOpen={id => navigate({ page: 'pool-submission', id })} />
             ) : page === 'pool-submission' && route.id ? (
-              <SubmissionDetails key={`admin-${route.id}`} id={route.id} endpointPrefix='/admin/submissions' backLabel={route.backAccount ? 'Account details' : 'All submission history'} onBack={() => navigate(route.backAccount ? { page: route.backAccountUsage ? 'pool-account-usage' : 'pool-account', id: route.backAccount, raw: route.raw } : { page: 'pool-history' })} />
+              <SubmissionDetails key={`admin-${route.id}`} id={route.id} endpointPrefix='/admin/submissions' backLabel={route.backAccount ? t('Account details') : t('All submission history')} onBack={() => navigate(route.backAccount ? { page: route.backAccountUsage ? 'pool-account-usage' : 'pool-account', id: route.backAccount, raw: route.raw } : { page: 'pool-history' })} />
             ) : page === 'config' ? (
               <Config
                 key={route.config}
@@ -576,7 +570,7 @@ export default function App() {
               <SubmissionDetails
                 key={route.id}
                 id={route.id}
-                backLabel={route.backAccount ? 'Account details' : 'Submission history'}
+                backLabel={route.backAccount ? t('Account details') : t('Submission history')}
                 onBack={() => navigate(route.backAccount ? { page: 'account-usage', id: route.backAccount } : { page: 'history' })}
               />
             ) : (

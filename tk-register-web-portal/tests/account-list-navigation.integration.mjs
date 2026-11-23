@@ -121,6 +121,18 @@ try {
     await go.click();
     await loaded(6);
     assertPageFilters(endpoint, 6, filters);
+    const beforeLanguageSwitch = page.url();
+    const listRequestCount = requests.filter(request => request.path === endpoint).length;
+    await page.getByRole('combobox', { name: 'Language', exact: true }).click();
+    await page.getByRole('option', { name: '简体中文', exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
+    await expect(page.getByRole('searchbox')).toHaveValue('sample');
+    await expect(page.getByRole('combobox', { name: '账号状态', exact: true })).toContainText('使用中');
+    assert.equal(page.url(), beforeLanguageSwitch);
+    await page.getByRole('combobox', { name: '语言', exact: true }).click();
+    await page.getByRole('option', { name: 'English', exact: true }).click();
+    await loaded(6);
+    assert.equal(requests.filter(request => request.path === endpoint).length, listRequestCount);
     await goTo.fill('8');
     await goTo.press('Enter');
     await loaded(8);

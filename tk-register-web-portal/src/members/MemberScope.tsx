@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { errorMessage, request } from '../api';
 
@@ -31,8 +32,8 @@ export function selectedSources(selection: string, sources: AccountSource[]) {
 }
 export function sourceSummary(selection: string, sources: AccountSource[]) {
   const selected = selectedSources(selection, sources);
-  if (selection === 'all' || sources.length > 0 && selected.length === sources.length) return 'All sources';
-  if (!selected.length) return 'No sources';
-  if (selected.length === 1) return sources.find(source => source.id === selected[0])?.label || 'Selected source';
-  return 'Selected sources';
+  if (selection === 'all' || sources.length > 0 && selected.length === sources.length) return t('All sources');
+  if (!selected.length) return t('No sources');
+  if (selected.length === 1) return selected[0] === 'myself' ? t('myself') : sources.find(source => source.id === selected[0])?.label || t('Selected source');
+  return t('Selected sources');
 }

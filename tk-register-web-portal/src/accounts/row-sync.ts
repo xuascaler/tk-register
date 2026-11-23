@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { APIError, errorMessage, request, retryAfterSeconds, retryStage, type RetryStage } from '../api';
 import type { AccountPage, SyncedAccount } from './types';
 
@@ -16,7 +17,7 @@ type SyncResponse = {
 
 export function syncRetryLabel(seconds: number, stage?: RetryStage): string {
   const action = stage === 'login' ? 'Login retry' : stage === 'accounts' ? 'Query retry' : 'Retry';
-  return `${action} in ${seconds}s`;
+  return t('{{action}} in {{seconds}}s', { action: t(action), seconds });
 }
 
 // Opening or changing the list reads saved data only. Supplier reads are explicit.

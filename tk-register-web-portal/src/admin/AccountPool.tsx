@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { ArrowRight, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { errorMessage, request } from '../api';
@@ -42,13 +43,13 @@ export function AdminHistory({ onOpen }: { onOpen: (id: string) => void }) {
     return () => abort.abort();
   }, [page, query, status, attempt]);
   return <div className='admin-page'>
-    <div className='title-row'><div><p className='eyebrow admin-breadcrumb'>Account pool</p><h1>Submission history</h1><p className='subtitle'>Every submission across all accounts and users.</p></div><AdminBadge /></div>
+    <div className='title-row'><div><p className='eyebrow admin-breadcrumb'>{t("Account pool")}</p><h1>{t("Submission history")}</h1><p className='subtitle'>{t("Every submission across all accounts and users.")}</p></div><AdminBadge /></div>
     <ListToolbar id='admin-history' search={filters.search} onSearch={filters.setSearch} status={status} onStatus={filters.changeStatus} busy={loading} onRefresh={filters.refresh} />
     <ErrorNotice>{error}</ErrorNotice>
-    {loading && !list ? <Loading label='Loading submission history…' /> : list ? <section className='panel admin-table-panel' aria-busy={loading}>
+    {loading && !list ? <Loading label={t("Loading submission history…")} /> : list ? <section className='panel admin-table-panel' aria-busy={loading}>
       <SubmissionTable data={list} onOpen={onOpen} />
       <Pagination data={list} noun='submission' busy={loading} onPage={filters.setPage} />
-    </section> : error ? <button className='button secondary' onClick={filters.refresh}>Try again</button> : null}
+    </section> : error ? <button className='button secondary' onClick={filters.refresh}>{t("Try again")}</button> : null}
   </div>;
 }
 
@@ -83,25 +84,25 @@ export function PoolAccountDetails({ id, onBack, onSubmission }: { id: string; o
   const account = detail?.account;
   const current = account?.current_submission;
   return <div className='admin-page'>
-    <Back onClick={onBack} label='Accounts' />
+    <Back onClick={onBack} label={t("Accounts")} />
     <ErrorNotice>{error}</ErrorNotice>
-    {loading && !detail ? <Loading label='Loading account…' /> : detail && account ? <>
-      <div className='title-row'><div><p className='eyebrow admin-breadcrumb'>Account pool</p><h1 className='admin-account-heading'>{account.account}</h1><p className='subtitle'>{account.plan} · {account.vendor_name}</p></div><AdminBadge /></div>
-      <section className='panel admin-account-summary' aria-label='Account summary'>
+    {loading && !detail ? <Loading label={t("Loading account…")} /> : detail && account ? <>
+      <div className='title-row'><div><p className='eyebrow admin-breadcrumb'>{t("Account pool")}</p><h1 className='admin-account-heading'>{account.account}</h1><p className='subtitle'>{account.plan} · {account.vendor_name}</p></div><AdminBadge /></div>
+      <section className='panel admin-account-summary' aria-label={t("Account summary")}>
         <dl className='admin-summary-grid'>
-          <div><dt>User</dt><dd className='admin-email'>{account.user.email}</dd></div>
-          <div><dt>Latest submit status</dt><dd><StateBadge value={account.latest_submission.status} /><span className='admin-cell-note'>Submission #{account.latest_submission.id}</span></dd></div>
-          <div><dt>Current account status</dt><dd><CurrentAccountStatus current={current || null} latest={account.latest_submission} refresh={current ? refreshes[current.id] : undefined} /></dd></div>
-          <div><dt>Remote account ID</dt><dd>{current?.remote_id || 'Not returned'}{current?.platform_account_id && <span className='admin-cell-note'>Platform ID {current.platform_account_id}</span>}</dd></div>
+          <div><dt>{t("User")}</dt><dd className='admin-email'>{account.user.email}</dd></div>
+          <div><dt>{t("Latest submit status")}</dt><dd><StateBadge value={account.latest_submission.status} /><span className='admin-cell-note'>{t("Submission #")}{account.latest_submission.id}</span></dd></div>
+          <div><dt>{t("Current account status")}</dt><dd><CurrentAccountStatus current={current || null} latest={account.latest_submission} refresh={current ? refreshes[current.id] : undefined} /></dd></div>
+          <div><dt>{t("Remote account ID")}</dt><dd>{current?.remote_id || t("Not returned")}{current?.platform_account_id && <span className='admin-cell-note'>{t("Platform ID")} {current.platform_account_id}</span>}</dd></div>
         </dl>
-        <div className='admin-summary-footer'><span className='muted small'>{account.submission_count} {account.submission_count === 1 ? 'submission' : 'submissions'} · Last submitted {dateTime(account.latest_submission.created_at)}</span>
-          {current && <button className='button secondary' onClick={() => onSubmission(current.id)}>Account details & bills<ArrowRight aria-hidden='true' /></button>}
+        <div className='admin-summary-footer'><span className='muted small'>{account.submission_count} {t(account.submission_count === 1 ? 'submission' : 'submissions')} {t("· Last submitted")} {dateTime(account.latest_submission.created_at)}</span>
+          {current && <button className='button secondary' onClick={() => onSubmission(current.id)}>{t("Account details & bills")}<ArrowRight aria-hidden='true' /></button>}
         </div>
       </section>
-      <div className='section-heading admin-history-heading'><div><h2>Submission history</h2><p className='muted small'>All submissions for this account and owner.</p></div>
-        <button className='button secondary' disabled={loading || syncing} onClick={filters.refresh}><RefreshCw className={loading || syncing ? 'spin' : ''} aria-hidden='true' />Refresh</button>
+      <div className='section-heading admin-history-heading'><div><h2>{t("Submission history")}</h2><p className='muted small'>{t("All submissions for this account and owner.")}</p></div>
+        <button className='button secondary' disabled={loading || syncing} onClick={filters.refresh}><RefreshCw className={loading || syncing ? 'spin' : ''} aria-hidden='true' />{t("Refresh")}</button>
       </div>
       <section className='panel admin-table-panel' aria-busy={loading}><SubmissionTable data={detail.history} onOpen={onSubmission} showOwner={false} /><Pagination data={detail.history} noun='submission' busy={loading} onPage={filters.setPage} /></section>
-    </> : error ? <button className='button secondary' onClick={filters.refresh}>Try again</button> : null}
+    </> : error ? <button className='button secondary' onClick={filters.refresh}>{t("Try again")}</button> : null}
   </div>;
 }

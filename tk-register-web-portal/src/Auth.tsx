@@ -2,13 +2,14 @@ import { Check, Mail } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   APIError,
-  errorMessage,
+  displayError, type DisplayError,
   request,
   type AuthStatus,
   type Challenge,
   type CodeDelivery,
   type Session,
 } from './api';
+import { t, translateMessage } from './i18n';
 import { ErrorNotice, PasswordField } from './ui';
 import { passwordWithinLimit, validCode, validEmail } from './validation';
 
@@ -31,7 +32,7 @@ export default function Auth({
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [code, setCode] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState<DisplayError>('');
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
@@ -108,7 +109,7 @@ export default function Auth({
       codeInput.current?.focus();
     } catch (cause) {
       if (!mounted.current) return;
-      setError(errorMessage(cause));
+      setError(displayError(cause));
       if (cause instanceof APIError && cause.retryAfter)
         cooldown(cause.retryAfter);
     } finally {
@@ -199,7 +200,7 @@ export default function Auth({
         setTimeout(() => codeInput.current?.focus(), 0);
       } else onSession(result as Session);
     } catch (cause) {
-      if (mounted.current) setError(errorMessage(cause));
+      if (mounted.current) setError(displayError(cause));
     } finally {
       inFlight.current = false;
       if (mounted.current) setBusy(false);
@@ -211,30 +212,29 @@ export default function Auth({
       <section className='auth-panel' aria-labelledby='auth-title'>
         {challenge && (
           <p className='step-label'>
-            <strong>Password verified</strong> · Step 2 of 2
+            <strong>{t('Password verified')}</strong> · {t('Step 2 of 2')}
           </p>
         )}
         <h1 id='auth-title' tabIndex={-1}>
           {challenge
-            ? 'Check your email'
+            ? t('Check your email')
             : page === 'register'
-              ? 'Create your account'
-              : 'Sign in'}
+              ? t('Create your account')
+              : t('Sign in')}
         </h1>
         {message && !challenge && (
           <div className='notice information' role='status'>
-            {message}
+            {translateMessage(message)}
           </div>
         )}
         {challenge ? (
-          <p className='auth-intro'>
-            Enter the verification code sent to{' '}
+          <p className='auth-intro'>{t('Enter the verification code sent to')}{' '}
             <strong>{normalizedEmail}</strong>
           </p>
         ) : (
           page === 'login' &&
           status.email_code_login_enabled && (
-            <div className='segment' aria-label='Sign-in method'>
+            <div className='segment' aria-label={t('Sign-in method')}>
               <button
                 type='button'
                 aria-pressed={method === 'password'}
@@ -245,7 +245,7 @@ export default function Auth({
                   setCode('');
                 }}
               >
-                {status.password_login_enabled ? 'Password' : 'Admin password'}
+                {status.password_login_enabled ? t('Password') : t('Admin password')}
               </button>
               <button
                 type='button'
@@ -256,9 +256,7 @@ export default function Auth({
                   setPassword('');
                   setError('');
                 }}
-              >
-                Email code
-              </button>
+              >{t('Email code')}</button>
             </div>
           )
         )}
@@ -266,15 +264,12 @@ export default function Auth({
           page === 'login' &&
           method === 'password' &&
           !status.password_login_enabled && (
-            <p className='admin-only-help'>
-              Password sign-in is available to administrators. Members can use
-              an email code.
-            </p>
+            <p className='admin-only-help'>{t('Password sign-in is available to administrators. Members can use an email code.')}</p>
           )}
         <form className='auth-form' onSubmit={submit}>
           {!challenge && (
             <div className='field'>
-              <label htmlFor='email'>Email address</label>
+              <label htmlFor='email'>{t('Email address')}</label>
               <input
                 id='email'
                 name='email'
@@ -294,7 +289,7 @@ export default function Auth({
           )}
           {isCode && (
             <div className='field'>
-              <label htmlFor='verification-code'>Verification code</label>
+              <label htmlFor='verification-code'>{t('Verification code')}</label>
               <div className='code-row'>
                 <input
                   ref={codeInput}
@@ -328,27 +323,27 @@ export default function Auth({
                 >
                   <Mail aria-hidden='true' />
                   {sending
-                    ? 'Sending…'
+                    ? t('Sending…')
                     : remaining
-                      ? `Resend in ${remaining}s`
+                      ? t('Resend in {{seconds}}s', { seconds: remaining })
                       : sent?.key === deliveryKey
-                        ? 'Resend code'
-                        : 'Send code'}
+                        ? t('Resend code')
+                        : t('Send code')}
                 </button>
               </div>
               {sent?.key === deliveryKey && (
                 <p className='code-status' role='status'>
                   <Check aria-hidden='true' />
                   {challengeExpired
-                    ? 'The sign-in attempt has expired.'
-                    : `Code requested. Check your inbox. Valid for ${duration} minutes.`}
+                    ? t('The sign-in attempt has expired.')
+                    : t('Code requested. Check your inbox. Valid for {{minutes}} minutes.', { minutes: duration })}
                 </p>
               )}
             </div>
           )}
           {!challenge && (page === 'register' || method === 'password') && (
             <PasswordField
-              label='Password'
+              label={t('Password')}
               name='password'
               required
               autoComplete={
@@ -363,7 +358,7 @@ export default function Auth({
           )}
           {!challenge && page === 'register' && (
             <PasswordField
-              label='Confirm password'
+              label={t('Confirm password')}
               name='confirmation'
               required
               autoComplete='new-password'
@@ -380,12 +375,12 @@ export default function Auth({
             disabled={busy || sending || challengeExpired}
           >
             {busy
-              ? 'Please wait…'
+              ? t('Please wait…')
               : challenge
-                ? 'Verify and sign in'
+                ? t('Verify and sign in')
                 : page === 'register'
-                  ? 'Create account'
-                  : 'Sign in'}
+                  ? t('Create account')
+                  : t('Sign in')}
           </button>
         </form>
         {(challenge || page === 'register') && (
@@ -395,19 +390,14 @@ export default function Auth({
                 className='text-button'
                 disabled={busy || sending}
                 onClick={() => reset('login')}
-              >
-                Back to sign in
-              </button>
+              >{t('Back to sign in')}</button>
             ) : page === 'register' ? (
-              <>
-                Already have an account?{' '}
+              <>{t('Already have an account?')}{' '}
                 <button
                   className='text-button'
                   disabled={busy || sending}
                   onClick={() => reset('login')}
-                >
-                  Sign in
-                </button>
+                >{t('Sign in')}</button>
               </>
             ) : null}
           </div>

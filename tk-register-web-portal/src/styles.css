@@ -158,9 +158,36 @@ select:disabled {
   background: transparent;
   border: 0;
   padding: 0;
-  margin-left: auto;
   display: flex;
   align-items: center;
+}
+.language-picker {
+  position: relative;
+  width: 118px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.language-picker > svg {
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  width: 16px;
+  color: var(--navy);
+}
+.language-picker .tk-select-trigger {
+  padding: 0 6px 0 30px;
+  gap: 4px;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--navy);
+  font-size: 14px;
+}
+@media (max-width: 420px) {
+  .header:has(.language-picker) { padding-inline: 10px; gap: 6px; }
+  .header .language-picker { width: 111px; }
 }
 .avatar {
   height: 38px;

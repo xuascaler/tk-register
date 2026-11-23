@@ -1,8 +1,9 @@
+import { t, translateMessage } from '../i18n';
 import { CalendarDays } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Select from '../submissions/Select';
-import { recentDailyRange } from './daily-usage';
+import { dailyDate, recentDailyRange } from './daily-usage';
 import { validOverviewRange, type OverviewRangeSelection } from './overview';
 
 type Range = { start: string; end: string };
@@ -31,11 +32,11 @@ function OverviewPeriodDropdown({ range, allTime, period, onDays, onAllTime }: D
   const currentRange = selected ? recentDailyRange(selected.days) : null;
   const savedRangeDiffers = !!currentRange && (currentRange.start !== range.start || currentRange.end !== range.end);
   return <div className='overview-period overview-period-dropdown tk-select'>
-    <Select id='overview-period-trigger' label='Usage period' options={periodOptions} value={selected?.period || 'all_time'} describedBy={savedRangeDiffers ? 'overview-period-range' : undefined} onChange={value => {
+    <Select id='overview-period-trigger' label={t('Usage period')} options={periodOptions.map(option => ({ ...option, label: t(option.label) }))} value={selected?.period || 'all_time'} describedBy={savedRangeDiffers ? 'overview-period-range' : undefined} onChange={value => {
       if (value === 'all_time') onAllTime();
       else { const preset = presets.find(preset => preset.period === value); if (preset) onDays(preset.days); }
     }} />
-    {savedRangeDiffers && <span id='overview-period-range' className='overview-period-range'>{range.start} – {range.end}</span>}
+    {savedRangeDiffers && <span id='overview-period-range' className='overview-period-range'>{dailyDate(range.start, true)} – {dailyDate(range.end, true)}</span>}
   </div>;
 }
 
@@ -45,7 +46,7 @@ function OverviewDatePopover({ range, allTime, period, onDays, onAllTime, onAppl
   const [position, setPosition] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const allSelected = period === undefined ? allTime : period === 'all_time';
   const selected = selectedPreset(range, allTime, period);
-  const title = allSelected ? 'All time' : selected ? selected.label : `${range.start} – ${range.end}`;
+  const title = allSelected ? t('All time') : selected ? t(selected.label) : `${dailyDate(range.start, true)} – ${dailyDate(range.end, true)}`;
   const currentPresetRange = selected ? recentDailyRange(selected.days) : null;
   const savedRangeDiffers = !!currentPresetRange && (currentPresetRange.start !== range.start || currentPresetRange.end !== range.end);
   function close(restore = false) { setOpen(false); if (restore) trigger.current?.focus(); }
@@ -77,20 +78,20 @@ function OverviewDatePopover({ range, allTime, period, onDays, onAllTime, onAppl
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('focusin', outside); document.removeEventListener('keydown', escape); };
   }, [open]);
   return <div className='overview-period tk-select'>
-    <label htmlFor='overview-period-trigger'>Usage period</label>
-    <button ref={trigger} id='overview-period-trigger' type='button' className='tk-select-trigger' aria-label={`Usage date range: ${title}`} aria-haspopup='dialog' aria-expanded={open} aria-controls={open ? 'overview-date-menu' : undefined} onClick={() => open ? close() : show()} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); show(); } }}><span>{title}</span><CalendarDays aria-hidden='true' /></button>
-    {savedRangeDiffers && <span className='overview-period-range'>{range.start} – {range.end}</span>}
-    {open && position && createPortal(<div ref={menu} id='overview-date-menu' className={`overview-date-menu ${allowCustom ? '' : 'is-presets-only'}`} style={position} role='dialog' aria-label='Usage dates'>
-      <div className='overview-presets' role='group' aria-label='Usage period'>
-        {presets.map(preset => <button key={preset.days} type='button' aria-pressed={!!selected && selected.days === preset.days} onClick={() => { onDays(preset.days); close(true); }}>{preset.label}</button>)}
-        <button type='button' aria-pressed={allSelected} onClick={() => { onAllTime(); close(true); }}>All time</button>
+    <label htmlFor='overview-period-trigger'>{t('Usage period')}</label>
+    <button ref={trigger} id='overview-period-trigger' type='button' className='tk-select-trigger' aria-label={t('Usage date range: {{range}}', { range: title })} aria-haspopup='dialog' aria-expanded={open} aria-controls={open ? 'overview-date-menu' : undefined} onClick={() => open ? close() : show()} onKeyDown={event => { if (event.key === 'ArrowDown') { event.preventDefault(); show(); } }}><span>{title}</span><CalendarDays aria-hidden='true' /></button>
+    {savedRangeDiffers && <span className='overview-period-range'>{dailyDate(range.start, true)} – {dailyDate(range.end, true)}</span>}
+    {open && position && createPortal(<div ref={menu} id='overview-date-menu' className={`overview-date-menu ${allowCustom ? '' : 'is-presets-only'}`} style={position} role='dialog' aria-label={t('Usage dates')}>
+      <div className='overview-presets' role='group' aria-label={t('Usage period')}>
+        {presets.map(preset => <button key={preset.days} type='button' aria-pressed={!!selected && selected.days === preset.days} onClick={() => { onDays(preset.days); close(true); }}>{t(preset.label)}</button>)}
+        <button type='button' aria-pressed={allSelected} onClick={() => { onAllTime(); close(true); }}>{t('All time')}</button>
       </div>
       {allowCustom ? <form onSubmit={event => { event.preventDefault(); if (!validOverviewRange(draft.start, draft.end)) { setError('Choose valid start and end dates, ending no later than yesterday.'); return; } onApply(draft); close(true); }}>
-        <div className='overview-dates'><label>Start date<input type='date' value={draft.start} min='1970-01-01' max={recentDailyRange(1).end} onChange={event => setDraft(value => ({ ...value, start: event.target.value }))} required /></label><label>End date<input type='date' value={draft.end} min='1970-01-01' max={recentDailyRange(1).end} onChange={event => setDraft(value => ({ ...value, end: event.target.value }))} required /></label></div>
-        {error && <p className='overview-date-error' role='alert'>{error}</p>}
-        <p className='overview-date-note'>Daily data through {recentDailyRange(1).end} · Asia/Shanghai</p>
-        <div className='overview-date-actions'><button type='button' className='button secondary' onClick={() => close(true)}>Cancel</button><button className='button primary' type='submit'>Apply</button></div>
-      </form> : <p className='overview-date-note'>Complete calendar days through yesterday · Asia/Shanghai</p>}
+        <div className='overview-dates'><label>{t('Start date')}<input type='date' value={draft.start} min='1970-01-01' max={recentDailyRange(1).end} onChange={event => setDraft(value => ({ ...value, start: event.target.value }))} required /></label><label>{t('End date')}<input type='date' value={draft.end} min='1970-01-01' max={recentDailyRange(1).end} onChange={event => setDraft(value => ({ ...value, end: event.target.value }))} required /></label></div>
+        {error && <p className='overview-date-error' role='alert'>{translateMessage(error)}</p>}
+        <p className='overview-date-note'>{t('Daily data through {{date}}', { date: dailyDate(recentDailyRange(1).end, true) })} · Asia/Shanghai</p>
+        <div className='overview-date-actions'><button type='button' className='button secondary' onClick={() => close(true)}>{t('Cancel')}</button><button className='button primary' type='submit'>{t('Apply')}</button></div>
+      </form> : <p className='overview-date-note'>{t('Complete calendar days through yesterday · Asia/Shanghai')}</p>}
     </div>, document.body)}
   </div>;
 }
