@@ -13,6 +13,7 @@ import { ErrorPopover } from './ErrorPopover';
 import { UsageTrend } from './UsageTrend';
 import { DailyUsage } from './DailyUsage';
 import { AuthenticationCard, AuthJSONEditor } from './AuthJSONEditor';
+import { ProxyURLEditor } from './ProxyURLEditor';
 import DeactivateAccount from './DeactivateAccount';
 import { authJSONResultMessage, localizeAuthJSONMessage, type AuthJSONUpdateResult } from './auth-json';
 import { loadAccountPage, mergeSyncedAccount, syncAccountRow, syncRetryLabel, type AccountRowSyncResult } from './row-sync';
@@ -183,6 +184,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [proxyOpen, setProxyOpen] = useState(false);
   const [deactivateOpen, setDeactivateOpen] = useState(false);
   const [refreshWarning, setRefreshWarning] = useState('');
   const [syncRetry, setSyncRetry] = useState<{ until: number; stage?: RetryStage } | null>(null);
@@ -193,7 +195,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
   const [attempt, setAttempt] = useState(0);
   const pending = useRef<AbortController | null>(null);
   useEffect(() => {
-    setEditorOpen(false); setDeactivateOpen(false); setRefreshWarning(''); setNotice(''); setSyncing(false); setSyncRetry(null);
+    setEditorOpen(false); setProxyOpen(false); setDeactivateOpen(false); setRefreshWarning(''); setNotice(''); setSyncing(false); setSyncRetry(null);
     return () => pending.current?.abort();
   }, [id, endpoint]);
   useEffect(() => {
@@ -242,13 +244,13 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
       }
     }
   }
-  async function credentialsSaved(result: AuthJSONUpdateResult) {
-    setEditorOpen(false); setError(''); setSyncRetry(null);
+  async function credentialsSaved(result: AuthJSONUpdateResult, proxyUpdate = false) {
+    setEditorOpen(false); setProxyOpen(false); setError(''); setSyncRetry(null);
     // The returned account may represent a newer lifetime. Trust its timestamp
     // instead of attaching the completed operation's timestamp to that identity.
     setData(current => current && { ...current, account: result.account || current.account });
     if (result.refresh_status === 'not_requested' || result.refresh_status === 'succeeded' || result.refresh_status === 'pending') {
-      setNotice(authJSONResultMessage(result)); setRefreshWarning('');
+      setNotice(proxyUpdate ? 'Proxy URL updated. Account status is updated by scheduled background checks.' : authJSONResultMessage(result)); setRefreshWarning('');
     } else {
       setNotice(''); setRefreshWarning(authJSONResultMessage(result));
       const retryAfter = retryAfterSeconds(result.refresh_retry_after);
@@ -281,7 +283,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
       <div className='member-settings-tabs account-usage-tabs' role='tablist' aria-label={t('Account information')}>{(['overview', 'daily'] as const).map(value => <button key={value} role='tab' id={`usage-tab-${value}`} aria-selected={tab === value} aria-controls={`usage-panel-${value}`} tabIndex={tab === value ? 0 : -1} onClick={() => changeTab(value)} onKeyDown={e => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'overview' : e.key === 'End' ? 'daily' : tab === 'daily' ? 'overview' : 'daily'; changeTab(next); requestAnimationFrame(() => document.getElementById(`usage-tab-${next}`)?.focus()); } }}>{value === 'overview' ? t('Overview') : t('Daily usage')}</button>)}</div>
       <div role='tabpanel' id={`usage-panel-${tab}`} aria-labelledby={`usage-tab-${tab}`}>
       {tab === 'overview' && <>
-      {(admin || account.can_manage !== false) && <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} onDeactivate={() => setDeactivateOpen(true)} />}
+      {(admin || account.can_manage !== false) && <AuthenticationCard account={account} disabled={syncing || loading} timezone={data.timezone} onEdit={() => setEditorOpen(true)} onProxy={() => setProxyOpen(true)} onDeactivate={() => setDeactivateOpen(true)} />}
       <div className='usage-metrics'>
         <div><span>{t('Total spent')}</span><strong>{formatCost(snapshot?.cost_total_usd, 'USD')}</strong><small>{account.last_error && snapshot ? t('Last known cumulative total') : t('Cumulative total')}</small></div>
         <div><span>{t('Input tokens')}</span><strong>{formatTokens(snapshot?.input_tokens_total, true)}</strong><small>{formatTokens(snapshot?.input_tokens_total)} {t('tokens')}</small></div>
@@ -296,6 +298,7 @@ export function AccountUsageDetails({ id, onBack, onSubmission, admin = false, r
       <DailyUsage key={`${endpoint}:${id}`} endpoint={`${endpoint}/${encodeURIComponent(id)}`} compact={tab === 'overview'} onOpen={() => changeTab('daily')} />
       </div>
       {editorOpen && <AuthJSONEditor account={account} endpoint={actionEndpoint} onClose={() => setEditorOpen(false)} onSaved={credentialsSaved} />}
+      {proxyOpen && <ProxyURLEditor account={account} endpoint={actionEndpoint} onClose={() => setProxyOpen(false)} onSaved={result => void credentialsSaved(result, true)} onAuthJSON={() => { setProxyOpen(false); setEditorOpen(true); }} />}
       {deactivateOpen && <DeactivateAccount account={account} endpoint={actionEndpoint} onClose={() => setDeactivateOpen(false)} onGenerated={() => { setDeactivateOpen(false); setNotice('Auth JSON generated. Your account will go offline after a while.'); }} />}
     </>}
   </section>;

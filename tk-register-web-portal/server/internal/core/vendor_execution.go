@@ -765,6 +765,9 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 			if err := enqueuePostSubmissionSyncTx(tx, accepted, now); err != nil {
 				return err
 			}
+			if err := v.Store.saveSubmittedCredentialTx(tx, accepted, input, now); err != nil {
+				return err
+			}
 			if record.SubmitMode == "restore_update" && record.TargetSupplierRecordID != "" {
 				return tx.Model(&SyncedAccount{}).Where("user_id = ? AND vendor_id = ? AND LOWER(TRIM(account)) = ? AND current_submission_id = ? AND deleted_at IS NULL", userID, record.VendorID, NormalizeEmail(record.Account), record.ID).Updates(map[string]any{"supplier_record_id": record.TargetSupplierRecordID, "auth_json_updated_at": now}).Error
 			}

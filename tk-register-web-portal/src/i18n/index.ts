@@ -6,6 +6,7 @@ import { adminMessages } from './admin';
 import { submissionMessages } from './submissions';
 import { tokyoAccountMessages } from './tokyo-accounts';
 import { tokyoSubmitMessages } from './tokyo-submit';
+import { proxyURLMessages } from './proxy-url';
 
 export type Language = 'zh-CN' | 'en-US';
 const preferenceKey = 'tk-register.language';
@@ -28,7 +29,7 @@ function initialLanguage(): Language {
   return preferredLanguage(saved, browser.languages?.length ? browser.languages : [browser.language]);
 }
 
-const chinese = { ...adminMessages, ...submissionMessages, ...accountMessages, ...tokyoAccountMessages, ...tokyoSubmitMessages, ...commonMessages };
+const chinese = { ...adminMessages, ...submissionMessages, ...accountMessages, ...tokyoAccountMessages, ...tokyoSubmitMessages, ...proxyURLMessages, ...commonMessages };
 const language = initialLanguage();
 const instance = i18next.createInstance();
 void instance.use(initReactI18next).init({

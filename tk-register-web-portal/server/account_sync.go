@@ -214,12 +214,18 @@ func (a *app) accountSyncRoutes(w http.ResponseWriter, r *http.Request, route st
 		a.dailyUsageData(w, r, user, id, adminAccounts, rawAccounts)
 		return true
 	}
-	if len(parts) == 2 && parts[1] == "auth-json" {
+	if len(parts) == 2 && (parts[1] == "auth-json" || parts[1] == "proxy-url" || parts[1] == "proxy-url-test") {
 		if !adminAccounts && account.CanManage != nil && !*account.CanManage {
 			vendorFailure(w, core.ErrNotFound)
 			return true
 		}
-		a.accountAuthJSON(w, r, user, id, adminAccounts, lookupAccount)
+		if parts[1] == "auth-json" {
+			a.accountAuthJSON(w, r, user, id, adminAccounts, lookupAccount)
+		} else if parts[1] == "proxy-url-test" && r.Method != http.MethodPost {
+			fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
+		} else {
+			a.runAccountAuthJSON(w, r, user, id, adminAccounts, lookupAccount, authJSONOperation{Proxy: true, ProxyTest: parts[1] == "proxy-url-test"})
+		}
 		return true
 	}
 	if r.Method == "GET" && (len(parts) == 1 || (len(parts) == 2 && parts[1] == "snapshots")) {

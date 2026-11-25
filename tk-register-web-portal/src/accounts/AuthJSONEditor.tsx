@@ -1,5 +1,5 @@
 import { t, translateMessage, useLanguage } from '../i18n';
-import { Check, FilePenLine, LoaderCircle, LockKeyhole, Power, RefreshCw, Upload, UserRound, X } from 'lucide-react';
+import { Check, FilePenLine, LoaderCircle, LockKeyhole, Network, Power, RefreshCw, Upload, UserRound, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { APIError, errorMessage, request } from '../api';
 import { AuthFieldError, MAX_AUTH_BYTES, parseAuthJSON } from '../submissions/validation';
@@ -11,8 +11,8 @@ import { deletionInProgress } from './account-state';
 import AuthorizeAuthJSON from './AuthorizeAuthJSON';
 import './auth-json.css';
 
-export function AuthenticationCard({ account, disabled, onEdit, onDeactivate, timezone }: {
-  account: SyncedAccount; disabled: boolean; onEdit: () => void; onDeactivate: () => void; timezone: string;
+export function AuthenticationCard({ account, disabled, onEdit, onProxy, onDeactivate, timezone }: {
+  account: SyncedAccount; disabled: boolean; onEdit: () => void; onProxy: () => void; onDeactivate: () => void; timezone: string;
 }) {
   useLanguage();
   return <section className='account-authentication' aria-label={t('Authentication')}>
@@ -20,7 +20,7 @@ export function AuthenticationCard({ account, disabled, onEdit, onDeactivate, ti
       {account.auth_json_updated_at && <span className='account-auth-updated'>{t('Last updated')} {formatTime(account.auth_json_updated_at, timezone)}</span>}
       {deletionInProgress(account) ? <span className='account-auth-updated'>{t('Unavailable while this account is being deleted.')}</span> : !account.current_submission_id && <span className='account-auth-updated'>{t('Available after the account submission is accepted.')}</span>}
     </div>
-    <div className='account-auth-actions'><button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />{t("Update Auth JSON")}</button><button type='button' className='button secondary account-deactivate-button' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onDeactivate}><Power aria-hidden='true' />{t("Deactivate")}</button></div>
+    <div className='account-auth-actions'><button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onEdit}><FilePenLine aria-hidden='true' />{t("Update Auth JSON")}</button><button type='button' className='button pale' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onProxy}><Network aria-hidden='true' />{t('Update Proxy URL')}</button><button type='button' className='button secondary account-deactivate-button' disabled={disabled || deletionInProgress(account) || !account.current_submission_id} onClick={onDeactivate}><Power aria-hidden='true' />{t("Deactivate")}</button></div>
   </section>;
 }
 

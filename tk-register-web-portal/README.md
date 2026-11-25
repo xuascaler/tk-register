@@ -228,7 +228,7 @@ A confirmed browser or API Auth JSON update returns HTTP 200 with `updated: true
 
 The existing **Authentication → Update Auth JSON** dialog supports **Authorize & update** as well as manual **Upload Auth JSON**. Authorization uses the same OAuth, Setup Token, JSON import, session-cookie and token helper as account submission, with the target email and Account ID locked. Test the current proxy before generating an authorization link; clicking Generate without a successful test shows an inline prompt. Changing the proxy discards its prior test and authorization. The backend binds each draft to its actor and target account lifetime, rejects a different authorized email, and finishes through the account update interface without creating a submission. See [guided credential replacement](docs/auth-json-authorize-update.md).
 
-Each executed update has an audit record with source, actor, owner, account, token reference/revision, and separate update/refresh outcomes. It does not store the replacement credentials or create another submission. Keep `X-Request-ID` and, when present, `X-Auth-JSON-Audit-ID` for support.
+Each executed update has an audit record with source, actor, owner, account, token reference/revision, and separate update/refresh outcomes. Audits contain metadata only; successful updates save encrypted current credentials separately in `account_credentials`, without creating another submission. Keep `X-Request-ID` and, when present, `X-Auth-JSON-Audit-ID` for support.
 
 See the [Auth JSON Update API reference](docs/auth-json-update-api.md) for the full validation, cURL, response, audit, and error contract. The in-app guide is at `/tk-register#/docs/update-auth-json`.
 
@@ -241,6 +241,18 @@ All three guided authorization entries share bounded error details and correlate
 operational logs, including the Cookie/sessionKey flow. See
 [authorization diagnostics](docs/authorization-diagnostics.md) for stages, response
 fields, and log privacy.
+
+### Update Proxy URL
+
+The adjacent **Update Proxy URL** dialog changes only the root `proxy_url` in the account's last confirmed Auth JSON. It is available to the account owner and administrators with the same permissions as Update Auth JSON. The complete saved credentials are never returned to the browser; the existing proxy is shown with its username/password hidden. The new URL must pass a connection test before saving, and editing the URL invalidates that test.
+
+The session routes are `GET/POST /accounts/:id/proxy-url` and `POST /accounts/:id/proxy-url-test`, with the corresponding `/admin/synced-accounts/:id/…` routes for administrators. These use the existing session, same-origin and CSRF checks. The connection-test proof expires after 600 seconds and is bound to the actor, account identity, accepted submission, saved credential revision and proxy digest. Save sends only `proxy_url`, `revision`, and `test_token`; the server constructs the full Auth JSON. These routes are not personal-token API endpoints.
+
+At startup, the migration creates `account_credentials` and conservatively initializes eligible existing accounts from their accepted submission. Accounts with a successful, pending or uncertain Auth JSON update since that submission are skipped. New accepted web/API submissions and subsequent confirmed Auth JSON updates (manual or guided, web or API) save the complete encrypted payload. No historical submission is rewritten. Missing current credentials require a complete **Update Auth JSON** operation before the shortcut can be used.
+
+Proxy and Auth JSON updates share the account operation locks and recheck supplier identity, ownership, lock/status restrictions and the accepted submission before sending. An outdated dialog returns `ACCOUNT_CREDENTIALS_CHANGED` and must be reopened. A pending candidate is saved encrypted before dispatch; only a confirmed success replaces the last confirmed version. An uncertain response retains both and disables further proxy shortcuts. The dialog shows **Unable to confirm the update result**, explains that the update may have succeeded, and offers only **Close**. There is no automatic resubmission or inference of success from status collection; the supplier cannot return complete current Auth JSON.
+
+Build the frontend, then run `npm run test:proxy-url` for isolated bilingual desktop/mobile browser coverage with synthetic API responses. Backend tests cover initial submissions, conservative migration, encryption, revision conflicts, permissions, shared locks and uncertain outcomes.
 
 ## Administrator users and account pool
 

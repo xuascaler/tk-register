@@ -37,6 +37,9 @@ type authJSONProblem struct {
 }
 
 func authJSONError(err error) authJSONProblem {
+	if problem, ok := accountCredentialProblem(err); ok {
+		return problem
+	}
 	if errors.Is(err, core.ErrAccountOwnershipConflict) {
 		return authJSONProblem{409, "ACCOUNT_OWNERSHIP_CONFLICT", "This account has conflicting ownership records. An administrator must resolve them before its credentials can be updated."}
 	}
@@ -72,6 +75,8 @@ type authJSONOperation struct {
 	Token         *core.UserAPIToken
 	Input         any
 	FormatAccount func(core.AccountDTO) any
+	Proxy         bool
+	ProxyTest     bool
 }
 
 func (a *app) accountAuthJSON(w http.ResponseWriter, r *http.Request, user *core.User, id uint64, admin bool, lookup func(uint64) (core.AccountDTO, error)) {
@@ -123,6 +128,15 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		}
 		return
 	}
+	var proxyInfo core.AccountProxyInfo
+	if operation.Proxy {
+		var err error
+		proxyInfo, err = a.store.AccountProxyInfo(r.Context(), target)
+		if err != nil {
+			authJSONFail(w, authJSONError(err))
+			return
+		}
+	}
 	diagnosticSource := "auth_json_check"
 	if r.Method == "POST" {
 		diagnosticSource = "auth_json_update"
@@ -157,7 +171,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		selection.RecordID = *target.SupplierRecordID
 	}
 	editor := a.authEditor()
-	if r.Method == "GET" {
+	if r.Method == "GET" || operation.ProxyTest {
 		ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 		defer cancel()
 		info, err := editor.CheckAuthJSON(ctx, username, password, selection)
@@ -176,7 +190,19 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 			fail(w, 409, "ACCOUNT_CHANGED", "This account changed while it was being checked. Reload the page.")
 			return
 		}
-		ok(w, map[string]any{"account": info.Account, "plan": info.Plan, "editable": info.Editable, "reason": info.Reason, "supplier_record_id": info.RecordID, "updated_at": target.AuthJSONUpdatedAt})
+		if operation.ProxyTest {
+			if !info.Editable {
+				authJSONFail(w, authJSONError(&supplier.Error{Code: supplier.CodeNotEditable}))
+				return
+			}
+			a.testAccountProxy(w, r, user, target, proxyInfo)
+			return
+		}
+		response := map[string]any{"account": info.Account, "plan": info.Plan, "editable": info.Editable, "reason": info.Reason, "supplier_record_id": info.RecordID, "updated_at": target.AuthJSONUpdatedAt}
+		if operation.Proxy {
+			response["revision"], response["proxy_url_masked"], response["updated_at"] = proxyInfo.Revision, proxyInfo.ProxyURLMasked, proxyInfo.UpdatedAt
+		}
+		ok(w, response)
 		return
 	}
 	contentType, _, parseErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
@@ -186,7 +212,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 	}
 	inputAuthJSON := operation.Input
 	var resolved *resolvedAuthJSONFlow
-	if operation.Token == nil && operation.Input == nil {
+	if !operation.Proxy && operation.Token == nil && operation.Input == nil {
 		var input struct {
 			AuthJSON json.RawMessage `json:"auth_json"`
 			FlowID   json.RawMessage `json:"flow_id"`
@@ -224,15 +250,25 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 			return
 		}
 	}
-	normalized, err := core.ValidateClaudeAccountAuthJSON(inputAuthJSON, target.Account)
-	if err != nil {
-		vendorFailure(w, err)
-		return
-	}
-	raw, err := common.Marshal(normalized)
-	if err != nil {
-		internal(w)
-		return
+	var raw []byte
+	var expectedRevision *uint64
+	if operation.Proxy {
+		raw, expectedRevision, err = a.resolveAccountProxy(r, w, user, target)
+		if err != nil {
+			proxyFailure(w, err)
+			return
+		}
+	} else {
+		normalized, validationErr := core.ValidateClaudeAccountAuthJSON(inputAuthJSON, target.Account)
+		if validationErr != nil {
+			vendorFailure(w, validationErr)
+			return
+		}
+		raw, err = common.Marshal(normalized)
+		if err != nil {
+			internal(w)
+			return
+		}
 	}
 	// The lock is keyed by vendor+normalized email, not owner, since two local
 	// histories can refer to the same supplier row. A global collection lease
@@ -281,12 +317,17 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		tokenID, tokenRevision = &operation.Token.ID, &operation.Token.Revision
 	}
 	method, flowID := "manual", ""
+	if operation.Proxy {
+		method = "proxy"
+	}
 	if resolved != nil {
 		method, flowID = resolved.flow.Method, resolved.flow.FlowID
 	}
-	audit, err := a.store.BeginAuthJSONUpdateWithMethod(ctx, target, user.ID, w.Header().Get("X-Request-ID"), source, tokenID, tokenRevision, method, flowID)
+	audit, err := a.store.BeginAuthJSONUpdateWithMethod(ctx, target, user.ID, w.Header().Get("X-Request-ID"), source, tokenID, tokenRevision, method, flowID, core.AuthJSONCredentialWrite{Raw: raw, ExpectedRevision: expectedRevision})
 	if err != nil {
-		if errors.Is(err, core.ErrAccountIdentityChanged) {
+		if problem, known := accountCredentialProblem(err); known {
+			authJSONFail(w, problem)
+		} else if errors.Is(err, core.ErrAccountIdentityChanged) {
 			fail(w, 409, "ACCOUNT_CHANGED", "This account changed. Reload the page before updating.")
 		} else if errors.Is(err, core.ErrInvalidAPIToken) {
 			bearerFailure(w)
@@ -311,6 +352,9 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		confirmed := target
 		confirmed.SupplierRecordID = &info.RecordID
 		if err := a.store.CheckAuthJSONOwnership(checkCtx, confirmed); err != nil {
+			return err
+		}
+		if err := a.store.CheckPendingCredentialUpdate(checkCtx, target, audit.ID); err != nil {
 			return err
 		}
 		if resolved != nil {

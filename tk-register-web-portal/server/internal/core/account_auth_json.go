@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ type AccountAuthJSONAudit struct {
 	VendorID         uint64        `gorm:"not null;index"`
 	Vendor           Vendor        `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT"`
 	IdentityKey      string        `gorm:"size:64;not null"`
+	SubmissionID     *uint64       `gorm:"index"`
 	RequestID        string        `gorm:"size:64;not null;uniqueIndex"`
 	SupplierRecordID string        `gorm:"size:32;not null;default:''"`
 	Status           string        `gorm:"size:24;not null"`
@@ -138,9 +140,20 @@ func (s *Store) BeginAuthJSONUpdateWithSource(ctx context.Context, target Synced
 	return s.BeginAuthJSONUpdateWithMethod(ctx, target, actor, requestID, source, tokenID, revision, "manual", "")
 }
 
-func (s *Store) BeginAuthJSONUpdateWithMethod(ctx context.Context, target SyncedAccount, actor uint64, requestID, source string, tokenID, revision *uint64, method, flowID string) (AccountAuthJSONAudit, error) {
-	if method != "manual" && method != "oauth" && method != "setup" && method != "json" && method != "cookie" && method != "token" || len(flowID) > 128 || method == "manual" && flowID != "" || method != "manual" && flowID == "" {
+type AuthJSONCredentialWrite struct {
+	Raw              json.RawMessage
+	ExpectedRevision *uint64
+}
+
+func (s *Store) BeginAuthJSONUpdateWithMethod(ctx context.Context, target SyncedAccount, actor uint64, requestID, source string, tokenID, revision *uint64, method, flowID string, credential ...AuthJSONCredentialWrite) (AccountAuthJSONAudit, error) {
+	manual := method == "manual" || method == "proxy"
+	if !manual && method != "oauth" && method != "setup" && method != "json" && method != "cookie" && method != "token" || len(flowID) > 128 || manual && flowID != "" || !manual && flowID == "" || len(credential) > 1 {
 		return AccountAuthJSONAudit{}, validationErrorf("invalid auth update method")
+	}
+	if len(credential) == 1 {
+		if _, err := ValidateClaudeAccountAuthJSON(string(credential[0].Raw), target.Account); err != nil {
+			return AccountAuthJSONAudit{}, err
+		}
 	}
 	audit := AccountAuthJSONAudit{Method: method, CredentialFlowID: flowID, AccountID: target.ID, ActorID: actor, OwnerID: target.UserID, VendorID: target.VendorID, IdentityKey: target.IdentityKey, RequestID: requestID, Status: "pending", Source: source, APITokenID: tokenID, APITokenRevision: revision}
 	if source != "web" && source != "api" || source == "web" && (tokenID != nil || revision != nil) || source == "api" && (tokenID == nil || revision == nil || *tokenID == 0 || *revision == 0 || actor != target.UserID) {
@@ -151,7 +164,7 @@ func (s *Store) BeginAuthJSONUpdateWithMethod(ctx context.Context, target Synced
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, target.ID).Error; err != nil {
 			return err
 		}
-		if !current.AvailableForMutation() || current.IdentityKey != target.IdentityKey || current.CurrentSubmissionID == nil || current.UserID != target.UserID {
+		if !current.AvailableForMutation() || current.IdentityKey != target.IdentityKey || current.CurrentSubmissionID == nil || target.CurrentSubmissionID == nil || *current.CurrentSubmissionID != *target.CurrentSubmissionID || current.UserID != target.UserID {
 			return ErrAccountIdentityChanged
 		}
 		if err := checkAuthJSONOwnership(tx, current); err != nil {
@@ -172,7 +185,14 @@ func (s *Store) BeginAuthJSONUpdateWithMethod(ctx context.Context, target Synced
 				return ErrAPITokenScope
 			}
 		}
-		return tx.Create(&audit).Error
+		audit.SubmissionID = current.CurrentSubmissionID
+		if err := tx.Create(&audit).Error; err != nil {
+			return err
+		}
+		if len(credential) == 1 {
+			return s.prepareCredentialUpdateTx(tx, current, audit, credential[0].Raw, credential[0].ExpectedRevision)
+		}
+		return nil
 	})
 	return audit, err
 }
@@ -202,6 +222,9 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 			return nil
 		}
 		currentIdentity = account.AvailableForMutation() && account.IdentityKey == saved.IdentityKey && account.CurrentSubmissionID != nil && account.UserID == saved.OwnerID && account.VendorID == saved.VendorID
+		if currentIdentity && saved.SubmissionID != nil {
+			currentIdentity = *saved.SubmissionID == *account.CurrentSubmissionID
+		}
 		if status == "updated" && currentIdentity {
 			var newer int64
 			if err := tx.Model(&AccountAuthJSONAudit{}).Where("account_id = ? AND identity_key = ? AND status = ? AND id > ?", account.ID, saved.IdentityKey, "updated", saved.ID).Count(&newer).Error; err != nil {
@@ -220,6 +243,9 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 		if result.RowsAffected != 1 {
 			currentIdentity = false
 			return nil
+		}
+		if err := finishCredentialUpdateTx(tx, account, saved, status, currentIdentity, at); err != nil {
+			return err
 		}
 		if status == "updated" && currentIdentity {
 			if err := tx.Model(&account).Updates(map[string]any{"supplier_record_id": recordID, "auth_json_updated_at": at.UTC()}).Error; err != nil {

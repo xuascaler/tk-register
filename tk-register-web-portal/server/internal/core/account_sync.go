@@ -140,7 +140,7 @@ type AccountPage struct {
 var ErrAccountIdentityChanged = errors.New("account identity changed during collection")
 
 func (s *Store) migrateAccountSync() error {
-	if err := s.DB.AutoMigrate(&SyncedAccount{}, &AccountSnapshot{}, &AccountSyncState{}, &AccountAuthJSONAudit{}, &AccountAuthJSONGenerationAudit{}, &AccountDeletionOperation{}, &DeletedAccount{}); err != nil {
+	if err := s.DB.AutoMigrate(&SyncedAccount{}, &AccountSnapshot{}, &AccountSyncState{}, &AccountAuthJSONAudit{}, &AccountAuthJSONGenerationAudit{}, &AccountDeletionOperation{}, &DeletedAccount{}, &AccountCredential{}); err != nil {
 		return err
 	}
 	if err := s.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&AccountSyncState{ID: 1, Status: "idle"}).Error; err != nil {
