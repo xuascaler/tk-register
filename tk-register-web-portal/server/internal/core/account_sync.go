@@ -547,6 +547,20 @@ func validateSnapshot(v AccountSnapshotValues) error {
 }
 
 func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, expectedIdentity string, values AccountSnapshotValues, at time.Time, timezone string) error {
+	return s.recordAccountSnapshot(ctx, accountID, expectedIdentity, values, at, timezone, nil)
+}
+
+// RecordAccountSnapshotWithInterval saves the interval captured for this
+// collection round. It avoids rereading the same setting for every account;
+// later rounds must capture their own configuration rather than reuse this one.
+func (s *Store) RecordAccountSnapshotWithInterval(ctx context.Context, accountID uint64, expectedIdentity string, values AccountSnapshotValues, at time.Time, timezone string, intervalSeconds int) error {
+	if intervalSeconds < 60 || intervalSeconds > 604800 {
+		return validationErrorf("invalid collection interval")
+	}
+	return s.recordAccountSnapshot(ctx, accountID, expectedIdentity, values, at, timezone, &intervalSeconds)
+}
+
+func (s *Store) recordAccountSnapshot(ctx context.Context, accountID uint64, expectedIdentity string, values AccountSnapshotValues, at time.Time, timezone string, intervalSeconds *int) error {
 	if values.SupplierRecordID != "" && !validSupplierRecordID(values.SupplierRecordID) {
 		return validationErrorf("invalid supplier account ID")
 	}
@@ -585,11 +599,16 @@ func (s *Store) RecordAccountSnapshot(ctx context.Context, accountID uint64, exp
 		}
 		// Store the cadence with the observation so later configuration changes
 		// cannot turn valid historical intervals into apparent collection gaps.
-		var cadence Setting
-		if err := tx.Where(clause.Eq{Column: "key", Value: "account_sync_interval_seconds"}).First(&cadence).Error; err != nil {
-			return err
+		var seconds int
+		if intervalSeconds != nil {
+			seconds = *intervalSeconds
+		} else {
+			var cadence Setting
+			if err := tx.Where(clause.Eq{Column: "key", Value: "account_sync_interval_seconds"}).First(&cadence).Error; err != nil {
+				return err
+			}
+			seconds = Values{"interval": cadence.Value}.Int("interval")
 		}
-		seconds := Values{"interval": cadence.Value}.Int("interval")
 		if seconds < 60 || seconds > 604800 {
 			return validationErrorf("invalid collection interval")
 		}

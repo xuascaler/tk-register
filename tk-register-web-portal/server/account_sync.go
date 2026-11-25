@@ -428,47 +428,6 @@ func savedCollectionError(err error) string {
 	return publicCollectionError(err)
 }
 
-func matchSupplierAccount(target core.SyncedAccount, records []supplier.Account) (*supplier.Account, error) {
-	var matches []int
-	for i := range records {
-		if strings.EqualFold(strings.TrimSpace(records[i].Account), strings.TrimSpace(target.Account)) && records[i].Plan == target.Plan {
-			matches = append(matches, i)
-		}
-	}
-	if len(matches) == 0 {
-		return nil, errors.New("This account was not found in the supplier website. Previously collected data is retained.")
-	}
-	if target.PlatformAccountID != nil && *target.PlatformAccountID != "" {
-		var exact []int
-		for _, i := range matches {
-			if records[i].PlatformAccountID == *target.PlatformAccountID {
-				exact = append(exact, i)
-			}
-		}
-		if len(exact) == 1 {
-			return &records[exact[0]], nil
-		}
-		return nil, errors.New("The platform account ID no longer matches the supplier record. Previously collected data is retained.")
-	}
-	if target.RemoteID != nil {
-		// Historical imports sometimes used the visible platform ID as RemoteID.
-		var exact []int
-		for _, i := range matches {
-			if records[i].ID == *target.RemoteID || records[i].PlatformAccountID == *target.RemoteID {
-				exact = append(exact, i)
-			}
-		}
-		if len(exact) == 1 {
-			return &records[exact[0]], nil
-		}
-		return nil, errors.New("The account ID no longer matches the supplier record. Previously collected data is retained.")
-	}
-	if len(matches) == 1 {
-		return &records[matches[0]], nil
-	}
-	return nil, errors.New("More than one supplier record matches this account. An administrator must check the account identity.")
-}
-
 func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, scheduled bool) (resultErr error) {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
@@ -543,6 +502,8 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		return err
 	}
 	username, password := v.String("account_sync_website_username"), v.String("account_sync_website_password")
+	// Each round uses one configuration snapshot, including its observation cadence.
+	intervalSeconds := v.Int("account_sync_interval_seconds")
 	if username == "" || password == "" {
 		summary.ErrorKind = "configuration"
 		return errSyncNotConfigured
@@ -579,6 +540,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 	saveCtx, saveCancel := context.WithTimeout(context.Background(), saveTimeout)
 	defer saveCancel()
 	at := time.Now().UTC()
+	index := newSupplierAccountIndex(records)
 	failures := 0
 	for _, target := range targets {
 		message := ""
@@ -586,7 +548,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		incomplete := false
 		if collectionErr == nil || partialSafe {
 			var e error
-			record, e = matchSupplierAccount(target, records)
+			record, e = index.match(target)
 			if e != nil {
 				if collectionErr == nil {
 					message = e.Error()
@@ -634,7 +596,7 @@ func (a *app) collectAccounts(parent context.Context, userID, accountID uint64, 
 		if observedAt.IsZero() || observedAt.After(at) {
 			observedAt = at
 		}
-		e := a.store.RecordAccountSnapshot(saveCtx, target.ID, target.IdentityKey, values, observedAt, v.String("account_sync_timezone"))
+		e := a.store.RecordAccountSnapshotWithInterval(saveCtx, target.ID, target.IdentityKey, values, observedAt, v.String("account_sync_timezone"), intervalSeconds)
 		if core.IsValidationError(e) {
 			failures++
 			summary.FailedCount++
