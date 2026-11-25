@@ -16,6 +16,8 @@ func (a *app) memberRoutes(w http.ResponseWriter, r *http.Request, route string)
 		return true
 	}
 	switch r.Method + " " + route {
+	case "POST members/unlink":
+		a.unlinkMember(w, r, user)
 	case "POST members/link-code", "POST members/link":
 		a.linkMember(w, r, user, route == "members/link-code")
 	case "GET members":
@@ -66,7 +68,7 @@ func (a *app) memberRoutes(w http.ResponseWriter, r *http.Request, route string)
 }
 
 func memberLinkPurpose(actor, target *core.User) string {
-	return "member_link:" + strconv.FormatUint(actor.ID, 10) + ":" + strconv.FormatUint(actor.AuthVersion, 10) + ":" + strconv.FormatUint(target.ID, 10) + ":" + strconv.FormatUint(target.AuthVersion, 10)
+	return "member_link:" + strconv.FormatUint(actor.ID, 10) + ":" + strconv.FormatUint(actor.AuthVersion, 10) + ":" + strconv.FormatUint(target.ID, 10) + ":" + strconv.FormatUint(target.AuthVersion, 10) + ":" + strconv.FormatUint(target.MembershipVersion, 10)
 }
 
 func (a *app) linkMember(w http.ResponseWriter, r *http.Request, actor *core.User, send bool) {
@@ -119,10 +121,41 @@ func (a *app) linkMember(w http.ResponseWriter, r *http.Request, actor *core.Use
 		fail(w, 400, "INVALID_CODE", "The verification code is invalid or expired. Request a code for this connection.")
 		return
 	}
-	linked, err := a.store.LinkExistingMember(r.Context(), actor.ID, actor.AuthVersion, target.ID, target.AuthVersion)
+	linked, err := a.store.LinkExistingMember(r.Context(), actor.ID, actor.AuthVersion, target.ID, target.AuthVersion, target.MembershipVersion)
 	if err != nil {
 		vendorFailure(w, err)
 		return
 	}
 	ok(w, map[string]any{"user": linked})
+}
+
+func (a *app) unlinkMember(w http.ResponseWriter, r *http.Request, actor *core.User) {
+	var input struct {
+		MemberID          string `json:"member_id"`
+		MembershipVersion string `json:"membership_version"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	id, idErr := core.ParseBusinessID(input.MemberID)
+	version, versionErr := strconv.ParseUint(input.MembershipVersion, 10, 64)
+	if idErr != nil || versionErr != nil || strconv.FormatUint(version, 10) != input.MembershipVersion {
+		fail(w, 400, "INVALID_REQUEST", "Choose a direct member from the current member list.")
+		return
+	}
+	retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "member-unlink:" + strconv.FormatUint(actor.ID, 10)}, 10, 60).Int()
+	if err != nil {
+		internal(w)
+		return
+	}
+	if retry > 0 {
+		rateFailure(w, retry)
+		return
+	}
+	removed, err := a.store.UnlinkMember(r.Context(), actor.ID, actor.AuthVersion, id, version)
+	if err != nil {
+		vendorFailure(w, err)
+		return
+	}
+	ok(w, map[string]any{"user": removed})
 }

@@ -31,6 +31,11 @@ func (a *app) processOverviewSummaries(parent context.Context) error {
 		return err
 	}
 	defer a.releaseDeletionLease(key, token)
+	// One bounded refresh per pass keeps membership changes responsive without
+	// starving the daily batch. Both paths share the cross-replica publication gate.
+	if err := a.processMemberOverviewRefresh(parent); err != nil {
+		log.Printf("tk-register overview_refresh event=failed reason=%s", overviewFailureReason(err))
+	}
 	var job core.DailyUsageJob
 	err = a.store.DB.WithContext(parent).Where("status = ? AND overview_state = ?", "succeeded", "pending").Order("usage_date ASC, id ASC").First(&job).Error
 	if errors.Is(err, core.ErrNotFound) {
@@ -109,6 +114,38 @@ func (a *app) processOverviewSummaries(parent context.Context) error {
 		log.Printf("tk-register overview_summary event=finished job_id=%d generated=%d failed=%d duration_ms=%d", job.ID, generated, failed, time.Since(now).Milliseconds())
 	}
 	return err
+}
+
+func (a *app) processMemberOverviewRefresh(parent context.Context) error {
+	var request core.OverviewRefreshRequest
+	now := time.Now().UTC()
+	err := a.store.DB.WithContext(parent).Where("retry_after <= ?", now).Order("requested_at ASC, user_id ASC").First(&request).Error
+	if errors.Is(err, core.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	ctx, stop := context.WithTimeout(parent, 90*time.Second)
+	defer stop()
+	zone := time.FixedZone("Asia/Shanghai", 8*60*60)
+	date := now.In(zone).AddDate(0, 0, -1).Format("2006-01-02")
+	batch := fmt.Sprintf("member-%d-%d", request.UserID, request.VisibilityVersion)
+	err = a.store.BuildOverviewSummaries(ctx, request.UserID, false, date, batch, now)
+	if err != nil {
+		// Preserve the request across restarts, but do not overwrite a newer
+		// relationship change or spin on a failed rebuild.
+		save, cancel := context.WithTimeout(parent, 5*time.Second)
+		defer cancel()
+		if updateErr := a.store.DB.WithContext(save).Model(&core.OverviewRefreshRequest{}).
+			Where("user_id = ? AND visibility_version = ?", request.UserID, request.VisibilityVersion).
+			Update("retry_after", time.Now().UTC().Add(time.Minute)).Error; updateErr != nil {
+			return updateErr
+		}
+		return err
+	}
+	log.Printf("tk-register overview_refresh event=finished user_id=%d", request.UserID)
+	return nil
 }
 
 func (a *app) runOverviewSummaries(ctx context.Context) {

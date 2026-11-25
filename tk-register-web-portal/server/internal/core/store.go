@@ -28,18 +28,20 @@ import (
 var ErrNotFound = gorm.ErrRecordNotFound
 
 type User struct {
-	ParentUserID    *uint64   `gorm:"index" json:"-"`
-	ParentUser      *User     `gorm:"foreignKey:ParentUserID;constraint:OnDelete:RESTRICT" json:"-"`
-	ID              uint64    `gorm:"primaryKey" json:"id"`
-	Email           string    `gorm:"size:50;not null;uniqueIndex" json:"email"`
-	Role            string    `gorm:"size:16;not null" json:"role"`
-	IsSuperAdmin    bool      `gorm:"not null;default:false" json:"is_super_admin"`
-	Status          string    `gorm:"size:16;not null" json:"status"`
-	AuthVersion     uint64    `gorm:"not null;default:0" json:"-"`
-	PasswordHash    string    `gorm:"size:255;not null" json:"-"`
-	EmailVerifiedAt time.Time `json:"email_verified_at"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ParentUserID      *uint64   `gorm:"index" json:"-"`
+	ParentUser        *User     `gorm:"foreignKey:ParentUserID;constraint:OnDelete:RESTRICT" json:"-"`
+	ID                uint64    `gorm:"primaryKey" json:"id"`
+	Email             string    `gorm:"size:50;not null;uniqueIndex" json:"email"`
+	Role              string    `gorm:"size:16;not null" json:"role"`
+	IsSuperAdmin      bool      `gorm:"not null;default:false" json:"is_super_admin"`
+	Status            string    `gorm:"size:16;not null" json:"status"`
+	AuthVersion       uint64    `gorm:"not null;default:0" json:"-"`
+	MembershipVersion uint64    `gorm:"not null;default:0" json:"-"`
+	VisibilityVersion uint64    `gorm:"not null;default:0" json:"-"`
+	PasswordHash      string    `gorm:"size:255;not null" json:"-"`
+	EmailVerifiedAt   time.Time `json:"email_verified_at"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type Setting struct {

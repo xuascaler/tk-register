@@ -6,6 +6,37 @@
 .members-heading .subtitle { margin:0; font-size:14px; }
 .members-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; flex-shrink:0; }
 .members-actions .button { white-space:nowrap; }
+.members-actions .member-remove-trigger { color:var(--red); background:#fff; border-color:#eabcc1; }
+.members-actions .member-remove-trigger:hover:not(:disabled) { background:#fff4f5; }
+.member-remove-dialog .member-remove-confirm { color:#fff; background:var(--red); border-color:var(--red); }
+.member-remove-dialog .member-remove-confirm:hover:not(:disabled) { background:#a3323b; }
+.member-remove-fields { gap:22px; }
+.member-remove-picker { border:1px solid var(--field); border-radius:7px; overflow:hidden; }
+.member-remove-picker .usage-search { border:0; border-bottom:1px solid var(--border); border-radius:0; margin:0; }
+.member-remove-picker .usage-search:focus-within { outline:none; box-shadow:inset 0 0 0 2px #b4cce9; }
+.member-remove-options { padding:5px; max-height:280px; overflow-y:auto; }
+.member-remove-option { display:flex; align-items:center; gap:11px; padding:11px 9px; min-height:61px; border-radius:5px; cursor:pointer; }
+.member-remove-option:hover,.member-remove-option:focus-within { background:#f0f5fc; }
+.workspace .member-remove-option input { appearance:auto; width:16px; height:16px; min-height:0; flex-shrink:0; margin:0; padding:0; accent-color:var(--navy); }
+.member-remove-option>span { min-width:0; overflow-wrap:anywhere; }
+.member-remove-option strong { display:block; font-size:13px; font-weight:500; }
+.member-remove-option small { display:block; font-size:12px; color:#75869c; margin-top:3px; }
+.member-remove-empty { padding:20px; text-align:center; color:var(--muted); font-size:13px; }
+.member-remove-empty .button { margin-top:12px; }
+.member-remove-pagination { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; border-top:1px solid var(--border); font-size:12px; color:var(--muted); }
+.member-remove-pagination>div { display:flex; gap:8px; }
+.member-remove-pagination .button { min-height:34px; padding:7px; }
+.member-remove-selected { display:flex; align-items:center; gap:11px; padding:13px; border:1px solid #cbdcf1; background:#f8faff; border-radius:7px; }
+.member-remove-avatar { width:36px; height:36px; background:var(--pale); border:1px solid #dce7f5; border-radius:6px; color:var(--navy); display:grid; place-items:center; flex-shrink:0; }
+.member-remove-selected>div { flex:1; min-width:0; overflow-wrap:anywhere; }
+.member-remove-selected strong { display:block; font-size:14px; font-weight:500; }
+.member-remove-selected span:not(.member-remove-avatar) { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+.member-remove-selected .admin-dialog-close { flex-shrink:0; }
+.member-remove-impact { display:grid; gap:15px; border-top:1px solid var(--border); padding-top:20px; }
+.member-remove-impact h3 { margin:0; font-size:13px; color:#40546b; font-weight:500; }
+.member-remove-impact>div { display:flex; align-items:flex-start; gap:10px; }
+.member-remove-impact svg { width:16px; height:16px; color:#7c8da3; margin-top:3px; }
+.member-remove-impact p { font-size:13px; line-height:1.7; color:var(--muted); }
 .member-link-dialog { width:min(560px,calc(100vw - 32px)); }
 .member-link-fields { gap:23px; }
 .member-link-details { display:grid; gap:14px; border-top:1px solid var(--border); padding-top:20px; }
@@ -64,6 +95,14 @@
   .members-heading { align-items:flex-start; gap:18px; }
   .members-actions { width:100%; justify-content:flex-start; }
   .members-actions .button { flex:1; }
+  .members-actions { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:9px; }
+  .members-heading .members-actions .button { min-width:0; white-space:normal; }
+  .members-actions .button:first-child { grid-column:1/-1; justify-self:start; }
+  .member-remove-selected { gap:8px; padding:10px; }
+  .member-remove-selected strong { font-size:13px; }
+  .member-remove-avatar { display:none; }
+  .member-remove-dialog .admin-create-actions { padding:16px 20px; }
+  .member-remove-dialog .admin-create-actions .button { padding:10px 12px; white-space:normal; }
   .member-link-dialog .code-row { grid-template-columns:minmax(0,1fr) auto; }
   .member-link-dialog .code-row .button { padding:8px 12px; font-size:12px; }
   .member-link-relationship { flex-direction:column; align-items:stretch; }

@@ -37,6 +37,7 @@ type OverviewDay struct {
 type AccountsOverview struct {
 	UsageBillTotals
 	SummaryAvailable   *bool               `json:"summary_available,omitempty"`
+	SummaryRefreshing  bool                `json:"summary_refreshing,omitempty"`
 	SummaryGeneratedAt *time.Time          `json:"summary_generated_at,omitempty"`
 	SummaryPeriod      string              `json:"summary_period,omitempty"`
 	StartDate          string              `json:"start_date"`

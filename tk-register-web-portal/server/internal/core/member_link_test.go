@@ -3,10 +3,13 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func linkRoot(t *testing.T, s *Store, email string) User {
@@ -33,7 +36,7 @@ func TestLinkExistingSubtreePreservesOwnershipAndSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, target.ID, target.AuthVersion); err != nil {
+	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, target.ID, target.AuthVersion, target.MembershipVersion); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -88,22 +91,29 @@ func TestMemberLinkRejectsInvalidRelationshipsAndRollsBack(t *testing.T) {
 		from, to User
 		version  uint64
 	}{{actor, actor, actor.AuthVersion}, {actor, a, a.AuthVersion + 1}, {actor, child, child.AuthVersion}, {child, a, a.AuthVersion}} {
-		if _, err := s.LinkExistingMember(ctx, tc.from.ID, tc.from.AuthVersion, tc.to.ID, tc.version); err == nil {
+		if _, err := s.LinkExistingMember(ctx, tc.from.ID, tc.from.AuthVersion, tc.to.ID, tc.version, tc.to.MembershipVersion); err == nil {
 			t.Fatal("invalid relationship accepted")
 		}
 	}
 	s.DB.Model(&b).Update("role", "admin")
-	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, b.ID, b.AuthVersion); err == nil {
+	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, b.ID, b.AuthVersion, b.MembershipVersion); err == nil {
 		t.Fatal("admin attached")
 	}
 	s.DB.Model(&b).Updates(map[string]any{"role": "member", "status": "disabled"})
-	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, b.ID, b.AuthVersion); err == nil {
+	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, b.ID, b.AuthVersion, b.MembershipVersion); err == nil {
 		t.Fatal("disabled attached")
 	}
 	// Force audit failure after closure insertion; parent and all new edges roll back.
-	s.DB.Create(&MemberLinkAudit{ActorID: actor.ID, TargetID: a.ID})
-	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, a.ID, a.AuthVersion); err == nil {
-		t.Fatal("expected audit conflict")
+	if err := s.DB.Callback().Create().Before("gorm:create").Register("test:fail_member_audit", func(tx *gorm.DB) {
+		if tx.Statement.Table == "member_link_audits" {
+			tx.AddError(errors.New("audit unavailable"))
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.DB.Callback().Create().Remove("test:fail_member_audit")
+	if _, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, a.ID, a.AuthVersion, a.MembershipVersion); err == nil {
+		t.Fatal("expected audit failure")
 	}
 	saved, _ := s.GetUserByID(ctx, a.ID)
 	if saved.ParentUserID != nil {
@@ -136,7 +146,7 @@ func TestMemberLinkConcurrentClaimsAndCycle(t *testing.T) {
 				go func(pair [2]User) {
 					defer wg.Done()
 					<-start
-					_, err := s.LinkExistingMember(ctx, pair[0].ID, pair[0].AuthVersion, pair[1].ID, pair[1].AuthVersion)
+					_, err := s.LinkExistingMember(ctx, pair[0].ID, pair[0].AuthVersion, pair[1].ID, pair[1].AuthVersion, pair[1].MembershipVersion)
 					errs <- err
 				}(pair)
 			}
@@ -165,7 +175,7 @@ func TestMemberLinkConcurrentChildCreation(t *testing.T) {
 	errs := make(chan error, 2)
 	go func() {
 		<-start
-		_, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, target.ID, target.AuthVersion)
+		_, err := s.LinkExistingMember(ctx, actor.ID, actor.AuthVersion, target.ID, target.AuthVersion, target.MembershipVersion)
 		errs <- err
 	}()
 	go func() { <-start; errs <- s.CreateMemberByUser(ctx, target.ID, target.AuthVersion, &child) }()

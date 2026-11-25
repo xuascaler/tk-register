@@ -16,7 +16,7 @@ func TestDailyUsageEndpointHonorsOwnerHierarchyAdminAndBounds(t *testing.T) {
 	a, owner, cookie, _, rows, _ := setupPageSync(t)
 	_, other, _ := vendorSession(t, a, "other-daily@example.com", "member")
 	parent, parentCookie, _ := vendorSession(t, a, "parent-daily@example.com", "member")
-	if _, err := a.store.LinkExistingMember(context.Background(), parent.ID, parent.AuthVersion, owner.ID, owner.AuthVersion); err != nil {
+	if _, err := a.store.LinkExistingMember(context.Background(), parent.ID, parent.AuthVersion, owner.ID, owner.AuthVersion, owner.MembershipVersion); err != nil {
 		t.Fatal(err)
 	}
 	_, adminCookie, _ := vendorSession(t, a, "daily-admin@example.com", "admin")

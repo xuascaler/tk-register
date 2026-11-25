@@ -10,7 +10,7 @@ export function overviewQuery(sources: string, period: OverviewRangeSelection, r
 }
 export type OverviewSource = { id: string; label: string; total: number; statuses: Record<string, number>; cost_usd: number | null; cost_known: number; collected_days: number };
 export type OverviewData = ModelUsageLedger & {
-  summary_available?: boolean; summary_generated_at?: string | null; summary_period?: string;
+  summary_available?: boolean; summary_refreshing?: boolean; summary_generated_at?: string | null; summary_period?: string;
   start_date: string; end_date: string; earliest_date: string | null; timezone: string; collection_time: string;
   exchange_rate_cny_per_usd: number; latest_account_data: string | null;
   model_costs_enabled?: boolean; daily_totals?: DailyTotal[];

@@ -15,7 +15,10 @@ export function MemberScopeProvider({ children, endpoint = '/members/sources' }:
   useEffect(() => {
     const abort = new AbortController(); setLoading(true); setError('');
     request<{ sources: AccountSource[] }>(endpoint, { signal: abort.signal })
-      .then(result => { if (!abort.signal.aborted) setSources(result.sources); })
+      .then(result => { if (!abort.signal.aborted) {
+        setSources(result.sources);
+        setSelection(previous => previous === 'all' || previous === 'none' || previous.split(',').every(id => result.sources.some(source => source.id === id)) ? previous : 'all');
+      } })
       .catch(cause => { if (!abort.signal.aborted) setError(errorMessage(cause)); })
       .finally(() => { if (!abort.signal.aborted) setLoading(false); });
     return () => abort.abort();

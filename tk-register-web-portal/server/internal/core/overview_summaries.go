@@ -19,7 +19,7 @@ import (
 
 // A successful daily collection publishes all four ranges together for a user
 // and view. These rows intentionally freeze ownership and account observations
-// until the next scheduled build; request handlers must never rebuild them.
+// until the next scheduled build or membership refresh; request handlers never rebuild them.
 type OverviewSummary struct {
 	ID       uint64 `gorm:"primaryKey"`
 	UserID   uint64 `gorm:"not null;uniqueIndex:idx_overview_user_view_period,priority:1"`
@@ -43,13 +43,14 @@ const modifiedOverviewTable = "overview_summaries_modified"
 func (OverviewSummaryModified) TableName() string { return modifiedOverviewTable }
 
 type OverviewSummaryData struct {
-	StartDate    string    `gorm:"size:10;not null"`
-	EndDate      string    `gorm:"size:10;not null"`
-	Timezone     string    `gorm:"size:64;not null"`
-	PayloadJSON  string    `gorm:"type:longtext;not null"`
-	BatchID      string    `gorm:"size:64;not null"`
-	GeneratedAt  time.Time `gorm:"not null"`
-	AccountsAsOf time.Time `gorm:"not null"`
+	VisibilityVersion uint64    `gorm:"not null;default:0"`
+	StartDate         string    `gorm:"size:10;not null"`
+	EndDate           string    `gorm:"size:10;not null"`
+	Timezone          string    `gorm:"size:64;not null"`
+	PayloadJSON       string    `gorm:"type:longtext;not null"`
+	BatchID           string    `gorm:"size:64;not null"`
+	GeneratedAt       time.Time `gorm:"not null"`
+	AccountsAsOf      time.Time `gorm:"not null"`
 }
 
 var overviewSummaryPeriods = []string{"day", "week", "month", "all_time"}
@@ -394,14 +395,16 @@ func periodModelUsage(usage map[overviewSummaryUsageKey]*overviewExactUsage, sta
 }
 
 // OverviewSummaryClaim fences publication against an expired daily-worker lease.
-// The optional form permits deterministic offline rebuild tests; production
-// workers always supply the claim returned by ClaimOverviewSummaryJob.
+// Daily workers supply their job claim. Local membership refreshes have no daily
+// job; they use the shared worker gate and the viewer visibility version instead.
 type OverviewSummaryClaim struct {
 	JobID uint64
 	Token string
 }
 
-// BuildOverviewSummaries is called only by the daily-collection worker. A
+var ErrOverviewVisibilityChanged = errors.New("overview visibility changed during generation")
+
+// BuildOverviewSummaries is called by daily collection or membership refresh workers. A
 // failed build or cancelled context preserves the previous four-row batch.
 func (s *Store) BuildOverviewSummaries(ctx context.Context, viewerID uint64, administrative bool, usageDate, batchID string, now time.Time, claims ...OverviewSummaryClaim) error {
 	started := time.Now()
@@ -457,8 +460,11 @@ func (s *Store) BuildOverviewSummaries(ctx context.Context, viewerID uint64, adm
 		// Serialize publication for this user, including the first four inserts.
 		// A late recovery job can never replace a newer successful daily batch.
 		var user User
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "role", "is_super_admin").First(&user, viewerID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "role", "is_super_admin", "visibility_version").First(&user, viewerID).Error; err != nil {
 			return err
+		}
+		if !administrative && user.VisibilityVersion != modifiedRecords[0].VisibilityVersion {
+			return ErrOverviewVisibilityChanged
 		}
 		tables := []string{modifiedOverviewTable}
 		mayPublishRaw := user.Role == "admin" && user.IsSuperAdmin && len(rawRecords) > 0
@@ -478,7 +484,12 @@ func (s *Store) BuildOverviewSummaries(ctx context.Context, viewerID uint64, adm
 			return err
 		}
 		if mayPublishRaw {
-			return publishOverviewRecords(tx, "overview_summaries", rawRecords, publishedAt)
+			if err := publishOverviewRecords(tx, "overview_summaries", rawRecords, publishedAt); err != nil {
+				return err
+			}
+		}
+		if !administrative {
+			return tx.Where("user_id = ? AND visibility_version = ?", viewerID, user.VisibilityVersion).Delete(&OverviewRefreshRequest{}).Error
 		}
 		return nil
 	})
@@ -492,6 +503,12 @@ func (s *Store) summaryScope(ctx context.Context, viewerID uint64, administrativ
 }
 
 func (s *Store) prepareSummaryRecords(ctx context.Context, scope overviewScope, viewerID uint64, view, source, usageDate, batch string, at time.Time) ([]OverviewSummary, error) {
+	var viewer User
+	if view == overviewViewType(false) {
+		if err := s.DB.WithContext(ctx).Select("id", "visibility_version").First(&viewer, viewerID).Error; err != nil {
+			return nil, err
+		}
+	}
 	input, err := s.loadOverviewSummaryInput(ctx, scope, usageDate, source)
 	if err != nil {
 		return nil, err
@@ -517,7 +534,7 @@ func (s *Store) prepareSummaryRecords(ctx context.Context, scope overviewScope, 
 			return nil, err
 		}
 		records = append(records, OverviewSummary{UserID: viewerID, ViewType: view, Period: period, OverviewSummaryData: OverviewSummaryData{
-			StartDate: start, EndDate: usageDate, Timezone: "Asia/Shanghai", PayloadJSON: string(encoded), BatchID: batch, AccountsAsOf: at.UTC(),
+			StartDate: start, EndDate: usageDate, Timezone: "Asia/Shanghai", PayloadJSON: string(encoded), BatchID: batch, AccountsAsOf: at.UTC(), VisibilityVersion: viewer.VisibilityVersion,
 		}})
 	}
 	return records, nil
@@ -527,7 +544,7 @@ func publishOverviewRecords(tx *gorm.DB, table string, records []OverviewSummary
 	for i := range records {
 		records[i].GeneratedAt = publishedAt.UTC()
 	}
-	return tx.Table(table).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "view_type"}, {Name: "period"}}, DoUpdates: clause.AssignmentColumns([]string{"start_date", "end_date", "timezone", "payload_json", "batch_id", "generated_at", "accounts_as_of"})}).Omit("User").Create(&records).Error
+	return tx.Table(table).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "user_id"}, {Name: "view_type"}, {Name: "period"}}, DoUpdates: clause.AssignmentColumns([]string{"start_date", "end_date", "timezone", "payload_json", "batch_id", "generated_at", "accounts_as_of", "visibility_version"})}).Omit("User").Create(&records).Error
 }
 
 func overviewUSD(value string, rate float64) (float64, error) {
@@ -554,14 +571,26 @@ func (s *Store) ReadOverviewSummary(ctx context.Context, viewerID uint64, admini
 		return out, err
 	}
 	var saved OverviewSummary
-	query := s.DB.WithContext(ctx).Where("user_id = ? AND view_type = ? AND period = ?", viewerID, overviewViewType(administrative), period)
+	table := "overview_summaries"
 	if out.ModelUsageSource == "modified" {
-		query = query.Table(modifiedOverviewTable)
-	} else {
+		table = modifiedOverviewTable
+	}
+	query := s.DB.WithContext(ctx).Table(table).Where("user_id = ? AND view_type = ? AND period = ?", viewerID, overviewViewType(administrative), period)
+	if out.ModelUsageSource != "modified" {
 		query = query.Where("EXISTS (SELECT 1 FROM users WHERE users.id = ? AND users.role = ? AND users.is_super_admin = ?)", viewerID, "admin", true)
+	}
+	if !administrative {
+		query = query.Where("EXISTS (SELECT 1 FROM users WHERE users.id = ? AND users.visibility_version = "+table+".visibility_version)", viewerID)
 	}
 	err = query.First(&saved).Error
 	if errors.Is(err, ErrNotFound) {
+		if !administrative {
+			var count int64
+			if err := s.DB.WithContext(ctx).Model(&OverviewRefreshRequest{}).Where("user_id = ?", viewerID).Count(&count).Error; err != nil {
+				return out, err
+			}
+			out.SummaryRefreshing = count > 0
+		}
 		return out, nil
 	}
 	if err != nil {

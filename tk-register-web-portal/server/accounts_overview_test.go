@@ -16,7 +16,7 @@ func TestAccountsOverviewSessionAndReadOnlyScope(t *testing.T) {
 	a, owner, cookie, csrf, _, fake := setupPageSync(t)
 	parent, parentCookie, _ := vendorSession(t, a, "overview-parent@example.com", "member")
 	stranger, strangerCookie, _ := vendorSession(t, a, "overview-stranger@example.com", "member")
-	if _, err := a.store.LinkExistingMember(context.Background(), parent.ID, parent.AuthVersion, owner.ID, owner.AuthVersion); err != nil {
+	if _, err := a.store.LinkExistingMember(context.Background(), parent.ID, parent.AuthVersion, owner.ID, owner.AuthVersion, owner.MembershipVersion); err != nil {
 		t.Fatal(err)
 	}
 	requireStatus(t, request(t, a, "GET", "accounts/overview", nil, nil, ""), 401)

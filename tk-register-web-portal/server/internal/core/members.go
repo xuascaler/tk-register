@@ -12,7 +12,7 @@ import (
 
 // A closure row records one ancestor's visibility of one user. SourceUserID is
 // the immediate child on that path, not the descendant who owns the account.
-// Self rows have depth zero and a NULL source. Parentage is immutable once assigned.
+// Self rows have depth zero and a NULL source. Mutations share the user access guard.
 type UserHierarchy struct {
 	AncestorUserID   uint64  `gorm:"primaryKey;autoIncrement:false;index:idx_hierarchy_source,priority:1"`
 	AncestorUser     User    `gorm:"foreignKey:AncestorUserID;constraint:OnDelete:RESTRICT"`
@@ -26,8 +26,15 @@ type UserHierarchy struct {
 func (UserHierarchy) TableName() string { return "user_hierarchy" }
 
 func (s *Store) migrateMembers() error {
-	if err := s.DB.AutoMigrate(&UserHierarchy{}, &MemberLinkAudit{}); err != nil {
+	if err := s.DB.AutoMigrate(&UserHierarchy{}, &MemberLinkAudit{}, &OverviewRefreshRequest{}); err != nil {
 		return err
+	}
+	// Keep the new non-unique index (including for the foreign key) before
+	// dropping the old once-per-target audit constraint. History survives relinks.
+	if s.DB.Migrator().HasIndex(&MemberLinkAudit{}, "idx_member_link_audits_target_id") {
+		if err := s.DB.Migrator().DropIndex(&MemberLinkAudit{}, "idx_member_link_audits_target_id"); err != nil {
+			return err
+		}
 	}
 	// Existing users become independent roots. Do not infer a parent from an
 	// administrator, registration IP, shared vendor, or previous account transfer.
@@ -51,9 +58,13 @@ func (s *Store) CreateMemberByUser(ctx context.Context, actorID, actorVersion ui
 		user.Role, user.Status = "member", "active"
 		parent := actor.ID
 		user.ParentUserID = &parent
+		user.MembershipVersion = 1
 		scoped := *s
 		scoped.DB = tx
-		return scoped.createHierarchyUser(ctx, user)
+		if err := scoped.createHierarchyUser(ctx, user); err != nil {
+			return err
+		}
+		return invalidateMemberVisibility(tx, actor.ID)
 	})
 }
 
@@ -77,8 +88,9 @@ type MemberLinkAudit struct {
 	ID        uint64 `gorm:"primaryKey"`
 	ActorID   uint64 `gorm:"not null;index"`
 	Actor     User   `gorm:"foreignKey:ActorID;constraint:OnDelete:RESTRICT"`
-	TargetID  uint64 `gorm:"not null;uniqueIndex"`
+	TargetID  uint64 `gorm:"not null;index:idx_member_link_target"`
 	Target    User   `gorm:"foreignKey:TargetID;constraint:OnDelete:RESTRICT"`
+	Action    string `gorm:"size:16;not null;default:link"`
 	CreatedAt time.Time
 }
 
@@ -117,8 +129,8 @@ func (s *Store) MemberLinkTarget(ctx context.Context, actorID uint64, email stri
 }
 
 // The caller must first consume a dedicated code bound to both users and their
-// auth versions. Revalidate eligibility inside the same transaction as the link.
-func (s *Store) LinkExistingMember(ctx context.Context, actorID, actorVersion, targetID, targetVersion uint64) (AdminUser, error) {
+// auth versions and the target membership version. Revalidate inside the link transaction.
+func (s *Store) LinkExistingMember(ctx context.Context, actorID, actorVersion, targetID, targetVersion, membershipVersion uint64) (AdminUser, error) {
 	var out AdminUser
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := lockUserAccess(tx); err != nil {
@@ -134,7 +146,7 @@ func (s *Store) LinkExistingMember(ctx context.Context, actorID, actorVersion, t
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&candidate, targetID).Error; err != nil {
 			return err
 		}
-		if candidate.AuthVersion != targetVersion {
+		if candidate.AuthVersion != targetVersion || candidate.MembershipVersion != membershipVersion {
 			return vendorError(409, "MEMBER_CHANGED", "This user's access changed. Request a new verification code.")
 		}
 		target, err := linkTarget(tx, actorID, candidate.Email)
@@ -151,7 +163,8 @@ func (s *Store) LinkExistingMember(ctx context.Context, actorID, actorVersion, t
 		if len(ancestors) == 0 || len(descendants) == 0 {
 			return errors.New("user hierarchy is unavailable")
 		}
-		result := tx.Model(&User{}).Where("id = ? AND parent_user_id IS NULL", target.ID).Update("parent_user_id", actorID)
+		result := tx.Model(&User{}).Where("id = ? AND parent_user_id IS NULL AND membership_version = ?", target.ID, membershipVersion).
+			Updates(map[string]any{"parent_user_id": actorID, "membership_version": gorm.Expr("membership_version + 1")})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -188,7 +201,10 @@ func (s *Store) LinkExistingMember(ctx context.Context, actorID, actorVersion, t
 		if err := flush(); err != nil {
 			return err
 		}
-		if err := tx.Omit("Actor", "Target").Create(&MemberLinkAudit{ActorID: actorID, TargetID: target.ID}).Error; err != nil {
+		if err := tx.Omit("Actor", "Target").Create(&MemberLinkAudit{ActorID: actorID, TargetID: target.ID, Action: "link"}).Error; err != nil {
+			return err
+		}
+		if err := invalidateMemberVisibility(tx, actor.ID); err != nil {
 			return err
 		}
 		out = adminUser(*target)
@@ -202,11 +218,12 @@ type AccountSource struct {
 	Label string `json:"label"`
 }
 type DirectMember struct {
-	ID              string    `json:"id"`
-	Email           string    `json:"email"`
-	Status          string    `json:"status"`
-	CreatedAt       time.Time `json:"created_at"`
-	VisibleAccounts int64     `json:"visible_accounts"`
+	ID                string    `json:"id"`
+	Email             string    `json:"email"`
+	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"created_at"`
+	VisibleAccounts   int64     `json:"visible_accounts"`
+	MembershipVersion string    `json:"membership_version"`
 }
 type DirectMemberPage struct {
 	Items    []DirectMember `json:"items"`
@@ -237,7 +254,7 @@ func (s *Store) DirectMembers(ctx context.Context, viewerID uint64, page int, se
 		if err := s.DB.WithContext(ctx).Model(&SyncedAccount{}).Where("deleted_at IS NULL AND user_id IN (?)", owners).Count(&count).Error; err != nil {
 			return out, err
 		}
-		out.Items = append(out.Items, DirectMember{ID: idString(u.ID), Email: u.Email, Status: u.Status, CreatedAt: u.CreatedAt.UTC(), VisibleAccounts: count})
+		out.Items = append(out.Items, DirectMember{ID: idString(u.ID), Email: u.Email, Status: u.Status, CreatedAt: u.CreatedAt.UTC(), VisibleAccounts: count, MembershipVersion: idString(u.MembershipVersion)})
 	}
 	return out, nil
 }

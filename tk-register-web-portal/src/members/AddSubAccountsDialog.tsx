@@ -97,8 +97,8 @@ export default function AddSubAccountsDialog({ currentEmail, directEmails, deadl
 
   return <dialog ref={dialog} className='admin-create-dialog member-link-dialog' aria-labelledby='member-link-title' aria-describedby='member-link-description' onCancel={event => { event.preventDefault(); close(); }}>
     <header className='admin-create-heading'>
-      <div><h2 id='member-link-title'>{t("Add sub accounts")}</h2><p id='member-link-description'>{t("Connect an existing TK Register user as your direct member.")}</p></div>
-      <button type='button' className='admin-dialog-close' aria-label={t("Close add sub accounts")} disabled={busy} onClick={close}><X aria-hidden='true' /></button>
+      <div><h2 id='member-link-title'>{t("Add sub account")}</h2><p id='member-link-description'>{t("Connect an existing TK Register user as your direct member.")}</p></div>
+      <button type='button' className='admin-dialog-close' aria-label={t("Close add sub account")} disabled={busy} onClick={close}><X aria-hidden='true' /></button>
     </header>
     <form onSubmit={link} noValidate aria-busy={busy}>
       <div className='admin-create-fields member-link-fields'>

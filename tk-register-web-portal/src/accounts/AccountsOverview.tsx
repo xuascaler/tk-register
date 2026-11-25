@@ -34,6 +34,11 @@ export default function AccountsOverview({ admin = false, raw = false }: { admin
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [admin, raw, scope.selection, period, range.start, range.end, attempt]);
+  useEffect(() => {
+    if (!data?.summary_refreshing) return;
+    const timer = window.setTimeout(() => setAttempt(value => value + 1), 10000);
+    return () => window.clearTimeout(timer);
+  }, [data?.summary_refreshing, attempt]);
   const modelCostsEnabled = admin || data?.model_costs_enabled === true;
   const visibleTable = modelCostsEnabled ? table : 'status';
   const summaryUnavailable = data?.summary_available === false;
@@ -73,6 +78,7 @@ export default function AccountsOverview({ admin = false, raw = false }: { admin
     <ErrorNotice>{error}</ErrorNotice>{error && <button className='button pale' onClick={() => setAttempt(n => n + 1)}>{t('Try again')}</button>}
     {loading ? <Loading label={t('Loading overview…')} /> : data && <>
       <p className='overview-updated'>{savedSummary ? t('Summary generated') : t('Saved account data')} · {summaryUnavailable ? <span className='overview-unavailable'>—</span> : formatTime(savedSummary ? data.summary_generated_at || null : data.latest_account_data, undefined, true)}</p>
+      {data.summary_refreshing && <p className='daily-data-notice' role='status'>{t('Overview is updating after a membership change.')}</p>}
       {scope.selection === 'none' && <p className='daily-data-notice'>{admin ? t('Select one or more sources to view accounts.') : t('Select one or more sources to view your accounts.')}</p>}
       <section className='overview-summary' aria-labelledby='overview-summary-heading'>
         <h2 id='overview-summary-heading' className='sr-only'>{t('Account summary')}</h2>

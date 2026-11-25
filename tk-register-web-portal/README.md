@@ -354,7 +354,7 @@ new user's normalized email is their username, their role is always `member`,
 and an existing user cannot be attached to a creator through this workflow.
 Administrator creation in Config → Users continues to create independent users.
 
-`users.parent_user_id` records the direct parent, immutable once assigned. The `user_hierarchy`
+`users.parent_user_id` records the direct parent. Only the member link/unlink workflows change it. The `user_hierarchy`
 closure table records `(ancestor_user_id, descendant_user_id, source_user_id,
 depth)`, with foreign keys to `users.id`. Every user has a self row (depth zero,
 NULL source). The source of a deeper descendant is the ancestor's immediate child
@@ -395,11 +395,11 @@ real emails are needed for the browser test.
 
 ### Link an existing user
 
-**Account settings → Members → Add sub accounts** links an existing active,
+**Account settings → Members → Add sub account** links an existing active,
 verified member. The target receives an approval code naming the requesting
 parent and describing recursive account visibility. No password is requested.
 Codes are single-use, isolated from login/registration, and bound to both user
-IDs and authentication versions. TTL, resend cooldown, email/IP limits and maximum
+IDs, authentication versions and the target's membership version. TTL, resend cooldown, email/IP limits and maximum
 verification attempts reuse the existing verification settings.
 
 - `POST /members/link-code`: `{ "email": "existing@example.com" }`; returns
@@ -415,8 +415,9 @@ endpoint. Every request rechecks eligibility and never accepts a client parent I
 
 One transaction updates `users.parent_user_id`, extends `user_hierarchy` from all
 parent ancestors to all target descendants, and inserts `member_link_audits`.
-Its `actor_id` and unique `target_id` reference `users.id`; `created_at` records
-when consent was applied. It stores no password/code. Hierarchy mutations and
+Its `actor_id` and non-unique `target_id` reference `users.id`; `action` records
+`link` or `unlink` and `created_at` records when it happened. Startup replaces the
+legacy unique target index while preserving history. It stores no password/code. Hierarchy mutations and
 role changes share the existing `admin_role_guards` singleton transaction lock,
 acquired before user rows. Member creation takes the same lock, preventing lost
 closure edges during concurrent subtree links. Network/SMTP calls occur outside
@@ -425,3 +426,37 @@ the transaction. Source labels expose only the viewer's immediate child.
 No account ownership, submissions, snapshots, tokens or login sessions are moved.
 Descendant access remains view/manual-Sync only; edit/delete and Bearer APIs keep
 their owner/admin checks. The browser refreshes members and Source after success.
+
+### Remove a direct member
+
+**Del sub account** opens a searchable, paginated direct-member picker and an
+impact confirmation. This disconnects the member without deleting their user,
+accounts or data. Their own descendants, credentials and login sessions remain intact.
+The former parent and all its ancestors lose inherited personal visibility;
+administrator Account pool access continues to follow role permissions.
+
+- `GET /members` includes `membership_version` as a decimal string.
+- `POST /members/unlink`: `{ "member_id": "123", "membership_version": "1" }`.
+  Requires an active browser session, same origin and CSRF; limited to 10 attempts
+  per actor per minute. Only the actor's current direct members can be removed.
+  No email code is required. A stale relationship returns 409 `MEMBER_RELATION_CHANGED`.
+
+Unlinking shares the user-access transaction guard with creation, linking and role
+changes. It clears the direct parent and deletes only closure edges crossing the
+removed boundary. `users.membership_version` (`uint64` / MySQL `BIGINT UNSIGNED`)
+increments on each link/unlink; stale dialogs and old link-code approvals cannot
+affect a subsequent relationship. Reattaching requires a fresh approval code.
+
+The same transaction increments `users.visibility_version` for affected ancestors
+and upserts `overview_refresh_requests`. Personal summaries in both summary tables
+store that version: reads reject mismatches and an in-flight build rechecks it
+under a user-row lock before publishing. Stale summaries show an updating state,
+with frontend polling while pending. The existing overview worker processes a
+bounded membership refresh each pass; failed requests survive restarts and retry
+after a minute. Successful matching publication clears the request atomically.
+Only affected personal summaries are rebuilt; daily bills, Fable ratios, unrelated
+personal summaries and administrator summaries are unchanged.
+
+Run `node tests/member-unlink.browser.mjs` against a fresh `TestMembersBrowserFixture`
+to check English/Chinese dialogs, stale relationships, remove/re-add, refreshed
+source choices and 390/320-pixel layouts without production data.

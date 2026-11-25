@@ -1,15 +1,15 @@
 import { t, currentLanguage } from '../i18n';
-import { ArrowUpRight, ChevronLeft, ChevronRight, Link2, Search, UserPlus, UsersRound } from 'lucide-react';
+import { ArrowUpRight, ChevronLeft, ChevronRight, Link2, Search, Unlink, UserPlus, UsersRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { errorMessage, request } from '../api';
 import { ErrorNotice, Loading } from '../ui';
 import CreateUserDialog from '../admin/CreateUserDialog';
 import AddSubAccountsDialog from './AddSubAccountsDialog';
+import RemoveSubAccountDialog from './RemoveSubAccountDialog';
+import type { MemberPage } from './types';
 import { dateTime } from '../submissions/shared';
 import { useMemberScope } from './MemberScope';
 
-type Member = { id: string; email: string; status: string; created_at: string; visible_accounts: number };
-type MemberPage = { items: Member[]; total: number; page: number; page_size: number };
 export default function Members({ onViewAccounts, currentEmail }: { onViewAccounts: () => void; currentEmail: string }) {
   const scope = useMemberScope();
   const [data,setData] = useState<MemberPage | null>(null);
@@ -22,6 +22,7 @@ export default function Members({ onViewAccounts, currentEmail }: { onViewAccoun
   const [notice, setNotice] = useState<{ message: string; email: string } | null>(null);
   const [creating,setCreating] = useState(false);
   const [adding,setAdding] = useState(false);
+  const [removing,setRemoving] = useState(false);
   const deadlines = useRef<Record<string,number>>({});
   useEffect(() => { const timer=window.setTimeout(() => { setQuery(search.trim()); setPage(1); },300); return () => window.clearTimeout(timer); },[search]);
   useEffect(() => {
@@ -33,7 +34,7 @@ export default function Members({ onViewAccounts, currentEmail }: { onViewAccoun
     return () => abort.abort();
   },[page,query,revision]);
   return <section className='members-panel' aria-labelledby='members-title'>
-    <div className='members-heading'><div><h2 id='members-title'>{t("Members")}</h2><p className='subtitle'>{t("Your direct members and the accounts available through them.")}</p></div><div className='members-actions'><button type='button' className='button pale' onClick={() => setCreating(true)}><UserPlus aria-hidden='true' />{t("Create user")}</button><button type='button' className='button pale' onClick={() => setAdding(true)}><Link2 aria-hidden='true' />{t("Add sub accounts")}</button></div></div>
+    <div className='members-heading'><div><h2 id='members-title'>{t("Members")}</h2><p className='subtitle'>{t("Your direct members and the accounts available through them.")}</p></div><div className='members-actions'><button type='button' className='button pale' onClick={() => setCreating(true)}><UserPlus aria-hidden='true' />{t("Create user")}</button><button type='button' className='button pale' onClick={() => setAdding(true)}><Link2 aria-hidden='true' />{t("Add sub account")}</button><button type='button' className='button member-remove-trigger' disabled={!scope.loading && !scope.error && scope.sources.length <= 1} onClick={() => setRemoving(true)}><Unlink aria-hidden='true' />{t('Del sub account')}</button></div></div>
     <label className='usage-search member-search'><Search aria-hidden='true' /><span className='sr-only'>{t("Search member email")}</span><input type='search' value={search} maxLength={50} placeholder={t("Search member email")} onChange={event => setSearch(event.target.value)} /></label>
     <ErrorNotice>{error}</ErrorNotice>{error && <button className='button pale' onClick={() => setRevision(value => value+1)}>{t("Try again")}</button>}
     {notice && <p className='notice success' role='status'>{t(notice.message, { email: notice.email })}</p>}
@@ -48,5 +49,6 @@ export default function Members({ onViewAccounts, currentEmail }: { onViewAccoun
     <p className='members-help'>{t("Visible accounts include accounts available through each member. Only your direct members are shown here.")}</p>
     {creating && <CreateUserDialog memberMode deadlines={deadlines} onClose={() => setCreating(false)} onSaved={user => { setCreating(false); setNotice({ message: "{{email}} was created as your direct member.", email: user.email }); setSearch(''); setQuery(''); setPage(1); setRevision(value=>value+1); scope.reload(); }} />}
     {adding && <AddSubAccountsDialog currentEmail={currentEmail} deadlines={deadlines} onSaved={user => { setAdding(false); setNotice({ message: "{{email}} was added as your direct member.", email: user.email }); setSearch(user.email); setQuery(user.email); setPage(1); setRevision(value=>value+1); scope.reload(); }} directEmails={scope.sources.filter(source => source.id !== 'myself').map(source => source.label)} onClose={() => setAdding(false)} />}
+    {removing && <RemoveSubAccountDialog onClose={() => setRemoving(false)} onRefresh={() => { setRevision(value => value + 1); scope.reload(); }} onRemoved={user => { setRemoving(false); setNotice({ message: '{{email}} was removed from your direct members.', email: user.email }); setSearch(''); setQuery(''); setPage(1); setRevision(value => value + 1); scope.setSelection('all'); scope.reload(); }} />}
   </section>;
 }

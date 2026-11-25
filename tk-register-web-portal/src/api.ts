@@ -153,6 +153,7 @@ const errorLabels: Record<string, string> = {
   PASSWORD_CHANGE_CONFLICT: 'This password change has expired or your account changed. Request a new code.',
   PASSWORD_MISMATCH: 'The passwords do not match.',
   PASSWORD_UNCHANGED: 'Choose a password different from your current password.',
+  MEMBER_RELATION_CHANGED: 'This membership has changed. Refresh the member list and try again.',
   RATE_LIMITED: 'Please wait before trying again.',
   REGISTRATION_DISABLED: 'Registration is currently unavailable.',
   UNAVAILABLE: 'This service is temporarily unavailable. Please try again.',
