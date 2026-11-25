@@ -40,7 +40,7 @@ func apiExecutionFixture(t *testing.T) (*VendorService, User, uint64, map[string
 		t.Fatal(err)
 	}
 	params := map[string]any{
-		"plan": "claude/cc-pro", "account": "test-account@example.com", "password": "fixture-password", "register_location": "MY",
+		"plan": "claude/cc-Team Premium", "account": "test-account@example.com", "password": "fixture-password", "register_location": "MY",
 		"register_time": "2026-10-01", "plan_start_time": "2026-10-01", "plan_end_time": "2026-11-01",
 		"auth_json": map[string]any{"id_token": "", "access_token": "fixture-access", "refresh_token": "fixture-refresh", "last_refresh": "2026-10-01T00:00:00Z", "email": "test-account@example.com", "account_uuid": "fixture-uuid", "organization_uuid": "fixture-org", "organization_name": "test", "claude_device_ids": []any{"fixture-device"}, "type": "claude", "expired": "2026-11-01T00:00:00Z", "proxy_url": "http://user:pwd@proxy.example:80", "verification_status": "verified"},
 	}
@@ -49,6 +49,20 @@ func apiExecutionFixture(t *testing.T) (*VendorService, User, uint64, map[string
 
 func apiRemoteResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json; charset=utf-8"}}, Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func TestCreateAPIRejectsUnavailableProPlanBeforeSending(t *testing.T) {
+	service, user, tokenID, params := apiExecutionFixture(t)
+	params["plan"] = "claude/cc-pro"
+	service.Transport = storageTransport(func(*http.Request) (*http.Response, error) {
+		t.Fatal("unsupported plan reached the supplier")
+		return nil, nil
+	})
+	_, err := service.CreateAPI(context.Background(), user.ID, tokenID, params)
+	var invalid *VendorError
+	if !errors.As(err, &invalid) || invalid.Code != "INVALID_PARAMETERS" {
+		t.Fatalf("expected unsupported plan rejection, got %v", err)
+	}
 }
 
 func TestCreateAPIReturnsCompleteUpstreamResponse(t *testing.T) {
@@ -78,7 +92,7 @@ func TestCreateAPIReturnsCompleteUpstreamResponse(t *testing.T) {
 				outboundRequestID = r.Header.Get("X-Request-ID")
 				var body map[string]any
 				raw, err := io.ReadAll(r.Body)
-				if err != nil || common.Unmarshal(raw, &body) != nil || body["account"] != params["account"] || body["register_location"] != "MY" {
+				if err != nil || common.Unmarshal(raw, &body) != nil || body["account"] != params["account"] || body["register_location"] != "MY" || body["plan"] != "claude/cc-Team Premium" {
 					t.Error("business parameters not forwarded")
 				}
 				return apiRemoteResponse(tc.status, tc.body), nil

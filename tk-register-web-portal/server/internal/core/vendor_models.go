@@ -279,7 +279,7 @@ func (s *Store) migrateVendors() error {
 				}
 			}
 		}
-		return migrateRegistrationLocations(tx, vendor.ID)
+		return migrateSubmissionParameters(tx, vendor.ID)
 	})
 }
 

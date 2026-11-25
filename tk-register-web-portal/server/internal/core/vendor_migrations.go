@@ -2,15 +2,16 @@ package core
 
 import (
 	"encoding/json"
+	"slices"
 
 	"goapi-tk-register/server/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-// Expand only the original US-only contract. Publishing a new version preserves
-// credentials, historical request definitions and every existing submission.
-func migrateRegistrationLocations(tx *gorm.DB, vendorID uint64) error {
+// Update known older submission enums by publishing a new version. Existing
+// submissions keep their original protocol and credential references.
+func migrateSubmissionParameters(tx *gorm.DB, vendorID uint64) error {
 	var vendor Vendor
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&vendor, vendorID).Error; err != nil {
 		return err
@@ -29,9 +30,9 @@ func migrateRegistrationLocations(tx *gorm.DB, vendorID uint64) error {
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("version_id = ?", current.ID).Order("position").Find(&parameters).Error; err != nil {
 		return err
 	}
-	locationIndex := -1
+	changed := false
 	for index, param := range parameters {
-		if param.Name != "register_location" {
+		if param.Name != "register_location" && param.Name != "plan" {
 			continue
 		}
 		var format map[string]json.RawMessage
@@ -39,23 +40,31 @@ func migrateRegistrationLocations(tx *gorm.DB, vendorID uint64) error {
 			return err
 		}
 		var values []string
-		if common.Unmarshal(format["enum"], &values) != nil || len(values) != 1 || values[0] != "US" {
-			return nil
+		if common.Unmarshal(format["enum"], &values) != nil {
+			continue
 		}
-		locations, err := common.Marshal(registrationLocations())
+		var replacement []string
+		switch {
+		case param.Name == "register_location" && slices.Equal(values, []string{"US"}):
+			replacement = registrationLocations()
+		case param.Name == "plan" && slices.Equal(values, []string{"claude/cc-max-20x", "claude/cc-max-5x", "claude/cc-pro"}):
+			replacement = submissionPlans()
+		default:
+			continue
+		}
+		enum, err := common.Marshal(replacement)
 		if err != nil {
 			return err
 		}
-		format["enum"] = locations
+		format["enum"] = enum
 		updated, err := jsonText(format)
 		if err != nil {
 			return err
 		}
 		parameters[index].Format = updated
-		locationIndex = index
-		break
+		changed = true
 	}
-	if locationIndex < 0 {
+	if !changed {
 		return nil
 	}
 	next := ProtocolVersion{ProtocolID: current.ProtocolID, Version: current.Version + 1, CredentialID: current.CredentialID, RequestDefinition: current.RequestDefinition, ResponseDefinition: current.ResponseDefinition}

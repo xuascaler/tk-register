@@ -114,7 +114,7 @@ export const dailyUsageModelFields: FieldDefinition[] = [
 ];
 
 export const submissionFields: FieldDefinition[] = [
-  { name: 'plan', type: 'string', required: true, description: 'claude/cc-max-20x, claude/cc-max-5x, or claude/cc-pro. The vendor must authorize the selected plan.' },
+  { name: 'plan', type: 'string', required: true, description: 'claude/cc-max-20x, claude/cc-max-5x, or claude/cc-Team Premium. The vendor must authorize the selected plan.' },
   { name: 'account', type: 'string', required: true, description: 'Account login ID or email. Maximum 254 UTF-8 bytes; whitespace is not allowed. Accepted or currently running submissions for the same user, vendor, and account block another submission.' },
   { name: 'password', type: 'string', required: true, description: 'The submitted account’s password, not your TK Register password. Nonempty; maximum 1,024 UTF-8 bytes.' },
   { name: 'auth_json', type: 'object | string', required: true, description: 'An authentication JSON object, or a string containing that object’s JSON. Maximum 2 MiB. All 13 fields listed below are required.' },

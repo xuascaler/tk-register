@@ -26,9 +26,13 @@ func parameter(name, kind string, required, secret bool, format any) ProtocolPar
 
 func registrationLocations() []string { return []string{"US", "MY", "ID", "SG", "PH"} }
 
+func submissionPlans() []string {
+	return []string{"claude/cc-max-20x", "claude/cc-max-5x", "claude/cc-Team Premium"}
+}
+
 func protocolSeeds() []protocolSeed {
 	params := []ProtocolParameter{
-		parameter("plan", "string", true, false, map[string]any{"enum": []string{"claude/cc-max-20x", "claude/cc-max-5x", "claude/cc-pro"}}),
+		parameter("plan", "string", true, false, map[string]any{"enum": submissionPlans()}),
 		parameter("account", "string", true, false, map[string]any{"max_length": 254, "no_whitespace": true}),
 		parameter("password", "string", true, true, map[string]any{"max_length": 1024}),
 		parameter("auth_json", "object", true, true, map[string]any{"accept_json_string": true, "required": []string{"id_token", "access_token", "refresh_token", "last_refresh", "email", "account_uuid", "organization_uuid", "organization_name", "claude_device_ids", "type", "expired", "proxy_url", "verification_status"}}),
@@ -121,7 +125,7 @@ func ValidateSubmissionInput(input map[string]any) (map[string]any, map[string]a
 		}
 		out[name] = value
 	}
-	if !enumValue(out["plan"].(string), "claude/cc-max-20x", "claude/cc-max-5x", "claude/cc-pro") {
+	if !enumValue(out["plan"].(string), submissionPlans()...) {
 		return invalid("Choose a supported Claude plan.")
 	}
 	if strings.IndexFunc(out["account"].(string), unicode.IsSpace) >= 0 {

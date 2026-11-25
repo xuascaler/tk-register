@@ -105,6 +105,9 @@ try {
     await expect(f.panel.locator('.authorize-settings')).not.toHaveAttribute('open');
     await generate(f);
     await f.panel.locator('.authorize-settings > summary').click();
+    await f.panel.getByRole('combobox', { name: 'Plan', exact: true }).click();
+    await f.page.getByRole('option', { name: 'Claude Team Premium', exact: true }).click();
+    await expect(f.panel.locator('.authorize-default-summary')).toContainText('Team Premium');
     const password = await f.panel.getByLabel('Submission password', { exact: true }).inputValue();
     assert.equal(password.length, 24);
     await f.page.getByRole('tab', { name: 'Upload Auth JSON', exact: true }).click();
@@ -129,6 +132,7 @@ try {
     assert.equal(f.count('exchange'), 1); assert.equal(f.count('submit'), 1);
     const submitted = f.calls.find(call => call.path === '/credential-flows/submit').body;
     assert.equal(submitted.parameters.password, password);
+    assert.equal(submitted.parameters.plan, 'claude/cc-Team Premium');
     assert.equal(submitted.parameters.account, auth.email);
     assert.equal(submitted.parameters.payment_method, 'physical_credit_card');
     assert.deepEqual(submitted.parameters.tags, ['速刷']);

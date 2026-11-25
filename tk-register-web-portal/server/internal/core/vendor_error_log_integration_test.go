@@ -28,7 +28,7 @@ func TestVendorFailureBodyLoggedWithoutLeakingIntoAPI(t *testing.T) {
 				t.Fatal(err)
 			}
 			auth := map[string]any{"id_token": "id-log-test-secret", "access_token": "access-log-test-secret", "refresh_token": "refresh-log-test-secret", "last_refresh": "2026-10-01T00:00:00Z", "email": "account@example.com", "account_uuid": "account-uuid-secret", "organization_uuid": "organization-uuid-secret", "organization_name": "test", "claude_device_ids": []any{"device-log-test-secret"}, "type": "claude", "expired": "2026-11-01T00:00:00Z", "proxy_url": "http://user:proxy-log-test-secret@proxy.example:80", "verification_status": "verified"}
-			params := map[string]any{"plan": "claude/cc-pro", "account": "account@example.com", "password": "password-log-test-secret", "auth_json": auth, "register_location": "MY", "register_time": "2026-10-01", "plan_start_time": "2026-10-01", "plan_end_time": "2026-11-01"}
+			params := map[string]any{"plan": "claude/cc-Team Premium", "account": "account@example.com", "password": "password-log-test-secret", "auth_json": auth, "register_location": "MY", "register_time": "2026-10-01", "plan_start_time": "2026-10-01", "plan_end_time": "2026-11-01"}
 			response, err := common.Marshal(map[string]any{"detail": "Unsupported register_location: MY", "input": params, "authorization": "Bearer " + token, "echo": "password-log-test-secret / access-log-test-secret"})
 			if err != nil {
 				t.Fatal(err)

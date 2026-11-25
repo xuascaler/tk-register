@@ -13,6 +13,15 @@ import (
 )
 
 func TestRegistrationLocationMigrationPreservesPublishedHistoryAndCredentials(t *testing.T) {
+	testSubmissionParameterMigration(t, "register_location", `{"enum":["US"],"label":"Fixture label","opaque":9007199254740993}`, registrationLocations())
+}
+
+func TestTeamPremiumPlanMigrationPreservesPublishedHistoryAndCredentials(t *testing.T) {
+	testSubmissionParameterMigration(t, "plan", `{"enum":["claude/cc-max-20x","claude/cc-max-5x","claude/cc-pro"],"label":"Fixture label","opaque":9007199254740993}`, submissionPlans())
+}
+
+func testSubmissionParameterMigration(t *testing.T, parameterName, legacyFormat string, expectedValues []string) {
+	t.Helper()
 	dsn := filepath.Join(t.TempDir(), "locations.sqlite")
 	key := strings.Repeat("l", 32)
 	store, err := Open("sqlite", dsn, key)
@@ -33,8 +42,7 @@ func TestRegistrationLocationMigrationPreservesPublishedHistoryAndCredentials(t 
 		t.Fatal(err)
 	}
 	// Build the pre-upgrade database fixture, including non-enum metadata.
-	legacyFormat := `{"enum":["US"],"label":"Registration location","opaque":9007199254740993}`
-	if err = store.DB.Model(&ProtocolParameter{}).Where("version_id = ? AND name = ?", initial.ID, "register_location").Update("format", legacyFormat).Error; err != nil {
+	if err = store.DB.Model(&ProtocolParameter{}).Where("version_id = ? AND name = ?", initial.ID, parameterName).Update("format", legacyFormat).Error; err != nil {
 		t.Fatal(err)
 	}
 	custom := parameter("fixture_parameter", "string", false, true, map[string]any{"description": "preserve existing parameter"})
@@ -110,14 +118,14 @@ func TestRegistrationLocationMigrationPreservesPublishedHistoryAndCredentials(t 
 	}
 	for index, param := range nextParams {
 		old := previousParams[index]
-		if param.Name == "register_location" {
+		if param.Name == parameterName {
 			var format map[string]json.RawMessage
 			if err = common.Unmarshal([]byte(param.Format), &format); err != nil {
 				t.Fatal(err)
 			}
 			var values []string
-			if err = common.Unmarshal(format["enum"], &values); err != nil || !reflect.DeepEqual(values, registrationLocations()) || string(format["opaque"]) != "9007199254740993" || string(format["label"]) != `"Registration location"` {
-				t.Fatal("location enum or additional metadata changed incorrectly", err)
+			if err = common.Unmarshal(format["enum"], &values); err != nil || !reflect.DeepEqual(values, expectedValues) || string(format["opaque"]) != "9007199254740993" || string(format["label"]) != `"Fixture label"` {
+				t.Fatal("parameter enum or additional metadata changed incorrectly", err)
 			}
 			param.Format = old.Format
 		}
@@ -128,7 +136,7 @@ func TestRegistrationLocationMigrationPreservesPublishedHistoryAndCredentials(t 
 	}
 	var savedSubmission Submission
 	var savedExecution ProtocolExecution
-	if err = store.DB.First(&savedSubmission, submission.ID).Error; err != nil || savedSubmission.ProtocolVersionID != previous.ID || savedSubmission.ParametersJSON != submission.ParametersJSON || savedSubmission.SecretParametersCiphertext != secret || savedSubmission.Status != "accepted" {
+	if err = store.DB.First(&savedSubmission, submission.ID).Error; err != nil || savedSubmission.Plan != "claude/cc-pro" || savedSubmission.ProtocolVersionID != previous.ID || savedSubmission.ParametersJSON != submission.ParametersJSON || savedSubmission.SecretParametersCiphertext != secret || savedSubmission.Status != "accepted" {
 		t.Fatal("historical submission was changed", err)
 	}
 	if err = store.DB.First(&savedExecution, execution.ID).Error; err != nil || savedExecution.ProtocolVersionID != previous.ID || savedExecution.RequestJSON != execution.RequestJSON {

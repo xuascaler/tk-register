@@ -48,7 +48,7 @@ func TestVendorLargeSecretStorageAndCrossDialectType(t *testing.T) {
 		t.Fatal(e)
 	}
 	auth := map[string]any{"id_token": "", "access_token": "access-secret", "refresh_token": "refresh-secret", "last_refresh": "2026-10-01T00:00:00Z", "email": "account@example.com", "account_uuid": "uuid-secret", "organization_uuid": "org-secret", "organization_name": "test", "claude_device_ids": []any{"device-secret"}, "type": "claude", "expired": "2026-11-01T00:00:00Z", "proxy_url": "http://user:password@proxy.example:80", "verification_status": "verified", "extended_credential": strings.Repeat("p", 1<<20)}
-	params := map[string]any{"plan": "claude/cc-pro", "account": "account@example.com", "password": "a1b", "auth_json": auth, "register_location": "US", "register_time": "2026-10-01", "plan_start_time": "2026-10-01", "plan_end_time": "2026-11-01"}
+	params := map[string]any{"plan": "claude/cc-Team Premium", "account": "account@example.com", "password": "a1b", "auth_json": auth, "register_location": "US", "register_time": "2026-10-01", "plan_start_time": "2026-10-01", "plan_end_time": "2026-11-01"}
 	service := VendorService{Store: store, Transport: storageTransport(func(r *http.Request) (*http.Response, error) {
 		raw, e := io.ReadAll(r.Body)
 		if e != nil {

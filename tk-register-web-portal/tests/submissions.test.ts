@@ -45,6 +45,14 @@ test('submission accepts both object JSON and a JSON-encoded object string', () 
   assert.deepEqual(parseAuthJSON(JSON.stringify(JSON.stringify(auth))), auth);
   assert.deepEqual(validateDraft(validDraft()), {});
 });
+test('Team Premium preserves the upstream plan spelling and spacing in submissions', () => {
+  const draft = { ...validDraft(), plan: 'claude/cc-Team Premium' };
+  assert.deepEqual(validateDraft(draft), {});
+  assert.equal(submissionParameters(draft).plan, 'claude/cc-Team Premium');
+  for (const plan of ['claude/cc-pro', 'claude/cc-team premium', 'claude/cc-Team-Premium']) {
+    assert.ok(validateDraft({ ...draft, plan }).plan);
+  }
+});
 test('every required auth property must be present, while id_token may be empty', () => {
   for (const key of authFields) {
     const value = { ...auth } as Record<string, unknown>;

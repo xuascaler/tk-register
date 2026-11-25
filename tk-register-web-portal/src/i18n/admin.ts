@@ -549,7 +549,7 @@ export const adminMessages: Record<string, string> = {
   "Saved model name.": "已保存的模型名称。",
   "Model cost in CNY with eight decimal places.": "模型的人民币费用，保留八位小数。",
   "Model cost in USD with two decimal places, using the returned exchange rate.": "按返回的汇率计算的模型美元费用，保留两位小数。",
-  "claude/cc-max-20x, claude/cc-max-5x, or claude/cc-pro. The vendor must authorize the selected plan.": "claude/cc-max-20x、claude/cc-max-5x 或 claude/cc-pro。所选套餐必须已获供应商授权。",
+  "claude/cc-max-20x, claude/cc-max-5x, or claude/cc-Team Premium. The vendor must authorize the selected plan.": "claude/cc-max-20x、claude/cc-max-5x 或 claude/cc-Team Premium。所选套餐必须已获供应商授权。",
   "Account login ID or email. Maximum 254 UTF-8 bytes; whitespace is not allowed. Accepted or currently running submissions for the same user, vendor, and account block another submission.": "账号登录标识或邮箱，最多 254 个 UTF-8 字节且不允许空白。同一用户、供应商和账号如有已接受或执行中的提交，将阻止再次提交。",
   "The submitted account’s password, not your TK Register password. Nonempty; maximum 1,024 UTF-8 bytes.": "所提交账号的密码，与 TK Register 登录密码分开。不能为空，最多 1,024 个 UTF-8 字节。",
   "An authentication JSON object, or a string containing that object’s JSON. Maximum 2 MiB. All 13 fields listed below are required.": "认证 JSON 对象或包含该对象的 JSON 字符串。最多 2 MiB，必须提供下列全部 13 个字段。",

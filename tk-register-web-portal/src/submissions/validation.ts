@@ -4,7 +4,7 @@ export const MAX_AUTH_BYTES = 2 * 1024 * 1024;
 export const plans = [
   'claude/cc-max-20x',
   'claude/cc-max-5x',
-  'claude/cc-pro',
+  'claude/cc-Team Premium',
 ] as const;
 export const registrationLocations = [
   { value: 'US', label: 'United States' },
