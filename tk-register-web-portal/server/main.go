@@ -171,8 +171,15 @@ func run() error {
 	return srv.Shutdown(shutdown)
 }
 func main() {
-	if err := run(); err != nil {
-		log.Printf("TK Register startup failed: %s", err)
+	closeLog, err := configureLogOutput()
+	if err != nil {
+		log.Printf("TK Register logging initialization failed: %s", err)
 		os.Exit(1)
 	}
+	if err := run(); err != nil {
+		log.Printf("TK Register startup failed: %s", err)
+		closeLog()
+		os.Exit(1)
+	}
+	closeLog()
 }

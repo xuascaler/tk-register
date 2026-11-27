@@ -92,7 +92,12 @@ func enqueuePostSubmissionSyncTx(tx *gorm.DB, submission Submission, at time.Tim
 	if err != nil {
 		return err
 	}
-	if !account.AvailableForMutation() {
+	return enqueuePostSubmissionSyncForAccountTx(tx, submission, account, at)
+}
+
+// The caller retains this account's row lock in the enclosing transaction.
+func enqueuePostSubmissionSyncForAccountTx(tx *gorm.DB, submission Submission, account SyncedAccount, at time.Time) error {
+	if submission.Status != "accepted" || submission.RemoteID == nil || strings.TrimSpace(*submission.RemoteID) == "" || !account.AvailableForMutation() {
 		return nil
 	}
 	if submission.Source != "api" && submission.Source != "web" {

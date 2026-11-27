@@ -11,34 +11,35 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// AccountAuthJSONAudit stores only metadata. New credentials are forwarded to
-// the supplier, never persisted here, and historical submissions stay immutable.
+// AccountAuthJSONAudit is an immutable credential snapshot with mutable operation
+// outcomes. Legacy rows have no payload; ciphertext is never serialized to clients.
 type AccountAuthJSONAudit struct {
-	Source           string        `gorm:"size:16;not null;default:web;index"`
-	Method           string        `gorm:"size:16;not null;default:manual"`
-	CredentialFlowID string        `gorm:"size:128;not null;default:'';index"`
-	APITokenID       *uint64       `gorm:"index"`
-	APIToken         *UserAPIToken `gorm:"foreignKey:APITokenID;constraint:OnDelete:RESTRICT"`
-	APITokenRevision *uint64
-	ID               uint64        `gorm:"primaryKey"`
-	AccountID        uint64        `gorm:"not null;index"`
-	Account          SyncedAccount `gorm:"foreignKey:AccountID;constraint:OnDelete:RESTRICT"`
-	ActorID          uint64        `gorm:"not null;index"`
-	Actor            User          `gorm:"foreignKey:ActorID;constraint:OnDelete:RESTRICT"`
-	OwnerID          uint64        `gorm:"not null;index"`
-	Owner            User          `gorm:"foreignKey:OwnerID;constraint:OnDelete:RESTRICT"`
-	VendorID         uint64        `gorm:"not null;index"`
-	Vendor           Vendor        `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT"`
-	IdentityKey      string        `gorm:"size:64;not null"`
-	SubmissionID     *uint64       `gorm:"index"`
-	RequestID        string        `gorm:"size:64;not null;uniqueIndex"`
-	SupplierRecordID string        `gorm:"size:32;not null;default:''"`
-	Status           string        `gorm:"size:24;not null"`
-	ErrorCode        string        `gorm:"size:80;not null;default:''"`
-	RefreshStatus    string        `gorm:"size:24;not null;default:''"`
-	CreatedAt        time.Time
-	FinishedAt       *time.Time
-	UpdatedAt        time.Time
+	Source             string        `gorm:"size:16;not null;default:web;index"`
+	Method             string        `gorm:"size:16;not null;default:manual"`
+	CredentialFlowID   string        `gorm:"size:128;not null;default:'';index"`
+	APITokenID         *uint64       `gorm:"index"`
+	APIToken           *UserAPIToken `gorm:"foreignKey:APITokenID;constraint:OnDelete:RESTRICT"`
+	APITokenRevision   *uint64
+	ID                 uint64        `gorm:"primaryKey;index:idx_auth_history_lifetime,priority:3"`
+	AccountID          uint64        `gorm:"not null;index;index:idx_auth_history_lifetime,priority:1"`
+	Account            SyncedAccount `gorm:"foreignKey:AccountID;constraint:OnDelete:RESTRICT"`
+	ActorID            uint64        `gorm:"not null;index"`
+	Actor              User          `gorm:"foreignKey:ActorID;constraint:OnDelete:RESTRICT"`
+	OwnerID            uint64        `gorm:"not null;index"`
+	Owner              User          `gorm:"foreignKey:OwnerID;constraint:OnDelete:RESTRICT"`
+	VendorID           uint64        `gorm:"not null;index"`
+	Vendor             Vendor        `gorm:"foreignKey:VendorID;constraint:OnDelete:RESTRICT"`
+	IdentityKey        string        `gorm:"size:64;not null"`
+	SubmissionID       *uint64       `gorm:"index;index:idx_auth_history_lifetime,priority:2"`
+	RequestID          string        `gorm:"size:64;not null;uniqueIndex"`
+	SupplierRecordID   string        `gorm:"size:32;not null;default:''"`
+	Status             string        `gorm:"size:24;not null"`
+	ErrorCode          string        `gorm:"size:80;not null;default:''"`
+	RefreshStatus      string        `gorm:"size:24;not null;default:''"`
+	AuthJSONCiphertext *string       `gorm:"type:longtext" json:"-"`
+	CreatedAt          time.Time
+	FinishedAt         *time.Time
+	UpdatedAt          time.Time
 }
 
 func validSupplierRecordID(value string) bool {
@@ -142,7 +143,7 @@ func (s *Store) BeginAuthJSONUpdateWithSource(ctx context.Context, target Synced
 
 type AuthJSONCredentialWrite struct {
 	Raw              json.RawMessage
-	ExpectedRevision *uint64
+	ExpectedRevision *string
 }
 
 func (s *Store) BeginAuthJSONUpdateWithMethod(ctx context.Context, target SyncedAccount, actor uint64, requestID, source string, tokenID, revision *uint64, method, flowID string, credential ...AuthJSONCredentialWrite) (AccountAuthJSONAudit, error) {
@@ -186,13 +187,12 @@ func (s *Store) BeginAuthJSONUpdateWithMethod(ctx context.Context, target Synced
 			}
 		}
 		audit.SubmissionID = current.CurrentSubmissionID
-		if err := tx.Create(&audit).Error; err != nil {
-			return err
-		}
 		if len(credential) == 1 {
-			return s.prepareCredentialUpdateTx(tx, current, audit, credential[0].Raw, credential[0].ExpectedRevision)
+			if err := s.prepareAuthJSONHistoryTx(tx, current, &audit, credential[0]); err != nil {
+				return err
+			}
 		}
-		return nil
+		return tx.Create(&audit).Error
 	})
 	return audit, err
 }
@@ -243,9 +243,6 @@ func (s *Store) FinishAuthJSONUpdate(ctx context.Context, audit AccountAuthJSONA
 		if result.RowsAffected != 1 {
 			currentIdentity = false
 			return nil
-		}
-		if err := finishCredentialUpdateTx(tx, account, saved, status, currentIdentity, at); err != nil {
-			return err
 		}
 		if status == "updated" && currentIdentity {
 			if err := tx.Model(&account).Updates(map[string]any{"supplier_record_id": recordID, "auth_json_updated_at": at.UTC()}).Error; err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	"goapi-tk-register/server/common"
@@ -60,23 +61,22 @@ func proxyProof(user *core.User, target core.SyncedAccount, input accountProxyIn
 	return accountProxyProof{user.ID, user.AuthVersion, target.ID, target.UserID, target.VendorID, target.IdentityKey, *target.CurrentSubmissionID, input.Revision, digest(input.ProxyURL)}
 }
 
-func readAccountProxyInput(w http.ResponseWriter, r *http.Request) (accountProxyInput, uint64, error) {
+func readAccountProxyInput(w http.ResponseWriter, r *http.Request) (accountProxyInput, string, error) {
 	var input accountProxyInput
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || contentType != "application/json" {
-		return input, 0, credentialProblem(415, "INVALID_CONTENT_TYPE", "Use application/json.")
+		return input, "", credentialProblem(415, "INVALID_CONTENT_TYPE", "Use application/json.")
 	}
 	if common.DecodeJson(http.MaxBytesReader(w, r.Body, 16<<10), &input) != nil {
-		return input, 0, credentialInvalid()
+		return input, "", credentialInvalid()
 	}
 	if !validCredentialProxy(input.ProxyURL) {
-		return input, 0, credentialProxyFailure("invalid_proxy")
+		return input, "", credentialProxyFailure("invalid_proxy")
 	}
-	revision, err := core.ParseBusinessID(input.Revision)
-	if err != nil {
-		return input, 0, credentialInvalid()
+	if len(input.Revision) != 64 || strings.Trim(input.Revision, "0123456789abcdef") != "" {
+		return input, "", credentialInvalid()
 	}
-	return input, revision, nil
+	return input, input.Revision, nil
 }
 
 func (a *app) testAccountProxy(w http.ResponseWriter, r *http.Request, user *core.User, target core.SyncedAccount, info core.AccountProxyInfo) {
@@ -125,7 +125,7 @@ func (a *app) testAccountProxy(w http.ResponseWriter, r *http.Request, user *cor
 	ok(w, map[string]any{"test_token": token, "expires_in": 600, "proxy_check": result.ProxyCheck})
 }
 
-func (a *app) resolveAccountProxy(r *http.Request, w http.ResponseWriter, user *core.User, target core.SyncedAccount) (json.RawMessage, *uint64, error) {
+func (a *app) resolveAccountProxy(r *http.Request, w http.ResponseWriter, user *core.User, target core.SyncedAccount) (json.RawMessage, *string, error) {
 	input, revision, err := readAccountProxyInput(w, r)
 	if err != nil {
 		return nil, nil, err

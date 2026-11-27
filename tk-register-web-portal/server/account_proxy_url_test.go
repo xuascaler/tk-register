@@ -67,16 +67,9 @@ func TestProxyUpdateOnlyChangesProxyAndPersistsEncryptedResult(t *testing.T) {
 	if err != nil || info.Revision == input["revision"] || !strings.Contains(info.ProxyURLMasked, "proxy.example") {
 		t.Fatal("latest credential did not advance", err)
 	}
-	var row core.AccountCredential
-	if err = a.store.DB.First(&row, "account_id = ?", target.ID).Error; err != nil {
-		t.Fatal(err)
-	}
-	if row.State != "ready" || row.AuthJSONCiphertext == "" || strings.Contains(row.AuthJSONCiphertext, "private-password") || row.PendingCiphertext != "" {
-		t.Fatal("credential not encrypted/confirmed")
-	}
 	var audit core.AccountAuthJSONAudit
 	a.store.DB.Last(&audit)
-	if audit.Method != "proxy" || audit.ActorID != user.ID || audit.Status != "updated" {
+	if audit.Method != "proxy" || audit.ActorID != user.ID || audit.Status != "updated" || audit.AuthJSONCiphertext == nil || strings.Contains(*audit.AuthJSONCiphertext, "private-password") {
 		t.Fatal("proxy audit missing")
 	}
 	// A double-click or replay with the old dialog must not issue another PUT.
@@ -152,10 +145,12 @@ func TestProxyUpdateUnknownDoesNotRetryOrReuseLastConfirmedCredential(t *testing
 	if fake.writes != 2 {
 		t.Fatal("uncertain proxy update retried")
 	}
-	var row core.AccountCredential
-	a.store.DB.First(&row, "account_id = ?", target.ID)
-	if row.State != "unknown" || row.PendingCiphertext == "" || row.AuthJSONCiphertext == "" {
-		t.Fatal("uncertain and confirmed credentials not retained separately")
+	var rows []core.AccountAuthJSONAudit
+	if err := a.store.DB.Where("account_id = ?", target.ID).Order("id").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Status != "updated" || rows[1].Status != "unknown" || rows[0].AuthJSONCiphertext == nil || rows[1].AuthJSONCiphertext == nil {
+		t.Fatal("uncertain and confirmed histories not retained")
 	}
 	// A later explicitly submitted complete Auth JSON can establish a fresh
 	// confirmed version. It is never an automatic retry of the proxy request.
@@ -198,12 +193,22 @@ func TestProxyUpdateRechecksEligibilityAndAllowsAdministrator(t *testing.T) {
 	requireStatus(t, request(t, a, "POST", route, input, ac, acsrf), 200)
 }
 
-func TestAPIAuthJSONUpdateAlsoSavesCurrentCredentials(t *testing.T) {
+func TestAPIAuthJSONUpdateSavesEncryptedHistory(t *testing.T) {
 	a, owner, _, _, target, _ := setupAuthUpdate(t)
 	token := lookupToken(t, a, owner.ID)
 	w := apiRequest(t, a, "POST", claudeAccountAuthJSONAPIPath, token.PlaintextToken, "application/json", authAPIBody(t, owner.Email, target.Account, false))
 	requireStatus(t, w, 200)
 	if _, err := a.store.AccountProxyInfo(context.Background(), target); err != nil {
 		t.Fatal("API update did not persist latest credentials", err)
+	}
+	var audit core.AccountAuthJSONAudit
+	if err := a.store.DB.Last(&audit).Error; err != nil {
+		t.Fatal(err)
+	}
+	if audit.Source != "api" || audit.Status != "updated" || audit.AuthJSONCiphertext == nil {
+		t.Fatal("API encrypted history missing")
+	}
+	if strings.Contains(w.Body.String(), *audit.AuthJSONCiphertext) {
+		t.Fatal("API leaked encrypted payload")
 	}
 }

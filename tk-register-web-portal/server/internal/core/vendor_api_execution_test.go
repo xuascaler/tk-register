@@ -23,12 +23,17 @@ func apiExecutionFixture(t *testing.T) (*VendorService, User, uint64, map[string
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
+	return apiExecutionFixtureWithStore(t, store)
+}
+
+func apiExecutionFixtureWithStore(t *testing.T, store *Store) (*VendorService, User, uint64, map[string]any) {
+	t.Helper()
 	user := User{Email: "api-execution@example.com", PasswordHash: "fixture-hash", Role: "admin", Status: "active", EmailVerifiedAt: time.Now().UTC()}
-	if err = store.CreateUser(context.Background(), &user); err != nil {
+	if err := store.CreateUser(context.Background(), &user); err != nil {
 		t.Fatal(err)
 	}
 	vendorToken := "shared-vendor-token-fixture"
-	if _, err = store.PatchVendor(context.Background(), 1, user.ID, VendorPatch{AccessToken: &vendorToken}); err != nil {
+	if _, err := store.PatchVendor(context.Background(), 1, user.ID, VendorPatch{AccessToken: &vendorToken}); err != nil {
 		t.Fatal(err)
 	}
 	generated, err := store.GenerateAPIToken(context.Background(), user.ID)

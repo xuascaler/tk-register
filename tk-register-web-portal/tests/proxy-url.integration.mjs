@@ -56,7 +56,7 @@ try {
       if (path === `${scope}/proxy-url` && method === 'GET') {
         checks++;
         if (scenario === 'missing') return fail('ACCOUNT_CREDENTIALS_MISSING');
-        return ok({ account: account.account, plan: account.plan, editable: scenario !== 'active', reason: 'This account is currently active.', supplier_record_id: '592781', revision: String(checks), proxy_url_masked: 'http://••••:••••@old-proxy.example:8080' });
+        return ok({ account: account.account, plan: account.plan, editable: scenario !== 'active', reason: 'This account is currently active.', supplier_record_id: '592781', revision: String(checks).padStart(64, '0'), proxy_url_masked: 'http://••••:••••@old-proxy.example:8080' });
       }
       if (path === `${scope}/proxy-url-test` && method === 'POST') return ok({ proxy_check: proxyCheck, test_token: 'synthetic-proxy-test-proof', expires_in: 600 });
       if (path === `${scope}/proxy-url` && method === 'POST') {

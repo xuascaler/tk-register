@@ -191,10 +191,6 @@ func Open(driver, dsn, encryptionKey string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
-	if err = s.InitializeAccountCredentials(context.Background()); err != nil {
-		s.Close()
-		return nil, errors.New("could not initialize account credentials")
-	}
 	if err = s.migratePostSubmissionSyncJobs(); err != nil {
 		s.Close()
 		return nil, errors.New("could not migrate post-submission sync jobs")

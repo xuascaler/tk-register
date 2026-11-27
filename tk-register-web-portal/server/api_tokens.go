@@ -157,6 +157,8 @@ func (a *app) claudeAccountsAPI(w http.ResponseWriter, r *http.Request) {
 	if result.HTTPStatus != 0 {
 		if err != nil {
 			// Never log request parameters, credentials, or unredacted response data.
+			// VendorService also records the persistence stage, supplier identifiers, and typed
+			// database error under TK_REGISTER_PERSISTENCE with this request ID.
 			log.Printf("TK API submission persistence incomplete: submission=%s request=%s", result.SubmissionID, w.Header().Get("X-Request-ID"))
 		}
 		if result.ErrorCode != "" {

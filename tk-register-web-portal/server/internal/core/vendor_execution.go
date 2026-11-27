@@ -676,9 +676,11 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 	secrets := []string{token}
 	collectSecretStrings(input["password"], &secrets)
 	collectAuthSecrets(input["auth_json"], &secrets)
+	diagnostic := persistenceDiagnostic{record: record, execution: execution, result: result, secrets: secrets, started: time.Now()}
 	// Public result fields remain allow-listed. Raw diagnostics are stored separately, encrypted.
 	resultJSON, e := redactedResult(result.data, secrets)
 	if e != nil {
+		v.logPersistence(diagnostic, "encode_result", "not_started", "not_needed", e, nil)
 		return SubmissionDetail{}, e
 	}
 	now := time.Now().UTC()
@@ -693,6 +695,7 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 		if len(result.responseBody) > 0 {
 			encrypted, err := v.Store.encrypt("execution-error:"+idString(execution.ID), string(result.responseBody))
 			if err != nil {
+				v.logPersistence(diagnostic, "encrypt_error_body", "not_started", "not_needed", err, nil)
 				return SubmissionDetail{}, err
 			}
 			updates["error_body_ciphertext"] = encrypted
@@ -706,10 +709,10 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	e = v.Store.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	e = v.persistExecutionResult(ctx, diagnostic, func(tx *gorm.DB) error {
 		finished := tx.Model(&ProtocolExecution{}).Where("id = ? AND status = ?", execution.ID, "running").Updates(updates)
 		if finished.Error != nil {
-			return finished.Error
+			return persistenceFailure("save_execution", finished.Error)
 		}
 		if finished.RowsAffected == 0 {
 			return nil
@@ -735,7 +738,7 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 				changes["metrics_json"] = resultJSON
 				var safe MetricResult
 				if e := common.Unmarshal([]byte(resultJSON), &safe); e != nil {
-					return e
+					return persistenceFailure("decode_metrics", e)
 				}
 				// A successful check without an account/status must not leave the
 				// previous platform status looking current.
@@ -754,22 +757,24 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 		}
 		if len(changes) > 0 {
 			if err := tx.Model(&Submission{}).Where("id = ? AND user_id = ?", record.ID, userID).Updates(changes).Error; err != nil {
-				return err
+				return persistenceFailure("save_submission", err)
 			}
 		}
 		if execution.Operation == "push" && result.status == "succeeded" {
 			var accepted Submission
 			if err := tx.Select("id, user_id, vendor_id, account, plan, status, source, remote_id, platform_account_id, created_at").Where("id = ? AND user_id = ?", record.ID, userID).First(&accepted).Error; err != nil {
-				return err
+				return persistenceFailure("load_accepted_submission", err)
 			}
-			if err := enqueuePostSubmissionSyncTx(tx, accepted, now); err != nil {
-				return err
+			account, err := ensureSyncedAccountForSubmissionTx(tx, accepted)
+			if err != nil {
+				return persistenceFailure("save_account_projection", err)
 			}
-			if err := v.Store.saveSubmittedCredentialTx(tx, accepted, input, now); err != nil {
-				return err
+			if err := enqueuePostSubmissionSyncForAccountTx(tx, accepted, account, now); err != nil {
+				return persistenceFailure("enqueue_post_submission_sync", err)
 			}
 			if record.SubmitMode == "restore_update" && record.TargetSupplierRecordID != "" {
-				return tx.Model(&SyncedAccount{}).Where("user_id = ? AND vendor_id = ? AND LOWER(TRIM(account)) = ? AND current_submission_id = ? AND deleted_at IS NULL", userID, record.VendorID, NormalizeEmail(record.Account), record.ID).Updates(map[string]any{"supplier_record_id": record.TargetSupplierRecordID, "auth_json_updated_at": now}).Error
+				err := tx.Model(&SyncedAccount{}).Where("user_id = ? AND vendor_id = ? AND LOWER(TRIM(account)) = ? AND current_submission_id = ? AND deleted_at IS NULL", userID, record.VendorID, NormalizeEmail(record.Account), record.ID).Updates(map[string]any{"supplier_record_id": record.TargetSupplierRecordID, "auth_json_updated_at": now}).Error
+				return persistenceFailure("save_restored_account", err)
 			}
 			return nil
 		}
@@ -777,14 +782,18 @@ func (v *VendorService) finish(userID uint64, record Submission, execution Proto
 			// Failed/unknown pushes remain visible, and successful metrics may
 			// supply a platform ID. Keep both changes atomic with their account.
 			_, err := ensureSyncedAccountForSubmissionTx(tx, record)
-			return err
+			return persistenceFailure("save_account_projection", err)
 		}
 		return nil
 	})
 	if e != nil {
 		return SubmissionDetail{}, e
 	}
-	return v.Store.SubmissionDetail(ctx, userID, record.ID)
+	detail, e := v.Store.SubmissionDetail(ctx, userID, record.ID)
+	if e != nil {
+		v.logPersistence(diagnostic, "load_submission_detail", "committed", "not_needed", e, nil)
+	}
+	return detail, e
 }
 
 // Protocol metadata such as type and timestamps is not an authentication secret.

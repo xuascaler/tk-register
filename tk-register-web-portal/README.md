@@ -117,6 +117,33 @@ All new tables are in `tk_register`, with foreign-key references and restrictive
 
 Every submission and execution is saved before a remote request. A per-user browser client request key is unique, and repeating that key with identical parameters returns the saved result instead of sending again. A new request for an already accepted or currently running account is blocked for the same user and vendor. Lost responses/timeouts become **Unknown**. The user may explicitly submit again after an unknown or failed result; this creates a new history record and leaves the earlier attempt unchanged. The system never automatically retries account creation. Interrupted operations are recovered to Unknown after the execution window. Upgrades release duplicate-account locks held by old Unknown records while keeping accepted/running records protected. Query results can be refreshed manually.
 
+After receiving the supplier response, TK commits execution status, submission status,
+account linkage and follow-up sync work in one local transaction. The encrypted
+Auth JSON remains in the existing submission history; finalization does not write
+a separate current-credentials record.
+The account projection is locked/materialized once and passed to sync-job
+persistence; it is not upserted again after inserting the sync job. Submit
+finalization does not insert, lock or update any current-credentials row.
+The local transaction is attempted once, without automatic retries, including on
+MySQL `1213` errors. `TK_REGISTER_PERSISTENCE` logs submission/execution/request IDs,
+the supplier's returned account ID and alias, upstream result/status, failed step,
+elapsed time, rollback outcome and safe database error codes. It omits SQL,
+exception text, passwords, Auth JSON and full response bodies. COMMIT errors are
+explicitly recorded as `commit_unknown`; a subsequent rollback is not treated as
+proof that the supplier response was not saved.
+
+Set `TK_REGISTER_LOG_FILE` to an absolute path to also write backend logs to disk.
+Bind that directory to a persistent host directory; only one server process should
+write each file. Files use mode `0600`, rotate at 50 MiB, compress backups, and retain
+at most 20 backups for up to 30 days (older backups are cleaned during rotation).
+Container stderr remains available; disk-write failures emit
+`TK_REGISTER_LOG_WRITE_FAILED` there. Tokyo uses host
+`/home/ubuntu/Code/tk_register/logs/server.log`, mounted at
+`/var/log/tk-register/server.log`. This includes submission persistence diagnostics,
+supplier errors and backend worker logs; nginx and the credential helper retain
+their existing Docker logs. Old container logs are not retroactively imported.
+
+
 The execution adapter supports the three published HTTP JSON contracts above. Their definitions and parameter metadata are persisted; arbitrary protocols or host overrides cannot be supplied from the browser. At the deployment owner's request, only `submit_account`, `metrics` and `bills` requests for `tk-register-0` at `https://120.233.254.152:8000` skip certificate verification. HTTPS with TLS 1.2 or later remains in use, but the vendor's identity is not verified for those account submissions, status checks and billing queries. Other connections retain certificate verification. Redirects are rejected, and request/response sizes and durations are bounded. Passwords, auth JSON and vendor tokens are not returned in history or written to browser storage. Users can read/query only their own submissions; administrator configuration uses the existing role and CSRF checks.
 
 `POST /tk-register/api/submissions/:id/status` refreshes an accepted account's status using a server-generated last-24-hours metrics range in the vendor's timezone. The endpoint accepts `{ "force": false }` (the default), which can reuse a successful status check for 30 seconds; `{ "force": true }` requests a fresh check. It uses the existing owner, CSRF and query-rate-limit checks and never retries account creation. `status_checked_at` is derived from the latest successful metrics snapshot, separately from billing checks. A successful response without a matching account or status clears the old status rather than presenting it as current.
@@ -228,7 +255,7 @@ A confirmed browser or API Auth JSON update returns HTTP 200 with `updated: true
 
 The existing **Authentication → Update Auth JSON** dialog supports **Authorize & update** as well as manual **Upload Auth JSON**. Authorization uses the same OAuth, Setup Token, JSON import, session-cookie and token helper as account submission, with the target email and Account ID locked. Test the current proxy before generating an authorization link; clicking Generate without a successful test shows an inline prompt. Changing the proxy discards its prior test and authorization. The backend binds each draft to its actor and target account lifetime, rejects a different authorized email, and finishes through the account update interface without creating a submission. See [guided credential replacement](docs/auth-json-authorize-update.md).
 
-Each executed update has an audit record with source, actor, owner, account, token reference/revision, and separate update/refresh outcomes. Audits contain metadata only; successful updates save encrypted current credentials separately in `account_credentials`, without creating another submission. Keep `X-Request-ID` and, when present, `X-Auth-JSON-Audit-ID` for support.
+Each executed update has an audit record with source, actor, owner, account, token reference/revision, and separate update/refresh outcomes. Before the supplier write, the audit saves the complete submitted Auth JSON encrypted in `auth_json_ciphertext` (LONGTEXT, nullable for legacy rows). Its payload is immutable; completion updates only operation outcomes and account metadata. Ciphertext is excluded from JSON serialization. Updates do not create another submission. Keep `X-Request-ID` and, when present, `X-Auth-JSON-Audit-ID` for support.
 
 See the [Auth JSON Update API reference](docs/auth-json-update-api.md) for the full validation, cURL, response, audit, and error contract. The in-app guide is at `/tk-register#/docs/update-auth-json`.
 
@@ -246,11 +273,13 @@ fields, and log privacy.
 
 The adjacent **Update Proxy URL** dialog changes only the root `proxy_url` in the account's last confirmed Auth JSON. It is available to the account owner and administrators with the same permissions as Update Auth JSON. The complete saved credentials are never returned to the browser; the existing proxy is shown with its username/password hidden. The new URL must pass a connection test before saving, and editing the URL invalidates that test.
 
-The session routes are `GET/POST /accounts/:id/proxy-url` and `POST /accounts/:id/proxy-url-test`, with the corresponding `/admin/synced-accounts/:id/…` routes for administrators. These use the existing session, same-origin and CSRF checks. The connection-test proof expires after 600 seconds and is bound to the actor, account identity, accepted submission, saved credential revision and proxy digest. Save sends only `proxy_url`, `revision`, and `test_token`; the server constructs the full Auth JSON. These routes are not personal-token API endpoints.
+The session routes are `GET/POST /accounts/:id/proxy-url` and `POST /accounts/:id/proxy-url-test`, with the corresponding `/admin/synced-accounts/:id/…` routes for administrators. These use the existing session, same-origin and CSRF checks. The connection-test proof expires after 600 seconds and is bound to the actor, account identity, accepted submission, opaque history revision and proxy digest. Save sends only `proxy_url`, `revision`, and `test_token`; the server constructs the full Auth JSON. These routes are not personal-token API endpoints.
 
-At startup, the migration creates `account_credentials` and conservatively initializes eligible existing accounts from their accepted submission. Accounts with a successful, pending or uncertain Auth JSON update since that submission are skipped. New accepted web/API submissions and subsequent confirmed Auth JSON updates (manual or guided, web or API) save the complete encrypted payload. No historical submission is rewritten. Missing current credentials require a complete **Update Auth JSON** operation before the shortcut can be used.
+Proxy updates read the newest confirmed credentials for the current owner/vendor/account identity and accepted submission from `account_auth_json_audits`, falling back to that accepted `submissions` record only when no later update may have changed its credentials. A successful legacy update without `auth_json_ciphertext` blocks fallback and requires a complete **Update Auth JSON** operation. A newer pending/unknown result also blocks the shortcut, even if followed by an explicitly failed/rejected attempt. A later successful complete update establishes a new confirmed snapshot. Histories from older accepted submissions are never reused.
 
-Proxy and Auth JSON updates share the account operation locks and recheck supplier identity, ownership, lock/status restrictions and the accepted submission before sending. An outdated dialog returns `ACCOUNT_CREDENTIALS_CHANGED` and must be reopened. A pending candidate is saved encrypted before dispatch; only a confirmed success replaces the last confirmed version. An uncertain response retains both and disables further proxy shortcuts. The dialog shows **Unable to confirm the update result**, explains that the update may have succeeded, and offers only **Close**. There is no automatic resubmission or inference of success from status collection; the supplier cannot return complete current Auth JSON.
+Startup adds the nullable encrypted payload column and `(account_id, submission_id, id)` index to update history. It neither creates nor reads/writes `account_credentials`; any existing obsolete table is left untouched, with no migration or backfill. Existing history rows remain unchanged. New Submit operations continue saving encrypted Auth JSON only in submission history. All manual/guided web/API updates and proxy updates save their own full encrypted snapshots in update history.
+
+Proxy and Auth JSON updates share the account operation locks and recheck supplier identity, ownership, lock/status restrictions and the accepted submission before sending. An outdated dialog returns `ACCOUNT_CREDENTIALS_CHANGED` and must be reopened. The `revision` is a 64-character opaque history identity derived from the accepted account lifetime and source record, not a numeric counter. The pending candidate is saved in its own encrypted history row before dispatch; only confirmed success makes it the selected version. An uncertain response retains all history and disables further proxy shortcuts. The dialog shows **Unable to confirm the update result**, explains that the update may have succeeded, and offers only **Close**. There is no automatic resubmission or inference of success from status collection; the supplier cannot return complete current Auth JSON.
 
 Build the frontend, then run `npm run test:proxy-url` for isolated bilingual desktop/mobile browser coverage with synthetic API responses. Backend tests cover initial submissions, conservative migration, encryption, revision conflicts, permissions, shared locks and uncertain outcomes.
 

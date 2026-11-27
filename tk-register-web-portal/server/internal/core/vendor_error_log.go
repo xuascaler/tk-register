@@ -23,8 +23,8 @@ var (
 )
 
 // Error bodies are operational diagnostics, not client response data. Never log
-// request headers/bodies or credential snapshots. The Docker log driver applies
-// the deployment's configured rotation to these single-line records.
+// request headers/bodies or credential snapshots. The configured logger mirrors
+// these single-line records to rotated disk logs when enabled.
 func (v *VendorService) logExecutionFailure(record Submission, execution ProtocolExecution, result executionResult, input map[string]any, token string) {
 	if result.status == "succeeded" {
 		return

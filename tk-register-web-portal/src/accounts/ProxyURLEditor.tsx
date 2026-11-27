@@ -40,7 +40,7 @@ export function ProxyURLEditor({ account, endpoint, onClose, onSaved, onAuthJSON
     setChecking(true); setEligibility(null); setProblem(null); setProxy(''); setProof(null); setChanged(false);
     request<ProxyEligibility>(path, { signal: controller.signal }).then(value => {
       if (controller.signal.aborted) return;
-      if (!value || typeof value.editable !== 'boolean' || !/^\d+$/.test(value.revision) || typeof value.proxy_url_masked !== 'string') throw new Error('Could not check whether this account can be updated. Please try again.');
+      if (!value || typeof value.editable !== 'boolean' || !/^[0-9a-f]{64}$/.test(value.revision) || typeof value.proxy_url_masked !== 'string') throw new Error('Could not check whether this account can be updated. Please try again.');
       setEligibility(value);
     }).catch(cause => { if (!controller.signal.aborted) setProblem(proxyProblem(cause)); })
       .finally(() => { if (!controller.signal.aborted) setChecking(false); });

@@ -251,7 +251,7 @@ func (a *app) runAccountAuthJSON(w http.ResponseWriter, r *http.Request, user *c
 		}
 	}
 	var raw []byte
-	var expectedRevision *uint64
+	var expectedRevision *string
 	if operation.Proxy {
 		raw, expectedRevision, err = a.resolveAccountProxy(r, w, user, target)
 		if err != nil {

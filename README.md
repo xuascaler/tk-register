@@ -39,6 +39,13 @@ Tests use local fixtures. Live vendor credentials are not needed for the default
 test suite. Optional browser and external Redis integration checks are documented
 in the application README and their test files.
 
+The MySQL persistence regression test additionally requires `TK_TEST_MYSQL_DSN`
+pointing to an empty, disposable database named `tk_persistence_test_*`. From the
+server directory, run `go test ./internal/core -run '^TestMySQLSubmissionPersistence$' -count=1`.
+It refuses an existing schema, tests concurrent first-time credential writes and
+API submissions, and uses a fixture supplier transport. Destroy the test database
+or its disposable container after the run; never supply a production DSN.
+
 ## Standalone image
 
 The Dockerfile packages prebuilt artifacts. From the repository root:
@@ -85,6 +92,13 @@ store. These are CA certificates, not the service's private HTTPS certificate or
 key. The runtime still uses HTTPS port `8443`, private environment settings, and
 the read-only TLS mount described above. Host-specific Compose files, environment
 values, and private keys remain outside Git.
+
+For backend logs that survive container replacement, set
+`TK_REGISTER_LOG_FILE=/var/log/tk-register/server.log` and bind a private host
+`./logs` directory to `/var/log/tk-register` in Compose. Logs rotate at 50 MiB,
+with up to 20 compressed backups retained for up to 30 days. Keep the existing
+Docker logging rotation for nginx/helper output. The Tokyo host directory is
+`/home/ubuntu/Code/tk_register/logs` (mode `0700`, log files `0600`).
 
 Two operator-only initialization commands are included in the image. Neither is
 run at startup or exposed through an HTTP route:
