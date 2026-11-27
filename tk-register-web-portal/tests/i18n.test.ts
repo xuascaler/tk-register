@@ -43,6 +43,17 @@ test('known error codes survive wording changes and unmapped errors keep their E
   assert.equal(localizedError(known), known.message);
 });
 
+test('Claude session freshness error preserves the English provider text in both languages', () => {
+  const message = 'Session is not fresh enough to grant elevated access. Sign in again to continue.';
+  const error = displayError(new APIError(message, 502, 'AUTHORIZATION_SESSION_NOT_FRESH'));
+  try {
+    setLanguage('en-US');
+    assert.equal(localizedError(error), message);
+    setLanguage('zh-CN');
+    assert.equal(localizedError(error), message);
+  } finally { setLanguage('en-US'); }
+});
+
 test('the bilingual Tokyo API guide preserves the scheduled collection contract', () => {
   const example = authJSONUpdateResponse(7.2);
   const field = authJSONUpdateResponseFields.find(({ name }) => name === 'refresh_status')!;

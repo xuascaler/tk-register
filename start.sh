@@ -41,6 +41,10 @@ if [[ "${#TK_REGISTER_CREDENTIAL_HELPER_TOKEN}" -lt 32 ]]; then
 fi
 export TK_REGISTER_CREDENTIAL_HELPER_TOKEN
 export TK_REGISTER_CREDENTIAL_HELPER_URL="http://127.0.0.1:3003"
+export TK_REGISTER_CHROME_TRANSPORT_BIN="${TK_REGISTER_CHROME_TRANSPORT_BIN:-/usr/local/bin/tk-credential-request}"
+
+# Cookie authorization must not silently fall back to a different HTTP client.
+"$TK_REGISTER_CHROME_TRANSPORT_BIN" --check > /dev/null
 
 # Validate certificates and proxy configuration before starting the services.
 nginx -t

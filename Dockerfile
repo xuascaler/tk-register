@@ -5,6 +5,13 @@ RUN npm ci --omit=dev --no-audit --no-fund
 COPY tk-register-web-portal/credential-helper/ ./
 RUN npm test
 
+FROM golang:1.26-bookworm AS credential-transport
+WORKDIR /src
+COPY tk-register-web-portal/credential-helper/chrome-transport/go.mod tk-register-web-portal/credential-helper/chrome-transport/go.sum ./
+RUN go mod download
+COPY tk-register-web-portal/credential-helper/chrome-transport/ ./
+RUN go test ./... && go vet ./... && CGO_ENABLED=0 go build -trimpath -o /out/tk-credential-request .
+
 FROM node:22-bookworm-slim
 
 RUN sed -i 's|http://deb.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g; s|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources \
@@ -14,6 +21,7 @@ RUN sed -i 's|http://deb.debian.org/debian-security|http://mirrors.aliyun.com/de
     && rm -rf /var/lib/apt/lists/* /etc/nginx/sites-enabled/default
 
 COPY --from=credential-helper /helper/ /opt/tk-register-credential-helper/
+COPY --from=credential-transport /out/tk-credential-request /usr/local/bin/tk-credential-request
 COPY tk-register-server /usr/local/bin/tk-register-server
 COPY dist/ /opt/tk-register-web-portal/
 COPY nginx.conf /etc/nginx/nginx.conf

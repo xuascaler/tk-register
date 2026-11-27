@@ -44,7 +44,7 @@ func CredentialHelperCode(value string) string {
 		"proxy_forbidden", "invalid_proxy", "proxy_required", "proxy_ip_mismatch", "proxy_mismatch", "proxy_authentication_failed",
 		"invalid_code", "code_mismatch", "state_mismatch", "code_required", "authorization_declined", "invalid_request", "invalid_owner",
 		"invalid_mode", "invalid_setup_kind", "invalid_document", "access_token_required", "session_key_required", "invalid_session_key",
-		"upstream_timeout", "upstream_network_error", "proxy_check_failed", "upstream_rejected", "upstream_invalid_response",
+		"upstream_timeout", "upstream_network_error", "proxy_check_failed", "upstream_rejected", "upstream_session_not_fresh", "upstream_invalid_response",
 		"organization_missing", "authorization_response_invalid", "invalid_token_response", "invalid_access_token", "invalid_refresh_token",
 		"invalid_token", "invalid_credentials", "unauthorized", "authorization_failed", "not_found", "internal_error":
 		return value
@@ -69,7 +69,7 @@ func credentialHTTPStatus(value int) int {
 func credentialPublicCode(value string) string {
 	return allowed(value, "CREDENTIAL_FLOW_NOT_FOUND", "CREDENTIAL_FLOW_BUSY", "CREDENTIAL_RATE_LIMITED", "INVALID_PROXY", "PROXY_CHANGED",
 		"INVALID_AUTHORIZATION_CODE", "INVALID_REQUEST", "AUTHORIZATION_CONNECTION_FAILED", "AUTHORIZATION_FAILED", "AUTHORIZATION_REJECTED",
-		"AUTHORIZATION_ORGANIZATION_MISSING", "AUTHORIZATION_INVALID_RESPONSE", "INVALID_CREDENTIAL", "CREDENTIAL_HELPER_UNAVAILABLE",
+		"AUTHORIZATION_ORGANIZATION_MISSING", "AUTHORIZATION_SESSION_NOT_FRESH", "AUTHORIZATION_INVALID_RESPONSE", "INVALID_CREDENTIAL", "CREDENTIAL_HELPER_UNAVAILABLE",
 		"CREDENTIAL_HELPER_INVALID_RESPONSE", "PROXY_TEST_UNAVAILABLE", "PROXY_TEST_TIMEOUT", "PROXY_AUTHENTICATION_FAILED",
 		"PROXY_TEST_RATE_LIMITED", "PROXY_CONNECTION_FAILED")
 }

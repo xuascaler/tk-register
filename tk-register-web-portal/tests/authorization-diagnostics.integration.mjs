@@ -29,7 +29,7 @@ const results = [];
 let browser, currentPage;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
-  for (const entry of ['submit', 'update', 'deactivate']) for (const role of ['member', 'admin']) for (const width of [1024, 393]) for (const scenario of ['cookie-403', 'cookie-no-upstream', 'cookie-unknown', 'proxy-auth']) {
+  for (const entry of ['submit', 'update', 'deactivate']) for (const role of ['member', 'admin']) for (const width of [1024, 393]) for (const scenario of ['cookie-403', 'cookie-stale-session', 'cookie-no-upstream', 'cookie-unknown', 'proxy-auth']) {
     const context = await browser.newContext({ viewport: { width, height: 1000 } });
     const page = currentPage = await context.newPage();
     const calls = [], errors = [], unexpected = [];
@@ -39,6 +39,8 @@ try {
     const base = entry === 'submit' ? '/credential-flows' : `${scope}/${operation}/flows`;
     const failure = scenario === 'cookie-403'
       ? { code: 'AUTHORIZATION_REJECTED', message: 'The authorization provider rejected the request. Please try again or authorize this account again.', diagnostics: { stage: 'cookie_organizations', upstream_status: 403, upstream_code: 'permission_error', response_kind: 'json' } }
+      : scenario === 'cookie-stale-session'
+      ? { code: 'AUTHORIZATION_SESSION_NOT_FRESH', message: 'Session is not fresh enough to grant elevated access. Sign in again to continue.', diagnostics: { stage: 'cookie_authorize', upstream_status: 403, upstream_code: 'permission_error', response_kind: 'json' } }
       : scenario === 'cookie-no-upstream'
       ? { code: 'AUTHORIZATION_CONNECTION_FAILED', message: 'The authorization provider could not be reached. Please try again.', diagnostics: { stage: 'cookie_authorize', helper_status: 502 } }
       : scenario === 'proxy-auth'
@@ -87,8 +89,8 @@ try {
     await details.locator('summary').click();
     await expect(details.getByText(requestID, { exact: true })).toBeVisible();
     await expect(details.getByText(failure.code, { exact: true })).toBeVisible();
-    if (scenario === 'cookie-403') {
-      await expect(details.getByText('Read Claude organizations', { exact: true })).toBeVisible();
+    if (scenario === 'cookie-403' || scenario === 'cookie-stale-session') {
+      await expect(details.getByText(scenario === 'cookie-403' ? 'Read Claude organizations' : 'Authorize using sessionKey', { exact: true })).toBeVisible();
       await expect(details.getByText('403', { exact: true })).toBeVisible();
       await expect(details.getByText('permission_error', { exact: true })).toBeVisible();
       await expect(details.getByText('JSON', { exact: true })).toBeVisible();
@@ -104,6 +106,14 @@ try {
     for (const secret of ['sk-ant-sid-private-server-secret', 'private-response-body', 'body-request-must-not-win', proxy]) assert(!rendered.includes(secret));
     await details.getByRole('button', { name: 'Copy Request ID', exact: true }).click();
     assert.equal(await page.evaluate(() => window.syntheticCopiedRequestID), requestID);
+    if (scenario === 'cookie-stale-session') {
+      // Simulate the shared language preference changing in another tab; open
+      // dialogs must update their existing error without another request.
+      await page.evaluate(() => { localStorage.setItem('tk-register.language', 'zh-CN'); window.dispatchEvent(new StorageEvent('storage', { key: 'tk-register.language', newValue: 'zh-CN' })); });
+      await expect(panel.getByText(failure.message, { exact: true })).toBeVisible();
+      if (role === 'member') await page.screenshot({ path: resolve(output, `${entry}-${width}-stale-zh.png`), fullPage: true });
+      await page.evaluate(() => { localStorage.setItem('tk-register.language', 'en-US'); window.dispatchEvent(new StorageEvent('storage', { key: 'tk-register.language', newValue: 'en-US' })); });
+    }
     if (role === 'member' && scenario === 'cookie-403') await page.screenshot({ path: resolve(output, `${entry}-${width}.png`), fullPage: true });
     const before = calls.length;
     await page.waitForTimeout(75);

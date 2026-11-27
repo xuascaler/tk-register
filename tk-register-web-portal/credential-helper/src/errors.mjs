@@ -37,6 +37,7 @@ const messages = {
   upstream_timeout: 'The upstream request timed out.',
   upstream_network_error: 'The upstream could not be reached through the proxy.',
   upstream_rejected: 'The upstream rejected the request.',
+  upstream_session_not_fresh: 'Session is not fresh enough to grant elevated access. Sign in again to continue.',
   upstream_rate_limited: 'The upstream rate limit was reached. Try again later.',
   upstream_invalid_response: 'The upstream response was invalid.',
   authorization_failed: 'Authorization failed. Start a new authorization.',

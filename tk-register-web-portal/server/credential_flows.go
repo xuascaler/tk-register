@@ -322,6 +322,8 @@ func credentialHelperFailure(code string) error {
 		return credentialProblem(502, "AUTHORIZATION_INVALID_RESPONSE", "The authorization provider returned an incomplete or invalid response. Please try again.")
 	case "upstream_rejected":
 		return credentialProblem(502, "AUTHORIZATION_REJECTED", "The authorization provider rejected the request. Please try again or authorize this account again.")
+	case "upstream_session_not_fresh":
+		return credentialProblem(502, "AUTHORIZATION_SESSION_NOT_FRESH", "Session is not fresh enough to grant elevated access. Sign in again to continue.")
 	case "unauthorized":
 		return credentialProblem(503, "CREDENTIAL_HELPER_UNAVAILABLE", "Authorization is temporarily unavailable. Please try again later.")
 	case "upstream_timeout", "upstream_network_error", "proxy_check_failed":

@@ -56,6 +56,7 @@ test('only bounded allowlisted diagnostic fields can reach the UI', () => {
   assert.deepEqual(readAuthorizationDiagnostics({ request_id: 'body-id' }, 'invalid header'), { request_id: 'body-id' });
   assert.equal(authorizationStageLabel('cookie_organizations'), 'Read Claude organizations');
   assert.equal(authorizationErrorCode('AUTHORIZATION_REJECTED'), 'AUTHORIZATION_REJECTED');
+  assert.equal(authorizationErrorCode('AUTHORIZATION_SESSION_NOT_FRESH'), 'AUTHORIZATION_SESSION_NOT_FRESH');
   assert.equal(authorizationErrorCode('PRIVATE_SECRET_TOKEN'), undefined);
 });
 

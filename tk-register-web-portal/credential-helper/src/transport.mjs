@@ -4,6 +4,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 import { resolveProxy } from './proxy.mjs';
 import { fail, safeUpstreamCode } from './errors.mjs';
+import { requestChromeJson } from './chrome-transport.mjs';
 
 const MAX_RESPONSE = 2 * 1024 * 1024;
 
@@ -201,4 +202,8 @@ export function createTransport({ lookup, dial = defaultDial, secure = defaultSe
   };
 }
 
-export const requestJson = createTransport();
+const requestNodeJson = createTransport();
+export function requestJson(url, options = {}) {
+  if (options.browser === 'chrome') return requestChromeJson(url, options);
+  return requestNodeJson(url, options);
+}

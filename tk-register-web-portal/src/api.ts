@@ -173,6 +173,7 @@ export function displayError(cause: unknown): DisplayError {
 
 export function localizedError(value: DisplayError): string {
   if (typeof value === 'string') return translateMessage(value);
+  if (value.code === 'AUTHORIZATION_SESSION_NOT_FRESH') return value.message;
   if (currentLanguage() === 'en-US') return value.message;
   if (value.code === 'SUPPLIER_RATE_LIMITED' && value.retryAfter > 0) {
     const reason = {

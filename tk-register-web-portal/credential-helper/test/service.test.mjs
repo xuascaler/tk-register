@@ -170,7 +170,40 @@ test('cookie import is idempotent and keeps redeemed credentials if profile need
   assert.deepEqual(result, again);
   assert.equal(result.auth.access_token, 'mock-access');
   assert.equal(calls.filter(c => c.url.includes('/oauth/token')).length, 1);
+  for (const call of calls.filter(c => c.url.endsWith('/api/organizations') || c.url.endsWith('/authorize') || c.url.includes('/oauth/token'))) {
+    assert.equal(call.browser, 'chrome');
+    assert.equal(call.proxy_url, proxy);
+    assert.equal(call.session_key, call.url.includes('/oauth/token') ? undefined : body.session_key);
+  }
 });
+
+for (const [name, organizations, expected] of [
+  ['single organization', [{ uuid: 'single-org' }], 'single-org'],
+  ['team before capability count', [
+    { uuid: 'personal-org', raven_type: null, capabilities: ['chat', 'api', 'extra'] },
+    { uuid: 'team-org', raven_type: 'team', capabilities: ['chat'] },
+    { uuid: 'second-team', raven_type: 'team', capabilities: ['chat', 'api', 'extra'] },
+  ], 'team-org'],
+  ['first organization when no team exists', [
+    { uuid: 'first-org', raven_type: null, capabilities: [] },
+    { uuid: 'more-capabilities', capabilities: ['chat', 'api', 'extra'] },
+  ], 'first-org'],
+]) {
+  test(`Cookie organization selection matches SubAPI: ${name}`, async t => {
+    const { service, calls } = mockService({ handle: async (url, request) => {
+      if (url.endsWith('/api/organizations')) return organizations;
+      if (url.endsWith('/authorize')) {
+        assert.equal(url, `https://claude.ai/v1/oauth/${expected}/authorize`);
+        assert.equal(request.body.organization_uuid, expected);
+        assert.equal(request.body.scope, 'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload');
+        return { redirect_uri: `https://platform.claude.com/oauth/code/callback?code=cookie-code&state=${request.body.state}` };
+      }
+    } });
+    t.after(() => service.close());
+    await service.import({ owner_id: '42', proxy_url: proxy, kind: 'cookie', session_key: 'sk-ant-sid-test-only' });
+    assert.equal(calls.filter(c => c.url.endsWith('/authorize')).length, 1);
+  });
+}
 
 test('operation deadline reduces later request timeouts below the Go helper deadline', async t => {
   let clock = 1000000;

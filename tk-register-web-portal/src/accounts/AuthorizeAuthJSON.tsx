@@ -1,7 +1,7 @@
 import { t, translateMessage, useLanguage, currentLanguage } from '../i18n';
 import { Check, ChevronDown, CircleAlert, CircleCheck, Copy, Info, LoaderCircle, PlugZap, RefreshCw, Upload } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
-import { APIError, errorMessage, request } from '../api';
+import { APIError, displayError, errorMessage, localizedError, request, type DisplayError } from '../api';
 import { Loading, PasswordField } from '../ui';
 import AuthorizationErrorDetails from '../AuthorizationErrorDetails';
 import Select from '../submissions/Select';
@@ -44,7 +44,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
   const [authText, setAuthText] = useState('');
   const [stage, setStage] = useState<Stage>('prepare');
   const [busy, setBusy] = useState('');
-  const [error, setErrorText] = useState('');
+  const [error, setErrorText] = useState<DisplayError>('');
   const [errorDetails, setErrorDetails] = useState<APIError | null>(null);
   const [credentialError, setCredentialError] = useState<string | AuthFieldError>('');
   const [announcement, setAnnouncement] = useState('');
@@ -109,7 +109,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
   }, [flow, method, setupKind, storageKey]);
 
   function setError(message: string) { setErrorText(message); setErrorDetails(null); }
-  function showError(cause: unknown, message = errorMessage(cause)) { setErrorText(message); setErrorDetails(cause instanceof APIError ? cause : null); }
+  function showError(cause: unknown, message?: string) { setErrorText(message ?? displayError(cause)); setErrorDetails(cause instanceof APIError ? cause : null); }
   function clearStorage() { try { sessionStorage.removeItem(storageKey); } catch { /* Optional storage. */ } }
   function acceptFlow(value: UpdateFlow) {
     if (!value?.flow_id || !Number.isFinite(Date.parse(value.expires_at))) throw new Error('The authorization response could not be confirmed.');
@@ -303,7 +303,7 @@ export default function AuthorizeAuthJSON({ path, accountEmail, disabled, purpos
       </section>}
       {busy && <Loading label={translateMessage(busy)} />}
       {stage === 'mismatch' && <div className='notice error account-auth-mismatch' role='alert'><strong>{t("Account email does not match")}</strong><p>{t("Target:")} {accountEmail}</p>{authorizedEmail && <p>{t("Authorized:")} {authorizedEmail}</p>}<p>{generation ? t("Reauthorize with the target account.") : t("No update was sent. Reauthorize with the target account.")}</p></div>}
-      {error && stage !== 'mismatch' && <><div className={`notice ${uncertain ? 'account-auth-uncertain' : 'error'}`} role='alert'>{translateMessage(error)}</div><AuthorizationErrorDetails error={errorDetails} /></>}
+      {error && stage !== 'mismatch' && <><div className={`notice ${uncertain ? 'account-auth-uncertain' : 'error'}`} role='alert'>{localizedError(error)}</div><AuthorizationErrorDetails error={errorDetails} /></>}
       {expired && <p className='field-error' role='alert'>{t("This authorization has expired. Generate a new authorization.")}</p>}
       {flow?.auth && !uncertain && stage !== 'mismatch' && <details className='authorize-credentials' open={credentialsOpen} onToggle={event => setCredentialsOpen(event.currentTarget.open)}><summary>{t("Complete missing credential fields")}<ChevronDown aria-hidden='true' /></summary><div className='field'><label htmlFor={`${prefix}-auth-json`}>{t("Standard Auth JSON")}</label><textarea id={`${prefix}-auth-json`} value={authText} onChange={event => { setAuthText(event.target.value); setCredentialError(''); }} disabled={locked} autoComplete='off' spellCheck={false} rows={8} /><p className='field-help'>{t("Complete missing fields only. The authorized email and proxy cannot be replaced.")}</p>{credentialError && <p className='field-error' role='alert'>{localizeAuthJSONMessage(credentialError)}</p>}</div></details>}
       {flow && !busy && <div className='authorize-small-actions'>{uncertain ? <button type='button' className='text-link' onClick={() => void checkResult()}>{generation ? t("Check saved generation result") : t("Check saved update result")}</button> : null}<button type='button' className='text-link' disabled={testing} onClick={restart}><RefreshCw aria-hidden='true' />{t("Start a new authorization")}</button></div>}

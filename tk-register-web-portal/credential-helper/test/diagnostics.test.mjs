@@ -136,6 +136,31 @@ test('three entry headers correlate Cookie failure logs while response and logs 
   assert.equal(logs.length, 3); safeOutput(logs);
 });
 
+test('authorization rejection logs safe organization selection without exposing upstream organization data', async t => {
+  const { service, calls } = credentialService(url => {
+    if (url.endsWith('/api/organizations')) return [
+      { uuid: 'private-org-personal', name: 'secret-upstream-message', capabilities: ['chat', 'extra'] },
+      { uuid: 'private-org-team', name: 'secret-upstream-message', raven_type: 'team' },
+    ];
+    if (url.endsWith('/authorize')) throw fail('upstream_rejected', 'secret-upstream-message', 502,
+      { upstreamStatus: 403, upstreamCode: 'permission_error', responseKind: 'json' });
+  });
+  const { post, logs } = await helper(t, service);
+  const response = await post();
+  assert.equal(response.status, 502);
+  const result = await response.json();
+  assert.equal(result.error.stage, 'cookie_authorize');
+  assert.equal(result.error.upstream_code, 'permission_error');
+  assert.equal(result.error.organization_count, undefined);
+  const log = JSON.parse(logs[0].replace('TK_CREDENTIAL_HELPER ', ''));
+  assert.equal(log.organization_count, 2);
+  assert.equal(log.organization_type, 'team');
+  assert.equal(log.organization_selection, 'team');
+  assert.equal(calls.filter(url => url.endsWith('/authorize')).length, 1);
+  assert.equal(calls.filter(url => url.endsWith('/oauth/token')).length, 0);
+  safeOutput([result, logs]);
+});
+
 test('unexpected exceptions and invalid diagnostic headers never leak arbitrary strings', async t => {
   const service = { close() {}, async import() { throw Object.assign(new Error(cookie), {
     stage: proxy, upstreamStatus: '403', upstreamCode: cookie, responseKind: cookie,

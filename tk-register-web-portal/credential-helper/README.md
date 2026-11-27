@@ -7,7 +7,11 @@ drafts, validation, submission, authorization, and audit records.
 
 ## Runtime
 
-- Node 20 or later; no third-party dependencies. Node 22 is supported.
+- Node 20 or later; no third-party Node dependencies. Node 22 is supported.
+- Cookie authorization additionally requires `tk-credential-request`, built from
+  `chrome-transport` with Go 1.26.1 or later. Both Dockerfiles build and install it.
+  For local development, build it to a temporary location and set
+  `TK_REGISTER_CHROME_TRANSPORT_BIN` to that absolute executable path.
 - `npm ci --omit=dev --ignore-scripts`, then `npm start`.
 - `TK_REGISTER_CREDENTIAL_HELPER_TOKEN` must be a nonempty internal secret shared
   with Go. Missing or malformed configuration prevents startup.
@@ -122,6 +126,45 @@ IP check endpoint are allowed; redirects are rejected. There is no insecure TLS
 option, caller-selected upstream URL, direct-connect mode, or supplier submission
 endpoint in this service.
 
+## Cookie request compatibility
+
+Cookie organization lookup, authorization, and code exchange use the same
+`github.com/imroc/req/v3 v3.59.0` client and `ImpersonateChrome()` profile as
+SubAPI. This includes Chrome TLS and HTTP/2 characteristics and header ordering;
+authorization and token exchange apply SubAPI's endpoint-specific headers. No
+browser, extra browser cookies, challenge solver, or automatic retry is used.
+Organization selection also follows SubAPI: the first `raven_type=team`
+organization wins, otherwise the first organization is used. Failure logs include
+only organization count, a bounded type, and the selection rule; IDs and names are
+not logged or included in public error responses.
+Proxy verification, profile enrichment, and non-Cookie flows keep their existing
+transport and flow behavior.
+
+Each of these three requests invokes the bounded Go transport once, exchanging
+JSON only through stdin/stdout. Proxy passwords, session keys, authorization codes,
+and tokens never enter process arguments or temporary files. Node validates all
+proxy DNS results and passes the chosen public IP; Go also checks the address and
+allows its socket dialer to connect only to that pinned proxy. Original hostnames
+remain in TLS certificate/SNI checks. Redirects and direct fallback are disabled.
+The process is killed on timeout, responses are limited to 2 MiB, and errors expose
+only the existing safe status/type/code fields in public responses. For rejected
+JSON requests, the private Go/Node IPC also carries `error.message` (at most 8 KiB;
+oversized messages and non-string values are discarded). Before server-only logging,
+Node removes request credentials, proxy details, URLs, email addresses and token/ID
+patterns, strips control characters, and limits the message to 1,024 characters.
+No full response body is retained and the diagnostic never reaches browser/API
+error responses. Startup checks the installed binary.
+
+The explicit HTTP 403 `permission_error` message about a session not being fresh
+enough maps to `upstream_session_not_fresh` and public
+`AUTHORIZATION_SESSION_NOT_FRESH`. The API and UI preserve this recognized English
+message verbatim in both languages, without translation or added instructions.
+Other 403 errors retain their generic rejection; arbitrary provider messages are
+not forwarded to the UI.
+
+Chrome compatibility is not proof that any particular live proxy or session will
+be accepted by Claude. A live 403 diagnosis still requires a matching real request.
+
 ## Tests
 
 Run `npm test`. Tests use only local mock proxy servers and fake credentials. They
@@ -130,3 +173,7 @@ fixed endpoint allowlists, failure without direct fallback, owner isolation, PKC
 expiry, idempotent redemption, imports, budgeted retries, and error redaction.
 The test runner needs permission to bind loopback sockets; no Internet access is
 required.
+
+The Go transport tests (`cd chrome-transport && go test ./...`) verify real TLS
+and HTTP/2 through local mock proxies, request headers, no direct fallback,
+bounded responses, and error redaction. They do not contact Claude.

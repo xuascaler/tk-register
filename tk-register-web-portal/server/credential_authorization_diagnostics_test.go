@@ -156,6 +156,7 @@ func TestCredentialDiagnosticsDoNotTurnUpstream401IntoSession401(t *testing.T) {
 	}{
 		{502, "upstream_rejected", 401, 502, "AUTHORIZATION_REJECTED"},
 		{502, "upstream_rejected", 403, 502, "AUTHORIZATION_REJECTED"},
+		{502, "upstream_session_not_fresh", 403, 502, "AUTHORIZATION_SESSION_NOT_FRESH"},
 		{401, "unauthorized", 0, 503, "CREDENTIAL_HELPER_UNAVAILABLE"},
 	} {
 		t.Run(test.code+http.StatusText(test.upstreamStatus), func(t *testing.T) {
@@ -268,6 +269,7 @@ func TestCredentialHelperErrorRefinementsRemainSafe(t *testing.T) {
 		{"invalid_session_key", "INVALID_CREDENTIAL", 400},
 		{"invalid_token", "INVALID_CREDENTIAL", 400},
 		{"upstream_rejected", "AUTHORIZATION_REJECTED", 502},
+		{"upstream_session_not_fresh", "AUTHORIZATION_SESSION_NOT_FRESH", 502},
 		{"private-cookie-error", "AUTHORIZATION_FAILED", 502},
 	} {
 		t.Run(test.helperCode, func(t *testing.T) {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { requestJson as defaultRequestJson } from './transport.mjs'
-import { withStage, logDiagnostic } from './diagnostics.mjs'
+import { withStage, logDiagnostic, recordCookieOrganization } from './diagnostics.mjs'
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const FULL_SCOPE = 'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload'
@@ -219,6 +219,7 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
       if (session.official) body.expires_in = 31536000
       const token = await requestJson(urls.tokenUrl, {
         method: 'POST', body, proxy_url: session.proxy_url,
+        ...(session.browser ? { browser: session.browser } : {}),
       })
       const credential = fromToken(token, session.proxy_url)
       credential.proxy_exit_ip = session.exit_ip || ''
@@ -256,32 +257,31 @@ export function createOAuthService({ requestJson = defaultRequestJson, verifyPro
   async function cookie({ mode = 'oauth', setup_kind = 'full', session_key, proxy_url = '' } = {}) {
     const key = String(session_key || '').trim().replace(/^['"]|['"]$/g, '')
     if (!key.startsWith('sk-ant-sid')) throw fail('invalid_session_key', '请填写以 sk-ant-sid 开头的 sessionKey。')
-    const session = { ...flow(mode, setup_kind), ...pkce(), proxy_url: requiredProxy(proxy_url) }
+    const session = { ...flow(mode, setup_kind), ...pkce(), proxy_url: requiredProxy(proxy_url), browser: 'chrome' }
     const cacheKey = grantKey('cookie', key, session.proxy_url, `${mode}:${setup_kind}`)
     const pending = takePending(cacheKey)
     try {
       const proxyCheck = await checkedProxy(session.proxy_url, text(pending.credential?.proxy_exit_ip))
       session.exit_ip = text(proxyCheck?.ip)
       if (!pending.credential) {
-        const webOrigin = new URL(urls.organizationsUrl).origin
-        const headers = {
-          cookie: `sessionKey=${key}`, origin: webOrigin, referer: `${webOrigin}/`,
-          'user-agent': 'Mozilla/5.0',
-        }
+        // The transport applies SubAPI's Chrome profile and per-endpoint headers.
+        const browserOptions = { browser: session.browser, session_key: key, proxy_url: session.proxy_url }
         const organization = await withStage('cookie_organizations', async () => {
-          const organizations = await requestJson(urls.organizationsUrl, { headers, proxy_url: session.proxy_url })
+          const organizations = await requestJson(urls.organizationsUrl, browserOptions)
           if (!Array.isArray(organizations) || !organizations.length) {
             throw fail('organization_missing', '此 sessionKey 没有返回可用组织。', 502)
           }
-          const candidates = organizations.filter(org => org?.uuid && Array.isArray(org.capabilities) && org.capabilities.includes('chat'))
-          const selected = candidates.sort((a, b) => b.capabilities.length - a.capabilities.length)[0]
-            || organizations.find(org => org?.uuid)
-          if (!selected) throw fail('organization_missing', '账号响应中没有组织 UUID。', 502)
+          // Match SubAPI: prefer the first team organization, otherwise keep
+          // upstream order. Capability count is not an authorization priority.
+          const selected = organizations.find(org => org?.raven_type === 'team') || organizations[0]
+          if (typeof selected?.uuid !== 'string' || !selected.uuid) throw fail('organization_missing', '账号响应中没有组织 UUID。', 502)
+          recordCookieOrganization(organizations.length, selected.raven_type,
+            organizations.length === 1 ? 'single' : selected.raven_type === 'team' ? 'team' : 'first')
           return selected
         })
         const callback = await withStage('cookie_authorize', async () => {
           const authorized = await requestJson(`${urls.cookieAuthorizeBase}/${encodeURIComponent(organization.uuid)}/authorize`, {
-            method: 'POST', headers, proxy_url: session.proxy_url,
+            method: 'POST', ...browserOptions,
             body: { ...authorizeParams(session), organization_uuid: organization.uuid },
           })
           if (!authorized?.redirect_uri) throw fail('authorization_response_invalid', 'Cookie 授权没有返回授权回调地址。', 502)
