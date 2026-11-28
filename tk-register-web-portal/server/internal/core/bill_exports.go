@@ -16,7 +16,6 @@ import (
 const (
 	MaxBillExportReportBytes   = 4 << 20
 	MaxBillExportArtifactBytes = 8 << 20
-	MaxBillExportUsers         = 20
 	BillExportRetention        = 7 * 24 * time.Hour
 )
 
@@ -134,6 +133,14 @@ type BillExportOptions struct {
 	UsageSource     string
 }
 
+// AdminBillExportUsers is the complete selection snapshot for All, independent
+// of the searchable admin list's page or filter. Return only selection fields.
+func (s *Store) AdminBillExportUsers(ctx context.Context) ([]User, error) {
+	users := []User{}
+	err := s.DB.WithContext(ctx).Select("id", "email").Order("id DESC").Find(&users).Error
+	return users, err
+}
+
 func (s *Store) CreateBillExport(ctx context.Context, actorID, userID uint64, start, end string, now time.Time, options ...BillExportOptions) (BillExportJob, error) {
 	return s.CreateBillExportForUsers(ctx, actorID, []uint64{userID}, start, end, now, options...)
 }
@@ -150,8 +157,8 @@ func (s *Store) CreateBillExportForUsers(ctx context.Context, actorID uint64, us
 	if actorID == 0 || len(userIDs) == 0 {
 		return job, validationErrorf("Select at least one user.")
 	}
-	uniqueIDs := make([]uint64, 0, MaxBillExportUsers)
-	seen := make(map[uint64]bool, MaxBillExportUsers)
+	uniqueIDs := make([]uint64, 0, len(userIDs))
+	seen := make(map[uint64]bool, len(userIDs))
 	for _, id := range userIDs {
 		if id == 0 {
 			return job, validationErrorf("Select valid users.")
@@ -161,9 +168,6 @@ func (s *Store) CreateBillExportForUsers(ctx context.Context, actorID uint64, us
 		}
 		seen[id] = true
 		uniqueIDs = append(uniqueIDs, id)
-		if len(uniqueIDs) > MaxBillExportUsers {
-			return job, validationErrorf("Select no more than 20 users.")
-		}
 	}
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// All exports currently use this one vendor. The short row lock serializes
@@ -251,7 +255,7 @@ func (s *Store) CreateBillExportForUsers(ctx context.Context, actorID uint64, us
 		for i := range users {
 			users[i].JobID = job.ID
 		}
-		if err := tx.CreateInBatches(users, MaxBillExportUsers).Error; err != nil {
+		if err := tx.CreateInBatches(users, 200).Error; err != nil {
 			return err
 		}
 		job.Users = users

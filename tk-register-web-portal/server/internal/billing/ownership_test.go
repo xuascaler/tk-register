@@ -2,11 +2,56 @@ package billing
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/xuri/excelize/v2"
 )
+
+func TestWorkbookPreservesLargeUserSelections(t *testing.T) {
+	for _, count := range []int{21, 132, 2000} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			users := make([]string, count)
+			for i := range users {
+				users[i] = fmt.Sprintf("user-%04d@example.com", i)
+			}
+			users[count-1] = "=literal@example.com"
+			report := emptyReport()
+			report.UserEmails = users
+			data, err := Workbook(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := excelize.OpenReader(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			for _, sheet := range f.GetSheetList() {
+				label, _ := f.GetCellValue(sheet, "A2")
+				header, _ := f.GetCellValue(sheet, "B2")
+				height, _ := f.GetRowHeight(sheet, 2)
+				if label != fmt.Sprintf("Users (%d)", count) || header != "See Selected users sheet." || height > 120 {
+					t.Fatalf("invalid large-selection header: %s %q %q height=%v", sheet, label, header, height)
+				}
+			}
+			rows, err := f.GetRows("Selected users")
+			if err != nil || len(rows) != count+6 {
+				t.Fatalf("lost selected users: rows=%d err=%v", len(rows), err)
+			}
+			for i, email := range users {
+				if len(rows[i+6]) != 1 || rows[i+6][0] != email {
+					t.Fatalf("selected user %d not preserved: %v", i, rows[i+6])
+				}
+			}
+			formula, _ := f.GetCellFormula("Selected users", fmt.Sprintf("A%d", count+6))
+			if formula != "" {
+				t.Fatal("user email became a formula", formula)
+			}
+		})
+	}
+}
 
 func TestExportCountsInheritedAccountOnceWithAllModelRows(t *testing.T) {
 	account := Account{LocalAccountID: "10", IdentityKey: "same-lifetime", Username: "child@example.com", Account: "claude@example.com", PlatformAccountID: "32501"}

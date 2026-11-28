@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { BILL_EXPORT_USER_LIMIT, billExportUsers, sameBillExportUsers, toggleBillExportUser, beijingDate, billAmount, billSubmittedTime, exportDateError, offsetDate } from '../src/admin/bill-exports.ts';
+import { billExportUsers, sameBillExportUsers, toggleBillExportUser, beijingDate, billAmount, billSubmittedTime, exportDateError, offsetDate } from '../src/admin/bill-exports.ts';
 
 test('bill export dates use the Beijing day even before UTC midnight', () => {
   assert.equal(beijingDate(new Date('2026-11-11T16:01:00Z')), '2026-11-12');
@@ -39,16 +39,16 @@ test('bill submission times use Beijing time and preserve missing values in old 
   }
 });
 
-test('bill export selections retain unique user IDs and stop at twenty without preventing removal', () => {
-  const selected = Array.from({ length: BILL_EXPORT_USER_LIMIT }, (_, index) => ({ id: String(index + 1), email: `user${index + 1}@example.test` }));
-  const extra = { id: '21', email: 'extra@example.test' };
-  assert.deepEqual(toggleBillExportUser(selected, extra), selected);
+test('bill export selections exceed twenty and preserve deduplication, removal and immutability', () => {
+  const selected = Array.from({ length: 132 }, (_, index) => ({ id: String(index + 1), email: `user${index + 1}@example.test` }));
+  const extra = { id: '133', email: 'extra@example.test' };
+  assert.deepEqual(toggleBillExportUser(selected, extra), [...selected, extra]);
   const removed = toggleBillExportUser(selected, { ...selected[0], email: 'renamed@example.test' });
-  assert.equal(removed.length, 19);
+  assert.equal(removed.length, 131);
   assert.ok(!removed.some(user => user.id === '1'));
-  assert.equal(toggleBillExportUser(removed, extra).length, 20);
+  assert.equal(toggleBillExportUser(removed, extra).length, 132);
   assert.deepEqual(toggleBillExportUser([selected[0], selected[0]], extra), [selected[0], extra]);
-  assert.equal(selected.length, 20, 'selection updates do not mutate saved references');
+  assert.equal(selected.length, 132, 'selection updates do not mutate saved references');
 });
 
 test('bill export users use the task snapshot and fall back to the old single-user response', () => {

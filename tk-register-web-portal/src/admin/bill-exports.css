@@ -19,6 +19,14 @@
 .bill-user-search { position: relative; margin-bottom: 7px; }
 .bill-user-search > svg { position: absolute; left: 11px; top: 13px; color: #8da1bb; pointer-events: none; }
 .bill-user-search input { padding-left: 36px; }
+.bill-user-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; border-bottom: 1px solid var(--border); margin: 6px 0; padding-bottom: 6px; }
+.bill-user-actions > span { color: #6b809b; font-size: 12px; }
+.bill-user-actions > div { display: flex; align-items: center; gap: 4px; }
+.bill-user-actions button { display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 5px; color: var(--navy); background: transparent; font: inherit; font-size: 12px; padding: 6px 9px; min-height: 32px; }
+.bill-user-actions button:hover:not(:disabled) { background: var(--pale); }
+.bill-user-actions button:disabled { opacity: .45; cursor: default; }
+.bill-user-actions svg { width: 13px; height: 13px; }
+@media (pointer: coarse), (max-width: 480px) { .bill-user-actions button { min-height: 44px; min-width: 44px; } }
 .bill-user-options { max-height: 245px; overflow-y: auto; display: grid; gap: 3px; }
 .bill-exports .bill-user-option { display: flex; align-items: center; gap: 10px; margin: 0; padding: 9px 8px; border-radius: 5px; min-height: 49px; color: var(--ink); cursor: pointer; font-weight: 400; }
 .bill-user-option:hover { background: #f5f8fc; }
@@ -31,7 +39,6 @@
 .bill-user-message .text-button,.bill-users-more { border: 0; color: var(--navy); background: transparent; font-size: 12px; padding: 5px; }
 .bill-users-more { width: 100%; padding: 12px; border-top: 1px solid var(--border); margin-top: 4px; }
 .bill-users-more:hover { background: #f4f7fb; }
-.bill-user-limit { color: #7e8fa4; font-size: 12px; margin: 8px 0; }
 .bill-user-menu-footer { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #6b809b; font-size: 12px; }
 .bill-user-menu-footer > button { border: 1px solid #ccdbee; border-radius: 5px; background: var(--pale); color: var(--navy); padding: 6px 12px; font-size: 12px; min-height: 32px; }
 .bill-selected-users { order: 4; grid-column: 1/3; grid-row: 2; display: flex; align-items: flex-start; gap: 9px; min-width: 0; }

@@ -105,6 +105,23 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 		fail(w, 403, "FORBIDDEN", "Administrator access is required.")
 		return true
 	}
+	if route == base+"/users" {
+		if r.Method != "GET" {
+			fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
+			return true
+		}
+		users, err := a.store.AdminBillExportUsers(r.Context())
+		if err != nil {
+			internal(w)
+			return true
+		}
+		items := make([]map[string]string, 0, len(users))
+		for _, user := range users {
+			items = append(items, map[string]string{"id": strconv.FormatUint(user.ID, 10), "email": user.Email})
+		}
+		ok(w, map[string]any{"items": items})
+		return true
+	}
 	if route == base {
 		switch r.Method {
 		case "GET":
@@ -151,8 +168,8 @@ func (a *app) billExportRoutes(w http.ResponseWriter, r *http.Request, route str
 					userIDs = append(userIDs, id)
 				}
 			}
-			if len(userIDs) == 0 || len(userIDs) > core.MaxBillExportUsers {
-				fail(w, 400, "INVALID_REQUEST", "Choose between 1 and 20 users.")
+			if len(userIDs) == 0 {
+				fail(w, 400, "INVALID_REQUEST", "Select at least one user.")
 				return true
 			}
 			retry, err := loginAttempt.Run(r.Context(), a.redis, []string{redisPrefix + "bill-export:create:" + strconv.FormatUint(actor.ID, 10)}, 5, 60).Int()

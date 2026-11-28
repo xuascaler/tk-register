@@ -124,17 +124,85 @@ func TestBillExportHTTPMultipleUsersFrozenReportAndWorkbook(t *testing.T) {
 func TestBillExportHTTPRejectsInvalidMultiUserSelections(t *testing.T) {
 	a, owner, _, _, _, _ := setupPageSync(t)
 	_, cookie, csrf := vendorSession(t, a, "multi-validation@example.com", "admin")
-	tooMany := make([]string, 21)
-	for i := range tooMany {
-		tooMany[i] = fmt.Sprint(i + 1)
-	}
-	for _, ids := range [][]string{{}, {"0"}, {"abc"}, tooMany} {
+	for _, ids := range [][]string{{}, {"0"}, {"abc"}} {
 		body := map[string]any{"user_ids": ids, "start_date": "2026-01-05", "end_date": "2026-01-05"}
 		requireStatus(t, request(t, a, "POST", "admin/bill-exports", body, cookie, csrf), 400)
 	}
 	requireStatus(t, request(t, a, "POST", "admin/bill-exports", map[string]any{"user_ids": []string{fmt.Sprint(owner.ID), "999999999"}, "start_date": "2026-01-05", "end_date": "2026-01-05"}, cookie, csrf), 404)
 	body := map[string]any{"user_ids": []string{fmt.Sprint(owner.ID)}, "user_id": fmt.Sprint(owner.ID), "start_date": "2026-01-05", "end_date": "2026-01-05"}
 	requireStatus(t, request(t, a, "POST", "admin/bill-exports", body, cookie, csrf), 400)
+}
+
+func TestBillExportAllUserOptionsAndLargeSelection(t *testing.T) {
+	a, owner, ownerCookie, _, accounts, _ := setupPageSync(t)
+	admin, cookie, csrf := vendorSession(t, a, "all-export-admin@example.com", "admin")
+	ctx, now := context.Background(), time.Now().UTC()
+	for i := 0; i < 131; i++ {
+		user := core.User{Email: fmt.Sprintf("all-export-%03d@example.com", i), PasswordHash: "not-for-the-browser", EmailVerifiedAt: now, Role: "member"}
+		if err := a.store.CreateUser(ctx, &user); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const route = "admin/bill-exports/users"
+	requireStatus(t, request(t, a, "GET", route, nil, nil, ""), 401)
+	requireStatus(t, request(t, a, "GET", route, nil, ownerCookie, ""), 403)
+	requireStatus(t, request(t, a, "POST", route, map[string]any{}, cookie, csrf), 405)
+	response := request(t, a, "GET", route+"?search=no-match&page=99", nil, cookie, "")
+	requireStatus(t, response, 200)
+	items := data(t, response)["items"].([]any)
+	var total int64
+	if err := a.store.DB.Model(&core.User{}).Count(&total).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != int(total) || len(items) <= 132 {
+		t.Fatalf("All omitted users: got %d want %d", len(items), total)
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		user := item.(map[string]any)
+		if len(user) != 2 || user["email"] == "" {
+			t.Fatal("selection endpoint must only return ID/email", user)
+		}
+		ids = append(ids, user["id"].(string))
+	}
+	// Freeze a real Modified bill and exercise the entire worker/download path.
+	day := core.AccountUsageDay{AccountID: accounts[0].ID, IdentityKey: accounts[0].IdentityKey, UsageDate: "2026-01-05", LastSuccessAt: &now, LastAttemptAt: now}
+	if err := a.store.DB.Create(&day).Error; err != nil {
+		t.Fatal(err)
+	}
+	line := core.AccountDailyUsageModified{DayID: day.ID, Model: "one", CostCNY: "5", InputTokens: "1", OutputTokens: "2", CacheReadTokens: "3", CacheWriteTokens: "4"}
+	if err := a.store.DB.Create(&line).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"user_ids": append(ids, fmt.Sprint(owner.ID)), "start_date": "2026-01-05", "end_date": "2026-01-05"}
+	response = request(t, a, "POST", "admin/bill-exports", body, cookie, csrf)
+	requireStatus(t, response, 200)
+	metadata := data(t, response)
+	if len(metadata["users"].([]any)) != len(ids) {
+		t.Fatal("large selection was truncated or duplicated")
+	}
+	if err := a.processBillExport(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := metadata["id"].(string)
+	jobID, _ := core.ParseBusinessID(id)
+	job, err := a.store.BillExportData(ctx, admin.ID, jobID)
+	if err != nil || job.Status != "completed" || job.TotalCNY != "5.00" || len(job.Users) != len(ids) {
+		t.Fatalf("large selection export failed: status=%s total=%s users=%d err=%v", job.Status, job.TotalCNY, len(job.Users), err)
+	}
+	response = request(t, a, "GET", "admin/bill-exports/"+id+"/download", nil, cookie, "")
+	requireStatus(t, response, 200)
+	book, err := excelize.OpenReader(bytes.NewReader(response.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer book.Close()
+	for _, sheet := range book.GetSheetList() {
+		label, _ := book.GetCellValue(sheet, "A2")
+		if label != fmt.Sprintf("Users (%d)", len(ids)) {
+			t.Fatal("workbook lost selected users", sheet, label)
+		}
+	}
 }
 
 func TestBillExportDTOLegacyUserFallback(t *testing.T) {

@@ -23,15 +23,16 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined) });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, hasTouch: true });
   const unexpected = [], errors = [], requests = [], jobs = new Map();
+  let failAllUsers = false, allUsersGate = null;
   page.on('pageerror', error => errors.push(error.message));
   const admin = { id: 1, email: 'admin@example.test', role: 'admin', status: 'active', created_at: '2026-11-19T00:00:00Z' };
   const owner = { id: '2', email: 'team@example.test' };
   const member = { id: '3', email: 'member@example.test' };
   const nested = { id: '4', email: 'nested@example.test' };
   const other = { id: '5', email: 'other@example.test' };
-  const bulk = Array.from({ length: 21 }, (_, index) => ({ id: String(100 + index), email: `bulk${String(index + 1).padStart(2, '0')}@example.test` }));
+  const bulk = Array.from({ length: 128 }, (_, index) => ({ id: String(100 + index), email: `bulk${String(index + 1).padStart(3, '0')}@example.test` }));
   const catalog = [owner, member, nested, other, ...bulk];
   const account = (user, email, id) => ({ username: user.email, account: email, platform_account_id: id, latest_submitted_at: '2026-11-15T00:00:00Z', plan: 'claude/cc-max-20x', row_count: 2, amount_cny: '100.00', status: 'matched' });
   const accounts = new Map([
@@ -53,6 +54,11 @@ try {
     if (path === '/auth/status') return ok({ registration_enabled: true, password_login_enabled: true, email_code_login_enabled: true });
     if (path === '/members/sources') return ok({ sources: [{ id: 'myself', label: 'myself' }] });
     if (path === '/admin/settings') return ok({ settings: [] });
+    if (path === '/admin/bill-exports/users') {
+      if (allUsersGate) await allUsersGate;
+      if (failAllUsers) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ success: false, message: 'All users temporarily unavailable.' }) });
+      return ok({ items: catalog });
+    }
     if (path === '/admin/users') {
       const search = (url.searchParams.get('search') || '').toLowerCase(), current = Number(url.searchParams.get('page') || '1');
       const users = catalog.filter(user => user.email.toLowerCase().includes(search));
@@ -61,7 +67,7 @@ try {
     if (path === '/admin/bill-exports' && method === 'POST') {
       const body = req.postDataJSON(); requests.push(body);
       assert.equal(Object.hasOwn(body, 'user_id'), false, 'new requests must use user_ids only');
-      assert.ok(body.user_ids.length > 0 && body.user_ids.length <= 20);
+      assert.ok(body.user_ids.length > 0);
       assert.equal(new Set(body.user_ids).size, body.user_ids.length, 'each user is requested once');
       const users = body.user_ids.map(id => catalog.find(user => user.id === id));
       const job = { id: String(requests.length), users, ...(users.length === 1 ? { user: users[0] } : {}), ...(admin.is_super_admin ? { model_usage_source: body.model_usage_source } : {}), include_sub_users: body.include_sub_users, start_date: body.start_date, end_date: body.end_date, status: 'queued', currency: 'CNY', created_at: '2026-11-22T00:00:00Z' };
@@ -146,15 +152,22 @@ try {
   await expect(page.locator('.bill-user-chip')).toHaveCount(0);
   await search.press('Escape');
 
-  // The cap applies across result pages and still allows selected users to be removed.
+  // Manual selection can pass twenty across pages; row clicks still toggle once.
   await picker.click();
   await search.fill('bulk');
   for (const user of bulk.slice(0, 10)) await page.getByRole('checkbox', { name: user.email, exact: true }).check();
   await page.getByRole('button', { name: 'Load more users', exact: true }).click();
   for (const user of bulk.slice(10, 20)) await page.getByRole('checkbox', { name: user.email, exact: true }).check();
   await page.getByRole('button', { name: 'Load more users', exact: true }).click();
-  await expect(page.getByRole('checkbox', { name: bulk[20].email, exact: true })).toBeDisabled();
-  await expect(page.getByText('20 of 20 selected', { exact: true })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: bulk[20].email, exact: true })).toBeEnabled();
+  await expect(page.getByText('20 selected', { exact: true })).toBeVisible();
+  const extraRow = page.locator('.bill-user-option').filter({ hasText: bulk[20].email });
+  await extraRow.scrollIntoViewIfNeeded();
+  const extraRowBox = await extraRow.boundingBox();
+  await extraRow.click({ position: { x: extraRowBox.width - 8, y: extraRowBox.height / 2 } });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('.bill-user-chip')).toHaveCount(21);
+  await expect(page.getByRole('checkbox', { name: bulk[20].email, exact: true })).toBeChecked();
   await page.getByRole('checkbox', { name: bulk[0].email, exact: true }).uncheck();
   await page.getByRole('checkbox', { name: bulk[20].email, exact: true }).check();
   await expect(page.locator('.bill-user-chip')).toHaveCount(20);
@@ -305,9 +318,139 @@ try {
   await expect(source).toHaveText('Raw');
   await expect(picker).toContainText('Select users');
   await expect(page.locator('.bill-export-result')).toHaveCount(0);
+
+  // All uses the whole catalog, even while searching and before loading more pages.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const allUsersButton = page.getByRole('button', { name: 'Select all users', exact: true });
+  const clearUsersButton = page.getByRole('button', { name: 'Clear', exact: true });
+  await picker.click();
+  await search.fill(owner.email);
+  await expect(dialog.getByRole('checkbox')).toHaveCount(1);
+  await allUsersButton.click();
+  await expect(page.locator('.bill-user-chip')).toHaveCount(catalog.length);
+  await expect(allUsersButton).toBeDisabled();
+  await clearUsersButton.click();
+  await expect(page.locator('.bill-user-chip')).toHaveCount(0);
+  await expect(search).toHaveValue(owner.email);
+  await expect(clearUsersButton).toBeDisabled();
+  await expect(dialog).toBeVisible();
+  await allUsersButton.click();
+  await page.getByRole('checkbox', { name: owner.email, exact: true }).uncheck();
+  await expect(page.locator('.bill-user-chip')).toHaveCount(catalog.length - 1);
+  await expect(allUsersButton).toBeEnabled();
+  await allUsersButton.click();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await dates();
+  await generate.click();
+  await expect(page.locator('.bill-summary-table tbody tr')).toHaveCount(4);
+  assert.deepEqual(requests[5].user_ids, catalog.map(user => user.id));
+  assert.equal(requests[5].include_sub_users, false);
+  await expect(page.locator('.bill-result-title h2')).toHaveText(`${catalog.length} users`);
+
+  // A failed or late full-list load cannot clear or overwrite the user's choices.
+  await page.reload();
+  failAllUsers = true;
+  await picker.click();
+  await expect(page.getByText(/Could not load all users/)).toBeVisible();
+  await expect(allUsersButton).toBeDisabled();
+  await page.getByRole('checkbox', { name: owner.email, exact: true }).check();
+  await expect(page.locator('.bill-user-chip')).toHaveCount(1);
+  failAllUsers = false;
+  await page.getByRole('button', { name: 'Reload all users', exact: true }).click();
+  await expect(allUsersButton).toBeEnabled();
+  await expect(page.locator('.bill-user-chip')).toHaveCount(1);
+  await clearUsersButton.click();
+  await search.press('Escape');
+  let releaseAllUsers;
+  allUsersGate = new Promise(resolve => { releaseAllUsers = resolve; });
+  await picker.click();
+  await expect(allUsersButton).toBeDisabled();
+  await page.getByRole('checkbox', { name: owner.email, exact: true }).check();
+  await clearUsersButton.click();
+  releaseAllUsers(); allUsersGate = null;
+  await expect(allUsersButton).toBeEnabled();
+  await expect(page.locator('.bill-user-chip')).toHaveCount(0);
+  await search.press('Escape');
+
+  // Native label activation must complete before outside-focus dismissal.
+  // Exercise real clicks/taps on the text and row padding, not just checkbox.check().
+  for (const language of ['en-US', 'zh-CN']) {
+    for (const touch of [false, true]) {
+      await page.setViewportSize(touch ? { width: 390, height: 844 } : { width: 1440, height: 1000 });
+      await page.evaluate(value => localStorage.setItem('tk-register.language', value), language);
+      await page.reload();
+      const trigger = page.locator('#bill-export-users');
+      const menu = page.locator('#bill-user-menu');
+      const searchInput = page.locator('#bill-user-search');
+      const row = page.locator('.bill-user-option').filter({ hasText: owner.email });
+      const checkbox = row.locator('input');
+      const activate = (locator, position) => touch ? locator.tap({ position }) : locator.click({ position });
+      await activate(trigger);
+      await expect(searchInput).toBeFocused();
+      await expect(row).toBeVisible();
+      for (const target of ['checkbox', 'email', 'user-number', 'padding']) {
+        for (const checked of [true, false]) {
+          // Start from the search box to reproduce the original focus transition.
+          await searchInput.focus();
+          if (target === 'checkbox') await activate(checkbox);
+          else if (target === 'email') await activate(row.locator('span'), { x: 8, y: 8 });
+          else if (target === 'user-number') await activate(row.locator('small'));
+          else {
+            await row.scrollIntoViewIfNeeded();
+            const box = await row.boundingBox();
+            await activate(row, { x: box.width - 8, y: box.height / 2 });
+          }
+          await expect(menu).toBeVisible();
+          await expect(checkbox).toBeChecked({ checked });
+          await expect(page.locator('.bill-user-chip')).toHaveCount(checked ? 1 : 0);
+        }
+      }
+      const allButton = menu.locator('.bill-user-actions button').nth(0);
+      const clearButton = menu.locator('.bill-user-actions button').nth(1);
+      await expect(allButton).toHaveText(language === 'en-US' ? 'All' : '全选');
+      await expect(clearButton).toHaveText(language === 'en-US' ? 'Clear' : '清空');
+      await searchInput.fill(owner.email);
+      await expect(menu.getByRole('checkbox')).toHaveCount(1);
+      await activate(allButton);
+      await expect(page.locator('.bill-user-chip')).toHaveCount(catalog.length);
+      await expect(allButton).toBeDisabled();
+      await expect(menu).toBeVisible();
+      await activate(clearButton);
+      await expect(page.locator('.bill-user-chip')).toHaveCount(0);
+      await expect(searchInput).toHaveValue(owner.email);
+      await expect(menu).toBeVisible();
+      await searchInput.fill('');
+      await expect(checkbox).toBeVisible();
+      await activate(menu.locator('.bill-user-menu-footer > span'));
+      await expect(menu).toBeVisible();
+      await searchInput.focus();
+      await searchInput.press('ArrowDown');
+      await expect(checkbox).toBeFocused();
+      await checkbox.press('Space');
+      await expect(checkbox).toBeChecked();
+      await checkbox.press('Space');
+      await expect(checkbox).not.toBeChecked();
+      await checkbox.press('Escape');
+      await expect(menu).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      await activate(trigger);
+      await menu.locator('.bill-user-menu-footer button').focus();
+      await page.keyboard.press('Tab');
+      await expect(menu).toHaveCount(0);
+      await activate(trigger);
+      await activate(page.locator('.bill-export-heading h2'));
+      await expect(menu).toHaveCount(0);
+      await activate(trigger);
+      await activate(menu.locator('.bill-user-menu-footer button'));
+      await expect(menu).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      console.log(`User picker row interactions passed: ${language}, ${touch ? 'mobile touch' : 'desktop mouse'}`);
+    }
+  }
+  assert.equal(requests.length, 6, 'row selection, All/Clear and keyboard interactions never submit an export');
   assert.deepEqual(unexpected, [], 'No recent-export lookup or unexpected API requests');
   assert.deepEqual(errors, []);
-  console.log('Bill export UI passed: searchable multi-user selection, persistent selections across searches/pages, 20-user cap, keyboard controls, locked generation, single-user DTO compatibility, immutable multi-user snapshot/file, complete hierarchy scope, Username in all result tabs, no history lookup, Raw/Cache source immutability, ordinary source omission, responsive chips and menus.');
+  console.log('Bill export UI passed: unlimited selection across pages, All includes unfiltered/unloaded users, Clear preserves search, 132-user export, failed/late loads preserve selection, bilingual desktop/touch row and All/Clear controls, keyboard controls, locked generation, legacy DTO compatibility, immutable snapshots, hierarchy scope, source permissions and responsive menus.');
 
 } finally {
   await browser?.close();

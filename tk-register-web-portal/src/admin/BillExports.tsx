@@ -7,7 +7,7 @@ import { dateTime, Empty } from '../submissions/shared';
 import { ErrorNotice, Loading } from '../ui';
 import { Pagination } from './shared';
 import type { AdminUser, Page } from './types';
-import { BILL_EXPORT_USER_LIMIT, billExportUsers, sameBillExportUsers, toggleBillExportUser, beijingDate, billAmount, billSubmittedTime, exportDateError, exportRunning, offsetDate, type BillExportJob, type BillExportResults, type BillExportReview, type BillExportSummary, type BillExportUser, type BillExportView } from './bill-exports';
+import { billExportUsers, sameBillExportUsers, toggleBillExportUser, beijingDate, billAmount, billSubmittedTime, exportDateError, exportRunning, offsetDate, type BillExportJob, type BillExportResults, type BillExportReview, type BillExportSummary, type BillExportUser, type BillExportView } from './bill-exports';
 import './bill-exports.css';
 
 function UsersPicker({ value, onChange, disabled, invalid }: {
@@ -25,7 +25,22 @@ function UsersPicker({ value, onChange, disabled, invalid }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
-  const limitReached = value.length >= BILL_EXPORT_USER_LIMIT;
+  const [allUsers, setAllUsers] = useState<BillExportUser[] | null>(null);
+  const [allError, setAllError] = useState('');
+  const [allAttempt, setAllAttempt] = useState(0);
+  const selectedIDs = new Set(value.map(user => user.id));
+  const allSelected = !!allUsers?.length && sameBillExportUsers(value, allUsers);
+  // Fetch one complete, minimal snapshot independently of the paginated search.
+  // Loading it never changes the selection; All is enabled only when it is ready.
+  useEffect(() => {
+    if (!open || disabled) return;
+    const controller = new AbortController();
+    setAllUsers(null); setAllError('');
+    request<{ items: BillExportUser[] }>('/admin/bill-exports/users', { signal: controller.signal })
+      .then(result => { if (!controller.signal.aborted) setAllUsers(result.items); })
+      .catch(cause => { if (!controller.signal.aborted) setAllError(errorMessage(cause)); });
+    return () => controller.abort();
+  }, [open, disabled, allAttempt]);
   useEffect(() => {
     const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); }, 250);
     return () => window.clearTimeout(timer);
@@ -66,20 +81,25 @@ function UsersPicker({ value, onChange, disabled, invalid }: {
     <div className='bill-user-picker' ref={root} onKeyDown={keys}>
       <label id='bill-export-users-label' htmlFor='bill-export-users'>{t("Users")}</label>
       <button ref={trigger} id='bill-export-users' type='button' className='bill-users-trigger' disabled={disabled} aria-labelledby='bill-export-users-label' aria-haspopup='dialog' aria-expanded={open && !disabled} aria-controls='bill-user-menu' aria-invalid={invalid} onClick={() => setOpen(previous => !previous)}><Users aria-hidden='true' /><span>{value.length ? t(value.length === 1 ? '{{count}} user selected' : '{{count}} users selected', { count: value.length }) : t("Select users")}</span><ChevronDown aria-hidden='true' /></button>
-      {open && !disabled && <div className='bill-user-menu' id='bill-user-menu' role='dialog' aria-label={t("Select users")}>
+      {/* Keep pointer focus inside the menu until a label activates its checkbox. */}
+      {open && !disabled && <div className='bill-user-menu' id='bill-user-menu' role='dialog' tabIndex={-1} aria-label={t("Select users")}>
         <div className='bill-user-search'><Search aria-hidden='true' /><input ref={input} id='bill-user-search' type='search' autoComplete='off' spellCheck={false} autoCapitalize='none' aria-label={t("Search user email")} placeholder={t("Search user email")} value={search} onChange={event => { setSearch(event.target.value); setItems([]); setBusy(true); }} /></div>
+        <div className='bill-user-actions'>
+          <span>{allUsers ? t('All users ({{count}})', { count: allUsers.length }) : t('All users')}</span>
+          <div><button type='button' disabled={!allUsers?.length || allSelected} aria-label={t('Select all users')} title={t('Select all users, including users outside the search results.')} onClick={() => { if (allUsers) onChange(allUsers); }}>{!allUsers && !allError && <LoaderCircle className='spin' aria-hidden='true' />}{t('All', { context: 'billExportUsers' })}</button><button type='button' disabled={!value.length} onClick={() => onChange([])}>{t('Clear')}</button></div>
+        </div>
+        {allError && <div className='bill-user-message'><span role='alert'>{t('Could not load all users.')} {allError}</span><button type='button' className='text-button' onClick={() => setAllAttempt(v => v + 1)}>{t('Reload all users')}</button></div>}
         <div className='bill-user-options' aria-busy={busy}>
           {items.map(item => {
-            const selected = value.some(user => user.id === String(item.id));
-            return <label className='bill-user-option' key={item.id}><input type='checkbox' checked={selected} disabled={limitReached && !selected} aria-label={item.email} onChange={() => onChange(toggleBillExportUser(value, { id: String(item.id), email: item.email }))} /><span>{item.email}<small>{t("User #")}{item.id}</small></span></label>;
+            const selected = selectedIDs.has(String(item.id));
+            return <label className='bill-user-option' key={item.id}><input type='checkbox' checked={selected} aria-label={item.email} onChange={() => onChange(toggleBillExportUser(value, { id: String(item.id), email: item.email }))} /><span>{item.email}<small>{t("User #")}{item.id}</small></span></label>;
           })}
           {busy ? <p className='bill-user-message' role='status'><LoaderCircle className='spin' aria-hidden='true' />{t("Loading users…")}</p> : error ? <div className='bill-user-message'><span role='alert'>{error}</span><button type='button' className='text-button' onClick={() => setAttempt(v => v + 1)}>{t("Try again")}</button></div> : !items.length ? <p className='bill-user-message'>{t("No matching users.")}</p> : items.length < total ? <button type='button' className='bill-users-more' onClick={() => setPage(v => v + 1)}>{t("Load more users")}</button> : null}
         </div>
-        {limitReached && <p className='bill-user-limit' role='status'>{t("You can select up to")} {BILL_EXPORT_USER_LIMIT} {t("users.")}</p>}
-        <div className='bill-user-menu-footer'><span aria-live='polite'>{t('{{count}} of {{max}} selected', { count: value.length, max: BILL_EXPORT_USER_LIMIT })}</span><button type='button' onClick={close}>{t("Done")}</button></div>
+        <div className='bill-user-menu-footer'><span aria-live='polite'>{t('{{count}} selected', { count: value.length })}</span><button type='button' onClick={close}>{t("Done")}</button></div>
       </div>}
     </div>
-    {!!value.length && <div className='bill-selected-users'><div className='bill-user-chips' aria-label={t("Selected users")}>{value.map(user => <span className='bill-user-chip' key={user.id}><span>{user.email}</span><button type='button' disabled={disabled} aria-label={t('Remove {{email}}', { email: user.email })} onClick={() => { onChange(value.filter(item => item.id !== user.id)); trigger.current?.focus(); }}><X aria-hidden='true' /></button></span>)}</div><button type='button' className='bill-users-clear' disabled={disabled} onClick={() => { onChange([]); setSearch(''); setOpen(true); }}>{t("Clear all")}</button></div>}
+    {!!value.length && <div className='bill-selected-users'><div className='bill-user-chips' aria-label={t("Selected users")}>{value.map(user => <span className='bill-user-chip' key={user.id}><span>{user.email}</span><button type='button' disabled={disabled} aria-label={t('Remove {{email}}', { email: user.email })} onClick={() => { onChange(value.filter(item => item.id !== user.id)); trigger.current?.focus(); }}><X aria-hidden='true' /></button></span>)}</div><button type='button' className='bill-users-clear' disabled={disabled} onClick={() => { onChange([]); setOpen(true); }}>{t("Clear all")}</button></div>}
   </>;
 }
 
@@ -188,7 +208,7 @@ export default function BillExports({ isSuperAdmin }: { isSuperAdmin: boolean })
     if (submitting.current) return;
     setValidation(true); setError(''); setDownloadError('');
     const problem = exportDateError(start, end);
-    if (!users.length || users.length > BILL_EXPORT_USER_LIMIT || problem) { setError(!users.length ? 'Select at least one user.' : users.length > BILL_EXPORT_USER_LIMIT ? t('Select up to {{max}} users.', { max: BILL_EXPORT_USER_LIMIT }) : problem); return; }
+    if (!users.length || problem) { setError(!users.length ? 'Select at least one user.' : problem); return; }
     submitting.current = true; setCreating(true);
     downloadingRequest.current?.abort(); setDownloading(false);
     const controller = new AbortController(); pending.current = controller;

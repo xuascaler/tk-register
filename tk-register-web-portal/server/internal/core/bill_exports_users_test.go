@@ -111,23 +111,28 @@ func TestBillExportMultipleUsersUnionsOverlappingTreesAndFreezesScope(t *testing
 	}
 }
 
-func TestBillExportMultipleUsersLimitAfterDedupAndAtomicValidation(t *testing.T) {
+func TestBillExportManyUsersDedupAndAtomicValidation(t *testing.T) {
 	s, owner, admin, vendor, version, now := billExportFixture(t)
 	ctx := context.Background()
 	syncSubmission(t, s, owner.ID, vendor.ID, version.ID, "multi-limit-account@example.com", "claude/cc-pro", "accepted", "7000", now)
 	users := []User{owner}
-	for i := 0; i < MaxBillExportUsers; i++ {
+	for i := 0; i < 240; i++ {
 		users = append(users, billExportRoot(t, s, fmt.Sprintf("multi-limit-%d@example.com", i)))
 	}
 	ids := []uint64{}
-	for _, user := range users[:MaxBillExportUsers] {
+	for _, user := range users {
 		ids = append(ids, user.ID, user.ID)
 	}
 	job, err := s.CreateBillExportForUsers(ctx, admin.ID, ids, "2026-11-10", "2026-11-11", now)
 	if err != nil || job.AccountCount != 1 {
-		t.Fatalf("limit must apply after dedup, empty roots must not discard other accounts: %+v %v", job, err)
+		t.Fatalf("selection above twenty must work; empty roots must not discard other accounts: %+v %v", job, err)
 	}
-	assertBillExportUsers(t, job, users[:MaxBillExportUsers])
+	assertBillExportUsers(t, job, users)
+	saved, err := s.BillExport(ctx, admin.ID, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBillExportUsers(t, saved, users)
 
 	for _, tc := range []struct {
 		name     string
@@ -137,7 +142,6 @@ func TestBillExportMultipleUsersLimitAfterDedupAndAtomicValidation(t *testing.T)
 	}{
 		{"empty selection", admin.ID, nil, false},
 		{"zero user", admin.ID, []uint64{owner.ID, 0}, false},
-		{"over unique limit", admin.ID, append(append([]uint64{}, ids...), users[MaxBillExportUsers].ID), false},
 		{"missing selected user", admin.ID, []uint64{owner.ID, 999999999}, true},
 		{"all selected users have no accounts", admin.ID, []uint64{users[1].ID, users[2].ID}, false},
 		{"non-admin actor", owner.ID, []uint64{owner.ID, users[1].ID}, true},
@@ -156,7 +160,7 @@ func TestBillExportMultipleUsersLimitAfterDedupAndAtomicValidation(t *testing.T)
 					t.Fatal(err)
 				}
 			}
-			if jobs != 1 || savedUsers != MaxBillExportUsers || accounts != 1 {
+			if jobs != 1 || savedUsers != int64(len(users)) || accounts != 1 {
 				t.Fatalf("invalid request left a partial job/snapshot: jobs=%d users=%d accounts=%d", jobs, savedUsers, accounts)
 			}
 		})

@@ -350,6 +350,21 @@ func Workbook(r Report) ([]byte, error) {
 		}
 		return nil
 	}
+	users := r.UserEmails
+	if len(users) == 0 {
+		users = []string{r.UserEmail}
+	}
+	userLabel := "User"
+	if len(users) > 1 {
+		userLabel = fmt.Sprintf("Users (%d)", len(users))
+	}
+	// Large selections get one email per row on a separate sheet. This keeps
+	// headers readable and avoids Excel's row-height and cell-text limits.
+	separateUsers := len(users) > 8
+	userHeader := strings.Join(users, "\n")
+	if separateUsers {
+		userHeader = "See Selected users sheet."
+	}
 	numeric := func(sheet, cell, value string) error {
 		if !exportNumberPattern.MatchString(value) {
 			return ErrFormat
@@ -382,18 +397,10 @@ func Workbook(r Report) ([]byte, error) {
 		if e := f.SetCellStyle(sheet, "A1", "A1", titleStyle); e != nil {
 			return e
 		}
-		users := r.UserEmails
-		if len(users) == 0 {
-			users = []string{r.UserEmail}
-		}
-		userLabel := "User"
-		if len(users) > 1 {
-			userLabel = fmt.Sprintf("Users (%d)", len(users))
-		}
-		if e := write(sheet, 2, []string{userLabel, strings.Join(users, "\n")}); e != nil {
+		if e := write(sheet, 2, []string{userLabel, userHeader}); e != nil {
 			return e
 		}
-		if len(users) > 1 {
+		if len(users) > 1 && !separateUsers {
 			userStyle, e := f.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{WrapText: true, Vertical: "top"}})
 			if e != nil {
 				return e
@@ -444,6 +451,23 @@ func Workbook(r Report) ([]byte, error) {
 			}
 		}
 		return f.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 6, TopLeftCell: "A7", ActivePane: "bottomLeft"})
+	}
+	if separateUsers {
+		const sheet = "Selected users"
+		if _, err = f.NewSheet(sheet); err != nil {
+			return nil, err
+		}
+		if err = setup(sheet, []string{"User email"}); err != nil {
+			return nil, err
+		}
+		if err = f.SetColWidth(sheet, "A", "A", 60); err != nil {
+			return nil, err
+		}
+		for i, email := range users {
+			if err = write(sheet, i+7, []string{email}); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err = setup("Account summary", []string{"Username", "Account", "Platform account ID", "Submitted", "Plan", "Bill rows", "Total (CNY)", "Result", "Notes"}); err != nil {
 		return nil, err

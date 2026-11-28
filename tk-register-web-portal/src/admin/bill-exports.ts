@@ -1,5 +1,4 @@
 export type BillExportUser = { id: string; email: string };
-export const BILL_EXPORT_USER_LIMIT = 20;
 export type BillExportJob = {
   id: string;
   download_filename: string;
@@ -60,7 +59,7 @@ export function billExportUsers(job: Pick<BillExportJob, 'users' | 'user'> | nul
 export function toggleBillExportUser(users: BillExportUser[], user: BillExportUser) {
   const selected = uniqueUsers(users);
   if (selected.some(item => item.id === user.id)) return selected.filter(item => item.id !== user.id);
-  return selected.length < BILL_EXPORT_USER_LIMIT ? [...selected, user] : selected;
+  return [...selected, user];
 }
 
 export function sameBillExportUsers(left: BillExportUser[], right: BillExportUser[]) {
