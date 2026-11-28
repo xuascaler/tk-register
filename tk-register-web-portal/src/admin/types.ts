@@ -7,6 +7,8 @@ export type AdminUser = {
   role: 'member' | 'admin';
   status: string;
   created_at: string;
+  parent?: Owner | null;
+  membership_version?: string;
 };
 export type Page<T> = { items: T[]; total: number; page: number; page_size: number };
 export type Owner = { id: string; email: string };

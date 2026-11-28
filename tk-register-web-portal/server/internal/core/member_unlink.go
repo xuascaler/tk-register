@@ -55,7 +55,21 @@ func memberRelationshipChanged() error {
 // UnlinkMember removes the boundary between two subtrees. It never deletes
 // users/accounts, changes their credentials or severs relationships inside the child.
 func (s *Store) UnlinkMember(ctx context.Context, actorID, actorVersion, targetID, membershipVersion uint64) (AdminUser, error) {
+	return s.unlinkUserParent(ctx, actorID, actorVersion, targetID, actorID, membershipVersion, false)
+}
+
+func (s *Store) AdminUnlinkUserParent(ctx context.Context, actorID, actorVersion, targetID, parentID, membershipVersion uint64) (AdminUser, error) {
+	return s.unlinkUserParent(ctx, actorID, actorVersion, targetID, parentID, membershipVersion, true)
+}
+
+func (s *Store) unlinkUserParent(ctx context.Context, actorID, actorVersion, targetID, parentID, membershipVersion uint64, admin bool) (AdminUser, error) {
 	var out AdminUser
+	changed := memberRelationshipChanged
+	if admin {
+		changed = func() error {
+			return vendorError(409, "USER_PARENT_CHANGED", "This user’s direct parent has changed. Refresh the list and try again.")
+		}
+	}
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := lockUserAccess(tx); err != nil {
 			return err
@@ -67,18 +81,24 @@ func (s *Store) UnlinkMember(ctx context.Context, actorID, actorVersion, targetI
 		if actor.Status != "active" || actor.AuthVersion != actorVersion {
 			return vendorError(403, "FORBIDDEN", "An active signed-in account is required.")
 		}
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND parent_user_id = ?", targetID, actorID).First(&target).Error
+		if admin && actor.Role != "admin" {
+			return vendorError(403, "FORBIDDEN", "Administrator access is required.")
+		}
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND parent_user_id = ?", targetID, parentID).First(&target).Error
 		if errors.Is(err, ErrNotFound) {
-			return memberRelationshipChanged()
+			return changed()
 		}
 		if err != nil {
 			return err
 		}
-		if actorID == targetID || target.MembershipVersion != membershipVersion {
-			return memberRelationshipChanged()
+		if (!admin && actorID == targetID) || target.MembershipVersion != membershipVersion {
+			return changed()
+		}
+		if admin && (target.Role == "admin" || target.IsSuperAdmin) && !actor.IsSuperAdmin {
+			return vendorError(403, "FORBIDDEN", "Super administrator access is required to unlink an administrator.")
 		}
 		var ancestors, descendants []uint64
-		if err := tx.Model(&UserHierarchy{}).Where("descendant_user_id = ?", actor.ID).Pluck("ancestor_user_id", &ancestors).Error; err != nil {
+		if err := tx.Model(&UserHierarchy{}).Where("descendant_user_id = ?", parentID).Pluck("ancestor_user_id", &ancestors).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&UserHierarchy{}).Where("ancestor_user_id = ?", target.ID).Pluck("descendant_user_id", &descendants).Error; err != nil {
@@ -87,13 +107,13 @@ func (s *Store) UnlinkMember(ctx context.Context, actorID, actorVersion, targetI
 		if len(ancestors) == 0 || len(descendants) == 0 {
 			return errors.New("user hierarchy is unavailable")
 		}
-		result := tx.Model(&User{}).Where("id = ? AND parent_user_id = ? AND membership_version = ?", target.ID, actor.ID, membershipVersion).
+		result := tx.Model(&User{}).Where("id = ? AND parent_user_id = ? AND membership_version = ?", target.ID, parentID, membershipVersion).
 			Updates(map[string]any{"parent_user_id": nil, "membership_version": gorm.Expr("membership_version + 1")})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return memberRelationshipChanged()
+			return changed()
 		}
 		for _, ancestor := range ancestors {
 			for start := 0; start < len(descendants); start += 200 {
@@ -102,12 +122,14 @@ func (s *Store) UnlinkMember(ctx context.Context, actorID, actorVersion, targetI
 				}
 			}
 		}
-		if err := invalidateMemberVisibility(tx, actor.ID); err != nil {
+		if err := invalidateMemberVisibility(tx, parentID); err != nil {
 			return err
 		}
-		if err := tx.Omit("Actor", "Target").Create(&MemberLinkAudit{ActorID: actor.ID, TargetID: target.ID, Action: "unlink"}).Error; err != nil {
+		if err := tx.Omit("Actor", "Target").Create(&MemberLinkAudit{ActorID: actor.ID, ParentUserID: &parentID, TargetID: target.ID, Action: "unlink"}).Error; err != nil {
 			return err
 		}
+		target.ParentUserID = nil
+		target.MembershipVersion++
 		out = adminUser(target)
 		return nil
 	})

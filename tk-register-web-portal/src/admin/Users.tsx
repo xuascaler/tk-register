@@ -1,5 +1,5 @@
 import { t } from '../i18n';
-import { Check, Plus, ShieldPlus, ShieldCheck, UserMinus, UserPlus, X } from 'lucide-react';
+import { Check, Plus, ShieldPlus, ShieldCheck, Unlink, UserMinus, UserPlus, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { errorMessage, request, type User } from '../api';
 import { dateTime, Empty, StateBadge } from '../submissions/shared';
@@ -7,6 +7,7 @@ import { ErrorNotice, Loading } from '../ui';
 import { ListToolbar, Pagination, useListFilters } from './shared';
 import type { AdminUser, Page } from './types';
 import CreateUserDialog from './CreateUserDialog';
+import UnlinkUserParentDialog from './UnlinkUserParentDialog';
 
 type RoleAction = 'admin' | 'member' | 'super_admin';
 
@@ -84,6 +85,7 @@ export default function Users({ currentUser, registrationEnabled }: { currentUse
   const [notice, setNotice] = useState<{ message: string; email: string } | null>(null);
   const [role, setRole] = useState<RoleAction | null>(null);
   const [creating, setCreating] = useState(false);
+  const [unlinking, setUnlinking] = useState<AdminUser | null>(null);
   const [createdId, setCreatedId] = useState<string | null>(null);
   const registrationDeadlines = useRef<Record<string, number>>({});
   useEffect(() => {
@@ -98,7 +100,7 @@ export default function Users({ currentUser, registrationEnabled }: { currentUse
   }, [page, query, attempt]);
   function saved(user: AdminUser) {
     setRole(null);
-    setList(current => current && { ...current, items: current.items.map(item => String(item.id) === String(user.id) ? user : item) });
+    setList(current => current && { ...current, items: current.items.map(item => String(item.id) === String(user.id) ? { ...user, parent: item.parent, membership_version: item.membership_version } : item) });
     setNotice(user.is_super_admin ? { message: "{{email}} is now a super admin.", email: user.email } : user.role === 'admin' ? { message: "{{email}} is now an admin.", email: user.email } : { message: "Admin access removed for {{email}}.", email: user.email });
     filters.refresh();
   }
@@ -107,6 +109,12 @@ export default function Users({ currentUser, registrationEnabled }: { currentUse
     setCreatedId(user.id);
     setNotice({ message: "Account created for {{email}}.", email: user.email });
     filters.resetSearch();
+    filters.refresh();
+  }
+  function unlinked(user: AdminUser) {
+    setUnlinking(null);
+    setList(current => current && { ...current, items: current.items.map(item => item.id === user.id ? user : item) });
+    setNotice({ message: 'Direct parent unlinked for {{email}}.', email: user.email });
     filters.refresh();
   }
   return <div className='admin-users'>
@@ -120,17 +128,20 @@ export default function Users({ currentUser, registrationEnabled }: { currentUse
     {loading && !list ? <Loading label={t("Loading users…")} /> : list ? <section className='panel admin-table-panel' aria-busy={loading}>
       {!list.items.length ? <Empty title={t("No matching users")}>{t("Try another email address.")}</Empty> : <div className='admin-table-wrap'><table className='admin-table admin-users-table'>
         <caption className='sr-only'>{t("Registered users and their roles")}</caption>
-        <thead><tr><th scope='col'>{t("User")}</th><th scope='col'>{t("Role")}</th><th scope='col'>{t("Status")}</th><th scope='col'>{t("Joined")}</th></tr></thead>
+        <thead><tr><th scope='col'>{t("User")}</th><th scope='col'>{t('Direct parent')}</th><th scope='col'>{t("Role")}</th><th scope='col'>{t("Status")}</th><th scope='col'>{t("Joined")}</th><th scope='col'>{t('Action')}</th></tr></thead>
         <tbody>{list.items.map(user => <tr key={user.id} className={user.id === createdId ? 'admin-user-created' : undefined}>
           <td className='admin-primary-cell' data-label={t("User")}><span className='admin-email'>{user.email}</span><span className='admin-cell-note'>{t("User #")}{user.id}{String(user.id) === String(currentUser.id) ? t(" · You") : user.id === createdId ? t(" · Just created") : ''}</span></td>
-          <td data-label={t("Role")}><span className={`admin-role-badge ${user.role === 'admin' ? 'is-admin' : ''}`}>{user.role === 'admin' && <ShieldCheck aria-hidden='true' />}{user.is_super_admin ? t("Super admin") : user.role === 'admin' ? t("Admin") : t("Member")}</span></td>
+          <td className='admin-parent-cell' data-label={t('Direct parent')}>{user.parent ? <><span className='admin-email'>{user.parent.email}</span><span className='admin-cell-note'>{t('User #')}{user.parent.id}</span></> : <span className='muted'>{t('No direct parent')}</span>}</td>
+          <td data-label={t("Role")}><span className={`admin-role-badge ${user.role === 'admin' ? 'is-admin' : ''}`}>{user.is_super_admin ? t("Super admin") : user.role === 'admin' ? t("Admin") : t("Member")}</span></td>
           <td data-label={t("Status")}><StateBadge value={user.status} /></td>
           <td data-label={t("Joined")}><time dateTime={user.created_at}>{dateTime(user.created_at)}</time></td>
+          <td className='admin-parent-action' data-label={t('Action')}>{user.parent ? <button type='button' className='button admin-parent-unlink' disabled={loading || user.membership_version === undefined || (!currentUser.is_super_admin && (user.role === 'admin' || !!user.is_super_admin))} title={!currentUser.is_super_admin && (user.role === 'admin' || user.is_super_admin) ? t('Only super admins can unlink an administrator.') : undefined} onClick={() => { setNotice(null); setUnlinking(user); }}><Unlink aria-hidden='true' />{t('Unlink')}</button> : <span className='muted'>—</span>}</td>
         </tr>)}</tbody>
       </table></div>}
       <Pagination data={list} noun='user' busy={loading} onPage={filters.setPage} />
     </section> : error ? <button className='button secondary' onClick={filters.refresh}>{t("Try again")}</button> : null}
     {role && <RoleDialog role={role} currentUser={currentUser} onClose={() => setRole(null)} onSaved={saved} />}
     {creating && <CreateUserDialog deadlines={registrationDeadlines} onClose={() => setCreating(false)} onSaved={created} />}
+    {unlinking && <UnlinkUserParentDialog user={unlinking} onClose={() => setUnlinking(null)} onSaved={unlinked} onRefresh={() => { setUnlinking(null); filters.refresh(); }} />}
   </div>;
 }

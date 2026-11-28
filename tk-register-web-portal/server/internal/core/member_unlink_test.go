@@ -229,10 +229,19 @@ func TestMemberAuditMigrationPreservesHistoryAndAllowsRelink(t *testing.T) {
 }
 
 func TestUnlinkOverviewInvalidationAndLatePublication(t *testing.T) {
+	t.Run("personal", func(t *testing.T) { testUnlinkOverviewInvalidation(t, false) })
+	t.Run("administrator", func(t *testing.T) { testUnlinkOverviewInvalidation(t, true) })
+}
+
+func testUnlinkOverviewInvalidation(t *testing.T, adminUnlink bool) {
 	s, users, _, now, _ := overviewSummaryFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	root, parent, child := users[0], users[1], users[2]
+	operator := linkRoot(t, s, "unlink-operator@example.com")
+	if err := s.DB.Model(&operator).Updates(map[string]any{"role": "admin", "is_super_admin": true}).Error; err != nil {
+		t.Fatal(err)
+	}
 	for _, u := range users {
 		if err := s.BuildOverviewSummaries(ctx, u.ID, false, "2026-11-15", "before", now); err != nil {
 			t.Fatal(err)
@@ -254,7 +263,11 @@ func TestUnlinkOverviewInvalidationAndLatePublication(t *testing.T) {
 			return
 		}
 		triggered = true
-		_, unlinkErr = s.UnlinkMember(ctx, parent.ID, parent.AuthVersion, child.ID, child.MembershipVersion)
+		if adminUnlink {
+			_, unlinkErr = s.AdminUnlinkUserParent(ctx, operator.ID, operator.AuthVersion, child.ID, parent.ID, child.MembershipVersion)
+		} else {
+			_, unlinkErr = s.UnlinkMember(ctx, parent.ID, parent.AuthVersion, child.ID, child.MembershipVersion)
+		}
 	}); err != nil {
 		t.Fatal(err)
 	}

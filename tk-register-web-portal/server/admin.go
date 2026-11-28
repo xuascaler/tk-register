@@ -21,7 +21,7 @@ func adminPage(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return page, true
 }
 func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) bool {
-	if route != "admin/users" && route != "admin/users/role" && route != "admin/users/registration-code" && route != "admin/accounts" && !strings.HasPrefix(route, "admin/accounts/") && route != "admin/submissions" && !strings.HasPrefix(route, "admin/submissions/") {
+	if route != "admin/users" && route != "admin/users/role" && route != "admin/users/unlink-parent" && route != "admin/users/registration-code" && route != "admin/accounts" && !strings.HasPrefix(route, "admin/accounts/") && route != "admin/submissions" && !strings.HasPrefix(route, "admin/submissions/") {
 		return false
 	}
 	actor, _, valid := a.authenticated(w, r, r.Method != "GET")
@@ -30,6 +30,14 @@ func (a *app) adminRoutes(w http.ResponseWriter, r *http.Request, route string) 
 	}
 	if actor.Role != "admin" {
 		fail(w, 403, "FORBIDDEN", "Administrator access is required.")
+		return true
+	}
+	if route == "admin/users/unlink-parent" {
+		if r.Method != "POST" {
+			fail(w, 405, "METHOD_NOT_ALLOWED", "This method is not supported.")
+		} else {
+			a.adminUnlinkUserParent(w, r, actor)
+		}
 		return true
 	}
 	// Overview only reads saved account and bill data. It must not recover

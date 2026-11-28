@@ -29,12 +29,14 @@ type AdminRoleAudit struct {
 	CreatedAt time.Time
 }
 type AdminUser struct {
-	ID           string    `json:"id"`
-	Email        string    `json:"email"`
-	Role         string    `json:"role"`
-	Status       string    `json:"status"`
-	CreatedAt    time.Time `json:"created_at"`
-	IsSuperAdmin bool      `json:"is_super_admin,omitempty"`
+	ID                string      `json:"id"`
+	Email             string      `json:"email"`
+	Role              string      `json:"role"`
+	Status            string      `json:"status"`
+	CreatedAt         time.Time   `json:"created_at"`
+	IsSuperAdmin      bool        `json:"is_super_admin,omitempty"`
+	Parent            *AdminOwner `json:"parent,omitempty"`
+	MembershipVersion string      `json:"membership_version,omitempty"`
 }
 type AdminUserPage struct {
 	Items    []AdminUser `json:"items"`
@@ -44,7 +46,7 @@ type AdminUserPage struct {
 }
 
 func adminUser(u User) AdminUser {
-	return AdminUser{ID: idString(u.ID), Email: u.Email, Role: u.Role, Status: u.Status, CreatedAt: u.CreatedAt.UTC(), IsSuperAdmin: u.IsSuperAdmin}
+	return AdminUser{ID: idString(u.ID), Email: u.Email, Role: u.Role, Status: u.Status, CreatedAt: u.CreatedAt.UTC(), IsSuperAdmin: u.IsSuperAdmin, MembershipVersion: idString(u.MembershipVersion)}
 }
 func escapedSearch(v string) string {
 	return "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(strings.ToLower(strings.TrimSpace(v))) + "%"
@@ -74,8 +76,30 @@ func (s *Store) AdminUsers(ctx context.Context, page int, search string) (AdminU
 	if e := q.Order("created_at DESC, id DESC").Limit(20).Offset((page - 1) * 20).Find(&users).Error; e != nil {
 		return out, e
 	}
+	parentIDs := make([]uint64, 0, len(users))
 	for _, u := range users {
-		out.Items = append(out.Items, adminUser(u))
+		if u.ParentUserID != nil {
+			parentIDs = append(parentIDs, *u.ParentUserID)
+		}
+	}
+	parents := map[uint64]AdminOwner{}
+	if len(parentIDs) > 0 {
+		var rows []User
+		if err := s.DB.WithContext(ctx).Select("id", "email").Where("id IN ?", parentIDs).Find(&rows).Error; err != nil {
+			return out, err
+		}
+		for _, p := range rows {
+			parents[p.ID] = AdminOwner{ID: idString(p.ID), Email: p.Email}
+		}
+	}
+	for _, u := range users {
+		item := adminUser(u)
+		if u.ParentUserID != nil {
+			if parent, ok := parents[*u.ParentUserID]; ok {
+				item.Parent = &parent
+			}
+		}
+		out.Items = append(out.Items, item)
 	}
 	return out, nil
 }

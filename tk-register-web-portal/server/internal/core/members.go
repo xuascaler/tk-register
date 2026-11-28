@@ -85,13 +85,15 @@ func lockUserAccess(tx *gorm.DB) error {
 
 // No passwords or verification codes are stored in this audit.
 type MemberLinkAudit struct {
-	ID        uint64 `gorm:"primaryKey"`
-	ActorID   uint64 `gorm:"not null;index"`
-	Actor     User   `gorm:"foreignKey:ActorID;constraint:OnDelete:RESTRICT"`
-	TargetID  uint64 `gorm:"not null;index:idx_member_link_target"`
-	Target    User   `gorm:"foreignKey:TargetID;constraint:OnDelete:RESTRICT"`
-	Action    string `gorm:"size:16;not null;default:link"`
-	CreatedAt time.Time
+	// Nullable for legacy history. The parent can differ from the administrator acting.
+	ParentUserID *uint64 `gorm:"index"`
+	ID           uint64  `gorm:"primaryKey"`
+	ActorID      uint64  `gorm:"not null;index"`
+	Actor        User    `gorm:"foreignKey:ActorID;constraint:OnDelete:RESTRICT"`
+	TargetID     uint64  `gorm:"not null;index:idx_member_link_target"`
+	Target       User    `gorm:"foreignKey:TargetID;constraint:OnDelete:RESTRICT"`
+	Action       string  `gorm:"size:16;not null;default:link"`
+	CreatedAt    time.Time
 }
 
 func linkTarget(db *gorm.DB, actorID uint64, email string) (*User, error) {
@@ -201,7 +203,7 @@ func (s *Store) LinkExistingMember(ctx context.Context, actorID, actorVersion, t
 		if err := flush(); err != nil {
 			return err
 		}
-		if err := tx.Omit("Actor", "Target").Create(&MemberLinkAudit{ActorID: actorID, TargetID: target.ID, Action: "link"}).Error; err != nil {
+		if err := tx.Omit("Actor", "Target").Create(&MemberLinkAudit{ActorID: actorID, ParentUserID: &actorID, TargetID: target.ID, Action: "link"}).Error; err != nil {
 			return err
 		}
 		if err := invalidateMemberVisibility(tx, actor.ID); err != nil {
