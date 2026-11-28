@@ -5,6 +5,7 @@
 .usage-search { position: relative; display: block; }
 .usage-search input { height: 44px; padding-left: 40px; }
 .usage-search > svg { position: absolute; top: 13px; left: 13px; color: #8093ac; }
+.usage-search-hint { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .workspace .usage-icon-button { width: 44px; min-width: 44px; padding: 0; }
 .usage-list-loading .usage-table-scroll { opacity: .6; }
 .usage-row-sync { display: block; color: #587da7; font-size: 12px; margin-top: 5px; }

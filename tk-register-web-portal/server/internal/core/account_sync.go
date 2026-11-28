@@ -346,7 +346,8 @@ func (s *Store) ListSyncedAccounts(ctx context.Context, userID uint64, page int,
 }
 
 // ListAdminSyncedAccounts is only exposed by administrator-authorized handlers.
-// It shares observations, filters, pagination and ordering with the owner view.
+// User-email searches include each matching user's subtree, with directly
+// matching owners' accounts first. Observations and pagination are shared.
 func (s *Store) ListAdminSyncedAccounts(ctx context.Context, page int, search, status string) (AccountPage, error) {
 	return s.listSyncedAccounts(ctx, 0, page, search, status, true)
 }
@@ -362,10 +363,14 @@ func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int,
 	} else if !includeOwner {
 		q = q.Where("user_id = ?", userID)
 	}
+	var matchingOwners *gorm.DB
 	if strings.TrimSpace(search) != "" {
 		if includeOwner {
-			owners := s.DB.Model(&User{}).Select("id").Where("LOWER(email) LIKE ? ESCAPE '!'", escapedSearch(search))
-			q = q.Where("LOWER(account) LIKE ? ESCAPE '!' OR user_id IN (?)", escapedSearch(search), owners)
+			matchingOwners = s.DB.WithContext(ctx).Model(&User{}).Select("id").Where("LOWER(email) LIKE ? ESCAPE '!'", escapedSearch(search))
+			descendants := s.DB.WithContext(ctx).Model(&UserHierarchy{}).Select("descendant_user_id").Where("ancestor_user_id IN (?)", matchingOwners)
+			// Subqueries preserve one row per account even when both a parent and
+			// a descendant match. Keep direct owners independent of closure rows.
+			q = q.Where("LOWER(account) LIKE ? ESCAPE '!' OR user_id IN (?) OR user_id IN (?)", escapedSearch(search), matchingOwners, descendants)
 		} else {
 			q = q.Where("LOWER(account) LIKE ? ESCAPE '!'", escapedSearch(search))
 		}
@@ -378,8 +383,18 @@ func (s *Store) listSyncedAccounts(ctx context.Context, userID uint64, page int,
 	if err := q.Count(&out.Total).Error; err != nil {
 		return out, err
 	}
+	if matchingOwners != nil {
+		// Rank before LIMIT/OFFSET so all directly matching owners' accounts
+		// precede descendants across pages, not just within the current page.
+		q = q.Clauses(clause.OrderBy{Expression: clause.Expr{
+			SQL:  "CASE WHEN user_id IN (?) THEN 0 ELSE 1 END, latest_submitted_at DESC, id DESC",
+			Vars: []any{matchingOwners},
+		}})
+	} else {
+		q = q.Order("latest_submitted_at DESC, id DESC")
+	}
 	var rows []SyncedAccount
-	if err := q.Order("latest_submitted_at DESC, id DESC").Limit(20).Offset((page - 1) * 20).Find(&rows).Error; err != nil {
+	if err := q.Limit(20).Offset((page - 1) * 20).Find(&rows).Error; err != nil {
 		return out, err
 	}
 	ctx, err := s.WithExchangeRate(ctx)

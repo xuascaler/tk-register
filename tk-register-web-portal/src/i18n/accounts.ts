@@ -216,6 +216,7 @@ export const accountMessages: Record<string, string> = {
   'Saving…': '正在保存…',
   'Scheduled': '已设定计划',
   'Search account or user email': '搜索账号或用户邮箱',
+  "Searching by user email includes all sub-users. Matching users' own accounts appear first.": '按用户邮箱搜索时，包含所有下级用户的账号，匹配用户自己的账号优先显示。',
   'Search accounts': '搜索账号',
   'Search by account email': '按账号邮箱搜索',
   'Search models': '搜索模型',
